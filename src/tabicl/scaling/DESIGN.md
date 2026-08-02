@@ -118,6 +118,33 @@ Two consequences:
   linear. The earlier nested scheme turned one grandchild column into 25; this keeps
   it at ~7, and depth 3 adds no more.
 
+### Cyclic patterns: worst-case optimal joins
+
+Tree aggregation covers parent-child schemas, which is what RelBench uses. It cannot
+express features that live on a *cycle* -- triangles, mutual counterparties,
+clustering coefficients -- because there is no root to roll up from, and a cyclic
+join computed with binary joins materialises an intermediate that can be
+quadratically larger than the answer.
+
+`_wcoj.py` implements leapfrog triejoin (Veldhuizen, ICDT 2014; Ngo-Porat-Re-Rudra,
+PODS 2012), whose cost is bounded by the AGM bound of the query rather than by any
+intermediate. `motif_features` exposes degree / triangle count / clustering
+coefficient per node, ready to concatenate onto a flattened feature table.
+
+Two things matter in practice:
+
+* **Symmetry breaking belongs inside the join.** An undirected triangle has 6
+  orientations. Enumerating all of them and filtering `a < b < c` afterwards is
+  correct but wasteful; pushing the constraint into the join so the other 5 are never
+  generated measured **4.8x faster** on a 220-node graph, same 1776 triangles.
+* **Variable ordering dominates cost** and is currently the caller's problem.
+  Adaptive ordering (Wang, Trummer, Kara, Olteanu, "ADOPT", arXiv:2307.16540) picks
+  it online with UCT and is worth revisiting if these features are ever computed on
+  graphs where a bad order actually bites.
+
+Verified against brute-force enumeration on random graphs up to density 0.9, and on
+4-cycles -- a pattern with no triangle shortcut.
+
 **Not decomposable, and not faked:** `nunique` and `mode`. Exact distinct-count over
 a join needs a sketch (HyperLogLog and friends); a mode of modes is not a mode. At
 depth 1 both are exact. Deeper, `nunique` becomes "distinct values per parent,

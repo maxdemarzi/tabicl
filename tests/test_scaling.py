@@ -514,3 +514,129 @@ def test_thinking_never_reports_worse_than_base():
 
     res = think_predict_proba(est, X[:110], y[:110], X[110:], n_permutations=2, random_state=0)
     assert res.val_score_thought <= res.val_score_base + 1e-9
+
+
+# --------------------------------------------------------------------------
+# 5. Worst-case optimal joins (cyclic patterns)
+# --------------------------------------------------------------------------
+
+import itertools
+
+from tabicl.scaling import Atom, motif_features, triangle_counts, wcoj_join
+
+
+def _random_graph(n, p, seed):
+    rng = np.random.default_rng(seed)
+    pairs = [(i, j) for i in range(n) for j in range(i + 1, n) if rng.random() < p]
+    if not pairs:
+        return np.empty((0, 2), dtype=np.int64)
+    e = np.array(pairs, dtype=np.int64)
+    return np.unique(np.vstack([e, e[:, ::-1]]), axis=0)
+
+
+def _brute_triangles(edges):
+    present = {(int(a), int(b)) for a, b in edges}
+    nodes = sorted({int(x) for x in edges.ravel()}) if edges.size else []
+    return sorted(
+        (a, b, c)
+        for a, b, c in itertools.combinations(nodes, 3)
+        if (a, b) in present and (b, c) in present and (a, c) in present
+    )
+
+
+@pytest.mark.parametrize("n, p, seed", [(12, 0.3, 0), (20, 0.25, 1), (15, 0.6, 2), (8, 0.9, 3)])
+def test_wcoj_triangles_match_brute_force(n, p, seed):
+    """A worst-case optimal join is only worth having if it is also correct."""
+    edges = _random_graph(n, p, seed)
+    atoms = [
+        Atom("e", ("a", "b"), edges),
+        Atom("e", ("b", "c"), edges),
+        Atom("e", ("a", "c"), edges),
+    ]
+    got = wcoj_join(atoms, ["a", "b", "c"], less_than=[("a", "b"), ("b", "c")])
+    assert sorted(map(tuple, got)) == _brute_triangles(edges)
+
+
+def test_symmetry_breaking_equals_filtering_afterwards():
+    """Pushing a < b < c into the join must not change the answer, only the cost."""
+    edges = _random_graph(30, 0.3, 7)
+    atoms = [
+        Atom("e", ("a", "b"), edges),
+        Atom("e", ("b", "c"), edges),
+        Atom("e", ("a", "c"), edges),
+    ]
+    unconstrained = wcoj_join(atoms, ["a", "b", "c"])
+    filtered = unconstrained[
+        (unconstrained[:, 0] < unconstrained[:, 1]) & (unconstrained[:, 1] < unconstrained[:, 2])
+    ]
+    constrained = wcoj_join(atoms, ["a", "b", "c"], less_than=[("a", "b"), ("b", "c")])
+    assert sorted(map(tuple, filtered)) == sorted(map(tuple, constrained))
+
+
+def test_wcoj_four_cycle():
+    """Cycles longer than a triangle are the case tree aggregation cannot express."""
+    e = np.array([[1, 2], [2, 3], [3, 4], [4, 1], [1, 3]], dtype=np.int64)
+    edges = np.unique(np.vstack([e, e[:, ::-1]]), axis=0)
+    present = {(int(a), int(b)) for a, b in edges}
+    got = wcoj_join(
+        [
+            Atom("e", ("a", "b"), edges),
+            Atom("e", ("b", "c"), edges),
+            Atom("e", ("c", "d"), edges),
+            Atom("e", ("d", "a"), edges),
+        ],
+        ["a", "b", "c", "d"],
+    )
+    brute = [
+        t
+        for t in itertools.product(range(1, 5), repeat=4)
+        if (t[0], t[1]) in present
+        and (t[1], t[2]) in present
+        and (t[2], t[3]) in present
+        and (t[3], t[0]) in present
+    ]
+    assert sorted(map(tuple, got)) == sorted(brute)
+
+
+def test_wcoj_empty_and_no_match():
+    empty = np.empty((0, 2), dtype=np.int64)
+    assert wcoj_join([Atom("e", ("a", "b"), empty)], ["a", "b"]).shape == (0, 2)
+    disjoint = np.array([[1, 2], [3, 4]], dtype=np.int64)
+    out = wcoj_join(
+        [Atom("e", ("a", "b"), disjoint), Atom("f", ("b", "c"), np.array([[9, 9]]))],
+        ["a", "b", "c"],
+    )
+    assert out.shape == (0, 3)
+
+
+def test_wcoj_max_results_caps_output():
+    edges = _random_graph(25, 0.5, 11)
+    atoms = [
+        Atom("e", ("a", "b"), edges),
+        Atom("e", ("b", "c"), edges),
+        Atom("e", ("a", "c"), edges),
+    ]
+    assert len(wcoj_join(atoms, ["a", "b", "c"], max_results=5)) == 5
+
+
+def test_wcoj_rejects_bad_inputs():
+    e = np.array([[1, 2]], dtype=np.int64)
+    with pytest.raises(ValueError, match="expected"):
+        Atom("e", ("a", "b", "c"), e)
+    with pytest.raises(ValueError, match="not in order"):
+        wcoj_join([Atom("e", ("a", "b"), e)], ["a"])
+    with pytest.raises(ValueError, match="precede"):
+        wcoj_join([Atom("e", ("a", "b"), e)], ["a", "b"], less_than=[("b", "a")])
+
+
+def test_triangle_counts_and_motifs():
+    edges = np.array([[1, 2], [2, 3], [1, 3], [3, 4]], dtype=np.int64)
+    counts = triangle_counts(edges, nodes=np.array([1, 2, 3, 4]))
+    assert counts.tolist() == [1, 1, 1, 0]
+
+    feats = motif_features(edges)
+    assert feats.loc[3, "degree"] == 3
+    assert feats.loc[3, "triangles"] == 1
+    # node 3 has 3 neighbours -> 3 wedges, 1 closed
+    assert feats.loc[3, "clustering"] == pytest.approx(1 / 3)
+    assert feats.loc[4, "clustering"] == 0.0
