@@ -56,7 +56,9 @@ def _backbone(device: str):
     return clf
 
 
-def bench_rowchunk(device: str, max_rows: int, n_features: int, chunk_size: int) -> None:
+def bench_rowchunk(
+    device: str, max_rows: int, n_features: int, chunk_size: int, min_rows: int = 4000
+) -> None:
     """Peak memory of the column-embedding stage, unchunked vs row-chunked.
 
     This isolates the ``(N, C, d)`` activation that TabPFN-3 Section 2.4.1 targets.
@@ -71,7 +73,7 @@ def bench_rowchunk(device: str, max_rows: int, n_features: int, chunk_size: int)
     print(header)
     print("-" * len(header))
 
-    rows = 4000
+    rows = min_rows
     while rows <= max_rows:
         src = torch.randn(1, n_features, rows, d_model, device=device)
         train_size = rows // 2
@@ -109,6 +111,65 @@ def bench_rowchunk(device: str, max_rows: int, n_features: int, chunk_size: int)
         if device.startswith("cuda"):
             torch.cuda.empty_cache()
         rows *= 2
+
+
+def bench_offload(device: str, n_train: int, n_test: int, n_features: int, chunk_size: int) -> None:
+    """Row chunking vs TabICLv2's existing offload path, through the real predict path.
+
+    This is the comparison that matters. Beating the naive unchunked path proves little,
+    because nobody runs that at scale -- TabICLv2 already offloads. TabPFN-3's actual
+    criticism (Section 2.4.1) is that offloading costs ~250 GB host RAM at 1M x 500, or a
+    ~4x slowdown. Chunking is only worth having if it beats *that*.
+
+    The two are independent mechanisms -- offload moves outputs off the GPU, chunking
+    shrinks activations -- so the combination is measured too.
+    """
+    print("\n=== 1b. Row chunking vs offload ===")
+    print(f"n_train={n_train}  n_test={n_test}  n_features={n_features}  chunk_size={chunk_size}\n")
+
+    rng = np.random.RandomState(0)
+    X = rng.rand(n_train + n_test, n_features).astype(np.float32)
+    w = rng.randn(n_features)
+    y = ((X @ w + 0.3 * rng.randn(len(X))) > np.median(X @ w)).astype(int)
+    X_tr, y_tr, X_te = X[:n_train], y[:n_train], X[n_train:]
+
+    variants = [
+        ("naive (gpu, no chunk)", "gpu", False),
+        ("offload=cpu", "cpu", False),
+        ("row_chunk", "gpu", True),
+        ("offload=cpu + row_chunk", "cpu", True),
+    ]
+
+    header = f"{'variant':<26}{'peak MiB':>10}{'seconds':>9}   {'agrees with first':>17}"
+    print(header)
+    print("-" * len(header))
+
+    reference = None
+    for label, offload, chunked in variants:
+        cfg = {
+            "COL_CONFIG": {
+                "offload": offload,
+                "row_chunk": chunked,
+                "row_chunk_size": chunk_size,
+                "col_chunk_size": 32,
+            }
+        }
+        clf = TabICLClassifier(n_estimators=1, device=device, random_state=0, inference_config=cfg)
+        clf.fit(X_tr, y_tr)
+        try:
+            with measure(device) as m:
+                proba = clf.predict_proba(X_te)
+            if reference is None:
+                reference, agree = proba, "(reference)"
+            else:
+                agree = f"{np.abs(proba - reference).max():.2e}"
+            print(f"{label:<26}{m['peak_mib']:>10.1f}{m['seconds']:>9.2f}   {agree:>17}")
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            print(f"{label:<26}{'OOM':>10}{'-':>9}   {'-':>17}")
+        del clf
+        if device.startswith("cuda"):
+            torch.cuda.empty_cache()
 
 
 def bench_mqa(device: str, n_train: int, n_features: int) -> None:
@@ -258,14 +319,18 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--all", action="store_true")
     p.add_argument("--rowchunk", action="store_true")
+    p.add_argument("--offload", action="store_true")
     p.add_argument("--mqa", action="store_true")
     p.add_argument("--relational", action="store_true")
     p.add_argument("--ttc", action="store_true")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--max-rows", type=int, default=64000)
+    p.add_argument("--min-rows", type=int, default=4000)
     p.add_argument("--n-features", type=int, default=100)
     p.add_argument("--chunk-size", type=int, default=8192)
     p.add_argument("--mqa-train", type=int, default=8000)
+    p.add_argument("--offload-train", type=int, default=40000)
+    p.add_argument("--offload-test", type=int, default=4000)
     args = p.parse_args()
 
     if args.device.startswith("cuda") and torch.cuda.is_available():
@@ -273,9 +338,13 @@ def main() -> None:
         total = torch.cuda.get_device_properties(0).total_memory / MB
         print(f"GPU: {name}  ({total:.0f} MiB)")
 
-    run_all = args.all or not any((args.rowchunk, args.mqa, args.relational, args.ttc))
+    run_all = args.all or not any((args.rowchunk, args.offload, args.mqa, args.relational, args.ttc))
     if run_all or args.rowchunk:
-        bench_rowchunk(args.device, args.max_rows, args.n_features, args.chunk_size)
+        bench_rowchunk(args.device, args.max_rows, args.n_features, args.chunk_size, args.min_rows)
+    if run_all or args.offload:
+        bench_offload(
+            args.device, args.offload_train, args.offload_test, args.n_features, args.chunk_size
+        )
     if run_all or args.mqa:
         bench_mqa(args.device, args.mqa_train, 20)
     if run_all or args.relational:

@@ -136,6 +136,74 @@ Chunking both axes is what matters. Row-only chunking capped at ~2x, because pha
 still ran the full stack over every context row and its feed-forward intermediate
 became the new peak — exactly why the paper chunks phase (i) over columns too.
 
+### 1b. L40S (46 GB, Linux) — clean OOM, and vs. offload
+
+The 3060 numbers could not show a true OOM (Windows spills to host RAM instead) and
+never compared against `offload`. Both are settled here.
+
+**Isolated column-embedding stage** (`n_features=100`, `chunk_size=8192`):
+
+| rows | unchunked MiB | chunked MiB | saving | unchunked s | chunked s |
+|-----:|--------------:|------------:|-------:|------------:|----------:|
+| 16000 | 7047 | 1165 | 6.05x | 0.21 | 0.28 |
+| 64000 | 28140 | 4515 | 6.23x | 0.96 | 1.09 |
+| 128000 | **OOM** | 9015 | — | — | 2.18 |
+
+Chunking turns an OOM into a 9 GB run. **Correcting the 3060 write-up: chunking is
+not faster.** It costs ~13% wall clock at 64k. The earlier "6.6x faster" was purely
+the Windows paging artifact; the honest overhead matches the paper's "a few percent".
+
+**End-to-end `predict_proba`, vs. offload.** This is the comparison that matters,
+since offload is what TabICLv2 actually does at scale:
+
+*n_train=60000, n_test=6000:*
+
+| variant | peak MiB | seconds |
+|---|---:|---:|
+| naive | 21763 | 2.47 |
+| offload=cpu | 21755 | 3.53 |
+| row_chunk | **15775** | **2.20** |
+| offload + row_chunk | 15367 | 3.64 |
+
+At this size **offload is useless** — it reclaims 8 MiB (0.04%) for 43% more time,
+because it moves *outputs* while the peak is *activations*. Chunking cuts 27% and is
+slightly faster than naive.
+
+*n_train=150000, n_test=10000:*
+
+| variant | peak MiB | seconds |
+|---|---:|---:|
+| naive | 31138 | 6.92 |
+| offload=cpu | 23004 | 17.27 |
+| row_chunk | 26445 | 6.90 |
+| offload + row_chunk | **19422** | **9.25** |
+
+Offload finally earns its keep on memory (-26%) but costs 2.5x wall clock — the
+slowdown TabPFN-3 criticises. **offload + row_chunk Pareto-dominates offload alone:
+16% less memory *and* 46% less time.** That is the result that justifies the port.
+
+*n_train=300000, n_test=10000:*
+
+| variant | peak MiB | seconds |
+|---|---:|---:|
+| naive | 38820 | 18.57 |
+| offload=cpu | 23069 | 38.42 |
+| row_chunk | 38198 | 19.39 |
+| offload + row_chunk | **22456** | 23.36 |
+
+Beyond ~150k rows the ICL stage, not the column embedder, owns the peak, so chunking
+alone contributes little (1.6%); the combination is what wins.
+
+**A bug this found.** At 300k, chunking alone first measured *worse* than naive
+(39939 vs 38820 MiB) — `_run_tf_col` was not passing `inplace`, so it allocated a
+full extra `(N, C, d)` output buffer that cancelled the saving and then some. Fixed
+by threading `inplace=True` through the two call sites that do not reuse the buffer
+(the mixed-radix loop reuses `src_with_y` across digits and must stay out of place).
+Worth 1.7 GB at 300k. Only visible at a scale the 3060 cannot reach.
+
+**Guidance:** enable `row_chunk` alone below ~150k rows; combine it with
+`offload="cpu"` above that.
+
 ### 2. Multi-query KV cache — size confirmed, accuracy says pretrain
 
 `n_train=6000`, `n_features=20`, `nhead=8`:
@@ -201,6 +269,32 @@ an already-fitted estimator.
 One wiring note: `InferenceManager.configure` takes an explicit signature with no
 `**kwargs`, so the three chunking keys are filtered out by `MgrConfig.manager_items()`
 before the call. New caller-side options should follow the same route.
+
+## Equivalence: what "exact" does and does not mean
+
+Chunking is exact at the stage it replaces, but **end-to-end probabilities still move by
+~1e-2**, and that is not a bug in the chunking.
+
+Measured on real model tensors (`n_train=3000`, 40 features, fp32, AMP off):
+
+| where | difference |
+|---|---|
+| `tf_col` output, chunked vs unchunked | **1.16e-05** |
+| final `predict_proba`, chunked vs unchunked | 1.2e-02 (0 label flips) |
+
+The control settles it: injecting *random* noise of 1.16e-05 into the column embedding
+and changing nothing else moves the output by **1.35e-02** — the same magnitude. So
+TabICL's ICL stack (12 attention blocks) amplifies any float32-level perturbation of the
+column embedding by ~10^3. Raising the injected noise to 1e-4 gives 1.18e-02, i.e. the
+response saturates rather than scaling linearly.
+
+Consequences:
+
+* Assert equivalence at the `tf_col` boundary (~1e-4), not on probabilities.
+* End-to-end, compare argmax labels and expect probabilities to agree only to ~2e-2.
+* This is a property of the model, not of chunking. Any change to the column embedding
+  that is merely float-accurate -- a different kernel, AMP, a new GPU -- will move
+  probabilities by the same order.
 
 ## Known measurement limits
 

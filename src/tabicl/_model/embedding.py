@@ -337,12 +337,18 @@ class ColEmbedding(nn.Module):
 
         return (y.long() // divisor) % bases[digit_idx]
 
-    def _run_tf_col(self, src: Tensor, train_size: Optional[int]) -> Tensor:
+    def _run_tf_col(self, src: Tensor, train_size: Optional[int], inplace: bool = False) -> Tensor:
         """Run the column set transformer, optionally row/column chunked.
 
         Chunking is exactly equivalent to the direct call; it only bounds the peak
         activation. Enabled via ``COL_CONFIG["row_chunk"]``. Training always takes
         the direct path, since ``_chunk_opts`` is only set during inference.
+
+        ``inplace`` lets the chunked path overwrite ``src`` instead of allocating an
+        output buffer. Without it the extra ``(N, C, d)`` allocation cancels most of
+        the saving, and at large row counts makes chunking cost MORE peak memory than
+        not chunking -- measured at 300k rows on an L40S. Callers that reuse ``src``
+        afterwards (the mixed-radix loop) must leave it False.
         """
         opts = getattr(self, "_chunk_opts", None)
         if not opts or not opts["row_chunk"]:
@@ -358,6 +364,7 @@ class ColEmbedding(nn.Module):
             train_size,
             chunk_size=opts["row_chunk_size"],
             col_chunk_size=opts["col_chunk_size"],
+            inplace=inplace,
         )
 
     def _compute_embeddings(
@@ -395,7 +402,7 @@ class ColEmbedding(nn.Module):
         src = self.in_linear(features)  # (..., T, in_dim) -> (..., T, E)
 
         if not self.target_aware:
-            src = self._run_tf_col(src, None if embed_with_test else train_size)
+            src = self._run_tf_col(src, None if embed_with_test else train_size, inplace=True)
         else:
             assert y_train is not None, "y_train must be provided when target_aware=True."
 
@@ -410,7 +417,7 @@ class ColEmbedding(nn.Module):
                 else:
                     y_emb = self.y_encoder(y_train.unsqueeze(-1))
                 src[..., :train_size, :] = src[..., :train_size, :] + y_emb
-                src = self._run_tf_col(src, None if embed_with_test else train_size)
+                src = self._run_tf_col(src, None if embed_with_test else train_size, inplace=True)
             else:
                 # Mixed-radix ensembling for many-class classification
                 if not self.mixed_radix_ensemble:
