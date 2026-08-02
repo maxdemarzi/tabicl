@@ -301,6 +301,22 @@ def _native_join(
     )
 
 
+def _require_non_negative(relations: Sequence[np.ndarray]) -> None:
+    """Reject negative values before they reach an array index.
+
+    The counting and aggregation kernels accumulate into arrays indexed *by value*,
+    so a negative value is an out-of-bounds write rather than a wrong answer. This is
+    not hypothetical: ``pd.factorize`` emits -1 for missing keys, so any real table
+    with a null foreign key produces them.
+    """
+    for data in relations:
+        if data.size and int(data.min()) < 0:
+            raise ValueError(
+                "values must be non-negative (they index the result arrays); "
+                "pd.factorize emits -1 for missing keys, so drop or remap nulls first"
+            )
+
+
 def _marshal(atoms: Sequence[Atom], order: List[str], less_than: Sequence[Tuple[str, str]]):
     """Permute columns into global variable order and translate names to indices."""
     position = {v: i for i, v in enumerate(order)}
@@ -364,6 +380,7 @@ def wcoj_count(
         raise RuntimeError("wcoj_count needs the compiled backend; see build_native.py")
     order = list(order)
     relations, var_ids, pairs = _marshal(atoms, order, less_than)
+    _require_non_negative(relations)
     total, counts = _wcoj_native.wcoj_count(relations, var_ids, len(order), pairs, int(threads))
     return int(total), counts
 
@@ -429,6 +446,7 @@ def wcoj_aggregate(
 
     order = list(order)
     relations, var_ids, pairs = _marshal(atoms, order, less_than)
+    _require_non_negative(relations)
     largest = max((int(r.max()) for r in relations if r.size), default=-1)
     weights = np.ascontiguousarray(weights, dtype=np.float64)
     if len(weights) <= largest:

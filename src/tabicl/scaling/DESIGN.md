@@ -148,9 +148,33 @@ Nested children plus repeated entity keys is rejected rather than approximated: 
 grandchild's cutoff is genuinely ambiguous when the same key appears at several
 prediction times.
 
-**Still unvalidated:** the motif/graph features. rel-f1 has no natural
-driver-to-driver graph, so `motif_features` has not been shown to help any real task --
-only that it computes the right numbers, fast.
+### Do the graph features help? (RelBench rel-event)
+
+rel-f1 has no entity-to-entity graph, so motifs were tested separately on rel-event /
+user-ignore, which carries a real user-user friendship table. `eval_relbench_motif.py`,
+three nested feature sets:
+
+| features | count | TabICL AUC | GBDT AUC |
+|---|---:|---:|---:|
+| entity table only | 6 | 0.5665 | 0.5947 |
+| + relational history | 32 | 0.5977 | 0.6272 |
+| + motif features | 35 | **0.7332** | 0.7304 |
+
+**+0.135 AUC from three columns** -- degree, triangles, clustering -- which is more
+than the 26 relational aggregate columns added (+0.031). 91.8% of task users appear in
+the graph; 68,085 triangles over 213,703 edges computed in 0.9 s.
+
+Two honest qualifications. `user_friends` has no timestamp, so the graph is static:
+RelBench models it that way, but a friendship formed after a prediction time is still
+visible to that prediction, making this an upper bound on a strictly causal version.
+And on this task TabICL and GBDT end up level (0.7332 vs 0.7304) -- the features carry
+the win, not the model.
+
+**A bug this found.** `user_friends` is 30.4M rows of which all but 213,703 have null
+keys. `pd.factorize` maps nulls to -1, and the counting kernels accumulate into arrays
+indexed *by value*, so a negative value was an out-of-bounds write rather than a wrong
+answer. Values are now validated before reaching the kernel. Any real table with a
+nullable foreign key would have hit this.
 
 ### Cyclic patterns: worst-case optimal joins
 

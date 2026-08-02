@@ -894,3 +894,14 @@ def test_repeated_keys_with_nested_children_is_rejected():
                    children=[Table(items, "oid", "item")])
     with pytest.raises(ValueError, match="entity keys repeat"):
         flatten_relational(entity, "uid", [nested], cutoff_column="cutoff")
+
+
+def test_negative_values_are_rejected_not_written_out_of_bounds():
+    """pd.factorize emits -1 for nulls, and the kernels index arrays *by value*."""
+    from tabicl.scaling import native_available, wcoj_count
+
+    if not native_available():
+        pytest.skip("compiled backend not built")
+    bad = np.array([[0, 1], [1, -1]], dtype=np.int64)
+    with pytest.raises(ValueError, match="non-negative"):
+        wcoj_count([Atom("e", ("a", "b"), bad)], ["a", "b"])
