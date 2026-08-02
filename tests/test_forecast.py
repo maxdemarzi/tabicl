@@ -2,7 +2,6 @@ import numpy as np
 import pytest
 
 pd = pytest.importorskip("pandas")
-pytest.importorskip("gluonts")
 pytest.importorskip("statsmodels")
 
 from tabicl import TabICLForecaster
