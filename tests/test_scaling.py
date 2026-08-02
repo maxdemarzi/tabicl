@@ -837,3 +837,60 @@ def test_wcoj_aggregate_rejects_short_weights():
     e = np.array([[1, 5], [5, 1]], dtype=np.int64)
     with pytest.raises(ValueError, match="weights has length"):
         wcoj_aggregate([Atom("e", ("a", "b"), e)], ["a", "b"], np.ones(2))
+
+
+def test_repeated_entity_keys_get_per_row_features():
+    """The standard predictive-relational shape: one row per (entity, prediction time).
+
+    RelBench's rel-f1 averages ~15 rows per driver and reaches 59. Grouping by key
+    would collapse those into one set of features, and the cutoff would be ambiguous
+    besides, so aggregation is per entity *row*.
+    """
+    entity = pd.DataFrame(
+        {
+            "uid": [0, 0, 1],
+            "cutoff": pd.to_datetime(["2026-01-10", "2026-02-10", "2026-02-10"]),
+        }
+    )
+    child = pd.DataFrame(
+        {
+            "uid": [0, 0, 1],
+            "ts": pd.to_datetime(["2026-01-05", "2026-02-05", "2026-01-05"]),
+            "amount": [1.0, 100.0, 7.0],
+        }
+    )
+
+    out = flatten_relational(
+        entity, "uid", [Table(child, "uid", "ev", time_column="ts")], cutoff_column="cutoff"
+    )
+
+    assert len(out) == 3
+    # Same driver, two different cutoffs -> different history, so different features.
+    assert out["ev__count"].tolist() == [1, 2, 1]
+    assert out["ev__amount__sum"].iloc[0] == pytest.approx(1.0)
+    assert out["ev__amount__sum"].iloc[1] == pytest.approx(101.0)
+    assert out["ev__amount__sum"].iloc[2] == pytest.approx(7.0)
+
+
+def test_entity_rows_without_history_get_zero_count_not_zero_sum():
+    """No history means a count of 0 but an *unknown* mean -- not 0."""
+    entity = pd.DataFrame({"uid": [0, 1], "cutoff": pd.to_datetime(["2026-01-10"] * 2)})
+    child = pd.DataFrame({"uid": [0], "ts": pd.to_datetime(["2026-01-05"]), "amount": [4.0]})
+
+    out = flatten_relational(
+        entity, "uid", [Table(child, "uid", "ev", time_column="ts")], cutoff_column="cutoff"
+    )
+    assert out["ev__count"].tolist() == [1, 0]
+    assert np.isnan(out["ev__amount__mean"].iloc[1])
+
+
+def test_repeated_keys_with_nested_children_is_rejected():
+    """A grandchild's cutoff is ambiguous when the entity key repeats; say so."""
+    entity = pd.DataFrame({"uid": [0, 0], "cutoff": pd.to_datetime(["2026-01-10"] * 2)})
+    orders = pd.DataFrame({"oid": [1], "uid": [0], "ts": pd.to_datetime(["2026-01-05"])})
+    items = pd.DataFrame({"oid": [1], "price": [2.0]})
+
+    nested = Table(orders, "uid", "ord", time_column="ts", primary_key="oid",
+                   children=[Table(items, "oid", "item")])
+    with pytest.raises(ValueError, match="entity keys repeat"):
+        flatten_relational(entity, "uid", [nested], cutoff_column="cutoff")

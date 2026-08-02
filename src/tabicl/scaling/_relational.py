@@ -95,7 +95,6 @@ def _resolve(child: Table, cutoff_by_key: Optional[pd.Series]) -> Tuple[pd.DataF
     if child.primary_key is None:
         raise ValueError(f"table {child.name!r} has children, so it needs primary_key")
 
-    # Each grandchild is filtered against the cutoff its *parent row* inherits.
     if cutoff_by_key is not None:
         parent_cutoff = df[child.foreign_key].map(cutoff_by_key)
         parent_cutoff.index = df[child.primary_key].values
@@ -105,52 +104,30 @@ def _resolve(child: Table, cutoff_by_key: Optional[pd.Series]) -> Tuple[pd.DataF
     blocks = [df.reset_index(drop=True)]
     stat_cols: Set[str] = set()
     for grandchild in child.children:
-        block = _aggregate(grandchild, df[child.primary_key], parent_cutoff)
+        block = _aggregate_by_key(grandchild, df[child.primary_key], parent_cutoff)
         stat_cols |= set(block.columns)
         blocks.append(block)
     return pd.concat(blocks, axis=1), stat_cols
 
 
-def _aggregate(child: Table, keys: pd.Series, cutoff: Optional[pd.Series]) -> pd.DataFrame:
-    """Aggregate one child table to one row per key, as sufficient statistics.
-
-    Emits only decomposable aggregates (count/sum/sumsq/min/max). Anything a caller
-    actually wants -- mean, std -- is derived once at the root by
-    :func:`_derive_features`. See that function for why.
-    """
-    df, nested_stats = _resolve(
-        child, pd.Series(cutoff.values, index=keys.values) if cutoff is not None else None
-    )
-
-    if cutoff is not None:
-        if child.time_column is None:
-            raise ValueError(f"table {child.name!r} needs time_column to honour a cutoff")
-        # Map each child row to its entity's cutoff, then drop rows at or after it.
-        # Dropping unmatched keys is intentional: they contribute no history.
-        per_row_cutoff = df[child.foreign_key].map(pd.Series(cutoff.values, index=keys.values))
-        df = df[df[child.time_column] < per_row_cutoff]
-
+def _stat_columns(child: Table, df: pd.DataFrame, nested_stats: Set[str], grouped, index) -> pd.DataFrame:
+    """Emit sufficient statistics for one grouping, shared by both aggregation paths."""
     use_cols = child.columns
     if use_cols is None:
-        # primary_key is an identifier -- aggregating it produces noise that looks
-        # like signal, so drop it along with the join key and the timestamp.
         excluded = {child.foreign_key, child.time_column, child.primary_key}
-        use_cols = [c for c in df.columns if c not in excluded]
+        use_cols = [c for c in df.columns if c not in excluded and not c.startswith("__")]
 
     stem = child.name
-    grouped = df.groupby(child.foreign_key)
-    index = pd.Index(keys.values, name=child.foreign_key)
     out = pd.DataFrame(index=index)
     out[f"{stem}__count"] = grouped.size()
 
     for col in use_cols:
         combiner = _STAT_ROLLUP.get(col.rsplit("__", 1)[-1]) if col in nested_stats else None
         if combiner is not None:
-            # Already a sufficient statistic from a deeper level. Roll it up with the
+            # Already a sufficient statistic from a deeper level: roll it up with the
             # combiner its own suffix names -- summing sums, min-ing mins -- rather
             # than aggregating it as if it were raw data. This is what keeps depth-k
-            # linear instead of exponential, and what makes the result equal to the
-            # aggregate over the fully joined table.
+            # linear instead of exponential.
             out[f"{stem}__{col}"] = grouped[col].agg(combiner)
             continue
 
@@ -158,22 +135,70 @@ def _aggregate(child: Table, keys: pd.Series, cutoff: Optional[pd.Series]) -> pd
         if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
             out[f"{stem}__{col}__count"] = grouped[col].count()
             out[f"{stem}__{col}__sum"] = grouped[col].sum()
-            out[f"{stem}__{col}__sumsq"] = df.assign(_sq=series**2).groupby(child.foreign_key)["_sq"].sum()
+            out[f"{stem}__{col}__sumsq"] = grouped[col].apply(lambda v: float((v**2).sum()))
             out[f"{stem}__{col}__min"] = grouped[col].min()
             out[f"{stem}__{col}__max"] = grouped[col].max()
         else:
             # nunique and mode are NOT semiring aggregates -- distinct-count cannot be
-            # rolled up exactly without a sketch (HyperLogLog et al.), and a mode of
-            # modes is not a mode. At depth 1 these are exact; deeper, they become
-            # "per-parent distinct count" summarised further, which is a different
-            # quantity. Documented rather than silently wrong.
+            # rolled up exactly without a sketch, and a mode of modes is not a mode.
             out[f"{stem}__{col}__nunique"] = grouped[col].nunique()
             out[f"{stem}__{col}__mode"] = grouped[col].agg(
-                lambda s: s.value_counts().index[0] if len(s) else np.nan
+                lambda v: v.value_counts().index[0] if len(v) else np.nan
             )
 
     out[f"{stem}__count"] = out[f"{stem}__count"].fillna(0)
-    return out.reset_index(drop=True)
+    return out
+
+
+def _aggregate_by_key(child: Table, keys: pd.Series, cutoff: Optional[pd.Series]) -> pd.DataFrame:
+    """Aggregate to one row per key. Requires keys to be unique (nested path)."""
+    df, nested_stats = _resolve(
+        child, pd.Series(cutoff.values, index=keys.values) if cutoff is not None else None
+    )
+
+    if cutoff is not None:
+        if child.time_column is None:
+            raise ValueError(f"table {child.name!r} needs time_column to honour a cutoff")
+        per_row_cutoff = df[child.foreign_key].map(pd.Series(cutoff.values, index=keys.values))
+        df = df[df[child.time_column] < per_row_cutoff]
+
+    grouped = df.groupby(child.foreign_key)
+    index = pd.Index(keys.values, name=child.foreign_key)
+    return _stat_columns(child, df, nested_stats, grouped, index).reset_index(drop=True)
+
+
+def _aggregate_by_row(child: Table, anchor: pd.DataFrame, n_rows: int) -> pd.DataFrame:
+    """Aggregate to one row per *entity row*, not per key.
+
+    The same entity usually appears many times with different prediction timestamps --
+    in RelBench's rel-f1 a driver averages ~15 rows and reaches 59 -- so its features
+    differ per row even though the key does not. Grouping by key would collapse those
+    into one, and the cutoff filter would be ambiguous besides. So child rows are
+    joined to entity *rows*, filtered against that row's own cutoff, and grouped by
+    row position.
+
+    Cost: the join is |child| x (rows sharing a key), which is the price of
+    per-row-correct features.
+    """
+    df, nested_stats = _resolve(child, None)
+
+    pairs = df.merge(anchor, left_on=child.foreign_key, right_on="__key", how="inner")
+    if "__cutoff" in anchor.columns:
+        if child.time_column is None:
+            raise ValueError(f"table {child.name!r} needs time_column to honour a cutoff")
+        pairs = pairs[pairs[child.time_column] < pairs["__cutoff"]]
+
+    grouped = pairs.groupby("__row")
+    stats = _stat_columns(child, pairs, nested_stats, grouped, grouped.size().index)
+    stats = stats.reindex(range(n_rows))
+    # Reindexing introduces NaN for entity rows with no history. This table's own
+    # count is genuinely zero there. Everything else stays unknown: a missing mean is
+    # not 0, and a *nested* count belongs to a level that was never reached, so
+    # claiming 0 would assert a fact about rows that do not exist.
+    own_count = f"{child.name}__count"
+    if own_count in stats.columns:
+        stats[own_count] = stats[own_count].fillna(0)
+    return stats.reset_index(drop=True)
 
 
 def _derive_features(frame: pd.DataFrame) -> pd.DataFrame:
@@ -311,14 +336,23 @@ def flatten_relational(
     """
     if primary_key not in entity_df.columns:
         raise ValueError(f"primary_key {primary_key!r} not in entity_df")
-
-    keys = entity_df[primary_key]
-    cutoff = entity_df[cutoff_column] if cutoff_column else None
     if cutoff_column and cutoff_column not in entity_df.columns:
         raise ValueError(f"cutoff_column {cutoff_column!r} not in entity_df")
 
+    keys = entity_df[primary_key]
+    duplicated = bool(keys.duplicated().any())
+    if duplicated and any(child.children for child in children):
+        raise ValueError(
+            "entity keys repeat, which makes a grandchild's cutoff ambiguous; "
+            "nested children currently require one row per entity key"
+        )
+
+    anchor = pd.DataFrame({"__key": keys.values, "__row": np.arange(len(entity_df))})
+    if cutoff_column:
+        anchor["__cutoff"] = entity_df[cutoff_column].values
+
     parts = [entity_df.drop(columns=[c for c in (primary_key, cutoff_column) if c]).reset_index(drop=True)]
     for child in children:
-        parts.append(_aggregate(child, keys, cutoff))
+        parts.append(_aggregate_by_row(child, anchor, len(entity_df)))
 
     return _derive_features(pd.concat(parts, axis=1))

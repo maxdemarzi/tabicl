@@ -118,6 +118,40 @@ Two consequences:
   linear. The earlier nested scheme turned one grandchild column into 25; this keeps
   it at ~7, and depth 3 adds no more.
 
+### Does any of this help TabICL? (RelBench rel-f1)
+
+Everything above is infrastructure; the synthetic relational benchmark only shows the
+plumbing works, because the signal was planted there deliberately. `eval_relbench.py`
+runs the real question on RelBench's rel-f1 / driver-top3 -- predict a top-3 finish
+from a timestamped prediction table over a genuine multi-table schema, features built
+under a per-row cutoff so nothing leaks:
+
+| features | count | TabICL AUC | GBDT AUC |
+|---|---:|---:|---:|
+| entity table only | 6 | 0.5626 | 0.4123 |
+| + relational history | 147 | **0.8125** | 0.7467 |
+
+**+0.25 AUC.** The entity table alone is near chance, which is the point: all of the
+lift comes from history the flattening aggregates. TabICL also beats a gradient-boosted
+baseline on the identical feature matrix (0.8125 vs 0.7467), so the features are not
+merely feeding a stronger model.
+
+**What this run exposed.** RelBench's shape is one row per *(entity, prediction time)*
+-- rel-f1 averages ~15 rows per driver and reaches 59 -- and the first implementation
+assumed one row per entity key. It did not merely lose accuracy; it could not run at
+all, because mapping a cutoff through a duplicated index raises. Aggregation is now per
+entity *row*: child rows join to entity rows, are filtered against that row's own
+cutoff, and group by row position. Cost is `|child| x (rows sharing a key)`, which is
+the price of per-row-correct features.
+
+Nested children plus repeated entity keys is rejected rather than approximated: a
+grandchild's cutoff is genuinely ambiguous when the same key appears at several
+prediction times.
+
+**Still unvalidated:** the motif/graph features. rel-f1 has no natural
+driver-to-driver graph, so `motif_features` has not been shown to help any real task --
+only that it computes the right numbers, fast.
+
 ### Cyclic patterns: worst-case optimal joins
 
 Tree aggregation covers parent-child schemas, which is what RelBench uses. It cannot
