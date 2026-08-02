@@ -1114,7 +1114,7 @@ def test_temporal_features_reject_mismatched_inputs():
         temporal_motif_features(e, [1], nodes=[0], cutoffs=[5])
     with pytest.raises(ValueError, match="cutoffs has length"):
         temporal_motif_features(e, [1, 2], nodes=[0, 1], cutoffs=[5])
-    with pytest.raises(ValueError, match="both datetime-like or both numeric"):
+    with pytest.raises(ValueError, match="datetime-like or both numeric"):
         temporal_motif_features(
             e, [1, 2], nodes=[0], cutoffs=pd.to_datetime(["2026-01-01"])
         )
