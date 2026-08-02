@@ -202,6 +202,79 @@ indexed *by value*, so a negative value was an out-of-bounds write rather than a
 answer. Values are now validated before reaching the kernel. Any real table with a
 nullable foreign key would have hit this.
 
+### Two ways past the degree confound: typed and temporal motifs
+
+"Degree carries 85%" is not an accident of this task. Motif counts are partly
+*determined* by the degree sequence -- conservation laws relating subgraph counts
+follow directly from conserving degrees (Bhat et al., "Motif conservation laws for
+the configuration model", 2014) -- and orbits are formally redundant with each other,
+degree being orbit 0 (Yaveroğlu et al.: 4 of the 15 orbits up to 4 nodes are
+computable from the rest). A k-star count is the extreme case: it is exactly
+`C(d, k)`, so it carries no information a model cannot already get from `d`.
+
+Going to *larger* undirected motifs therefore buys little. Two refinements are not
+recoverable from degree, and both are now implemented.
+
+**`typed_triangle_counts` / `typed_motif_features`.** Triangles split by the multiset
+of edge types they use, which is the vertex-collocation-profile argument
+(Lichtenwalter & Chawla, WWW 2012): the discriminative power comes from distinguishing
+isomorphism classes by relation type, not from more nodes.
+
+The counting argument is what makes it cheap and exact. Under `a < b < c` a triangle
+occupies three determined slots -- `(a,b)`, `(b,c)`, `(a,c)` -- so each slot's type is
+determined too. Run the join once per *ordered* type triple, bucket by the sorted
+triple, and every triangle is counted exactly once with nothing to correct
+afterwards. That is `k**3` joins for `k` types, each over a subset of the edges;
+`MAX_EDGE_TYPES = 6` guards the cube. Types are assumed disjoint, and the test suite
+asserts the census sums back to the untyped count, which is what makes this a
+refinement rather than a different feature.
+
+**`temporal_motif_features`.** Two separate things that are worth not conflating:
+
+* *Causality.* Features are computed from edges **strictly before** each row's cutoff,
+  matching `flatten_relational`, so both feature families share one notion of time.
+  This is what removes the caveat above rather than restating it.
+* *Recency and ordering.* `windows` restricts to a lookback, and `n_phases` splits each
+  window into equal-duration phases and adds the ordered census over them. This is the
+  part degree provably cannot fake: a triangle whose edges appeared within a week is
+  not the triangle that took three years, and `p0_p0_p1` -- two edges early, one late
+  -- is triadic closure caught in the act rather than inferred. Paranjape, Benson &
+  Leskovec (WSDM 2017) is the reference; the gains reported for temporal motifs are the
+  ones that most consistently survive a degree baseline.
+
+Phases reduce to types -- a phase is an edge type that happens to be a time bucket --
+so the ordering census is `typed_triangle_counts` over phase-partitioned edges and
+needs no separate kernel. Cost is one motif computation per (distinct cutoff x window),
+times `n_phases**3` joins. Distinct *cutoffs*, not rows, which is what makes it
+affordable: RelBench task tables share a handful of prediction timestamps across many
+rows.
+
+Measured on one hub-skewed graph -- 235,657 undirected edges, 30k nodes, 369,754
+triangles -- reporting every node, compiled backend, same machine as the table above:
+
+| | time | columns | check |
+|---|---:|---:|---|
+| untyped `motif_features` | 1.48 s | 3 | — |
+| `typed_motif_features`, k=2 | 1.83 s | 6 | census == untyped total |
+| `typed_motif_features`, k=3 | 2.54 s | 13 | census == untyped total |
+| `temporal_motif_features`, 2 windows, 1 phase | 1.96 s | 6 | — |
+| `temporal_motif_features`, 2 windows, 2 phases | 3.15 s | 14 | census == window total |
+| `temporal_motif_features`, 2 windows, 3 phases | 4.24 s | 26 | census == window total |
+
+The `k**3` and `n_phases**3` growth is real but mild at this scale, because each join
+runs over a `1/k` slice of the edges; the fixed cost of symmetrising and deduping the
+edge list is a large share of the untyped 1.48 s baseline.
+
+**Not yet validated on RelBench.** The typed census is verified against brute-force
+enumeration of node triples, and the temporal path against the static features it must
+reduce to; that establishes correctness, not usefulness.
+`eval_relbench_typed_temporal.py` is the experiment that would settle usefulness -- it
+splits rel-event's user-user graph into declared friendship and timestamped
+co-interest, and compares the leaky static features against strictly causal ones -- but
+it has not been run, so nothing here should be read as an AUC claim. Given the
+existing ablation, the prior should be that typed and temporal features have to *earn*
+their place against degree, exactly as untyped triangles largely failed to.
+
 ### Cyclic patterns: worst-case optimal joins
 
 Tree aggregation covers parent-child schemas, which is what RelBench uses. It cannot
@@ -470,8 +543,44 @@ by threading `inplace=True` through the two call sites that do not reuse the buf
 (the mixed-radix loop reuses `src_with_y` across digits and must stay out of place).
 Worth 1.7 GB at 300k. Only visible at a scale the 3060 cannot reach.
 
-**Guidance:** enable `row_chunk` alone below ~150k rows; combine it with
-`offload="cpu"` above that.
+### Chunking the ICL stage -- a null result
+
+Beyond ~150k rows the ICL stack owns the peak, so it was chunked too. Within a block
+every row is a query but only the first `train_size` rows supply K/V, so the same
+two-phase trick applies: harvest each block's K/V once, then stream queries.
+
+Isolated, it works, and the numbers look excellent (RTX 3060, `d_model=512`, 12 blocks):
+
+| rows | unchunked | chunked | saving |
+|---:|---:|---:|---:|
+| 20000 | 364 MiB | 104 MiB | 3.50x |
+| 100000 | 1761 MiB | 490 MiB | 3.60x |
+| 200000 | 3518 MiB | 977 MiB | 3.60x |
+
+**End-to-end it buys exactly nothing** (L40S, 100 features, `predict_proba`):
+
+| n_train | default | ICL chunked only | col chunked |
+|---:|---:|---:|---:|
+| 60000 | 22376 MiB | 22368 MiB | **15827 MiB** |
+| 150000 | 31257 MiB | 31257 MiB | **24900 MiB** |
+| 300000 | 38569 MiB | 38569 MiB | 38082 MiB |
+
+Identical, at every size, including the regime it was built for.
+
+**Why, and it is a repeat offence.** `InferenceManager` already batches the ICL stage,
+so the full-row forward the microbenchmark measured never happens in the real path.
+The isolated figure came from calling `tf_icl` directly on one big tensor, bypassing
+the manager. This is the *same* mistake as the column embedder's 6.2x isolated versus
+1.38x end-to-end -- documented in this very file, and then repeated. A microbenchmark
+that bypasses the caller measures a code path the model does not take.
+
+`chunked_icl_encoder` is kept: it is correct, exact to ~4e-5, tested, guarded against
+positional encoding, and would matter if the manager's batching were ever bypassed.
+It stays **off by default**, and the isolated 3.6x should not be quoted as a win.
+
+**Guidance:** `row_chunk` on `COL_CONFIG` is the one that pays -- up to ~1.4x, and
+only below ~300k rows, above which the peak has moved elsewhere again. Combine with
+`offload="cpu"` at scale. Leave `ICL_CONFIG`'s `row_chunk` off.
 
 ### 2. Multi-query KV cache — size confirmed, accuracy says pretrain
 

@@ -649,7 +649,7 @@ def typed_triangle_counts(
     >>> friend = np.array([[0, 1], [1, 2]])
     >>> colleague = np.array([[0, 2]])
     >>> out = typed_triangle_counts({"f": friend, "c": colleague})
-    >>> out.loc[0, "tri__c_f_f"]
+    >>> int(out.loc[0, "tri__f_f_c"])   # two friendships closed by a colleague edge
     1
     """
     import pandas as pd
