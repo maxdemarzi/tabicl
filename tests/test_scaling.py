@@ -334,6 +334,89 @@ def test_unknown_primary_key_raises():
         flatten_relational(entity, "nope", [Table(child, "uid", "txn")])
 
 
+def _two_hop_db():
+    """users -> orders -> items, the shape RelBench tasks actually have."""
+    users = pd.DataFrame(
+        {"uid": [0, 1], "age": [30, 40], "cutoff": pd.to_datetime(["2026-02-01", "2026-02-01"])}
+    )
+    orders = pd.DataFrame(
+        {
+            "oid": [10, 11, 12],
+            "uid": [0, 0, 1],
+            "ts": pd.to_datetime(["2026-01-05", "2026-01-20", "2026-01-10"]),
+            "total": [5.0, 7.0, 100.0],
+        }
+    )
+    items = pd.DataFrame(
+        {
+            "oid": [10, 10, 11, 12],
+            "ts": pd.to_datetime(["2026-01-05", "2026-01-05", "2026-01-20", "2026-01-10"]),
+            "price": [2.0, 3.0, 7.0, 100.0],
+        }
+    )
+    return users, orders, items
+
+
+def test_two_hop_aggregation():
+    users, orders, items = _two_hop_db()
+    out = flatten_relational(
+        users,
+        "uid",
+        [
+            Table(
+                orders,
+                foreign_key="uid",
+                name="ord",
+                time_column="ts",
+                primary_key="oid",
+                children=[Table(items, foreign_key="oid", name="item", time_column="ts")],
+            )
+        ],
+    )
+    assert len(out) == 2
+    # user 0 has 2 orders; grandchild features are aggregated per order then per user.
+    assert out["ord__count"].tolist() == [2, 1]
+    # order 10 has 2 items, order 11 has 1 -> mean item count for user 0 is 1.5
+    assert out["ord__item__count__mean"].iloc[0] == pytest.approx(1.5)
+    assert out["ord__item__price__sum__max"].iloc[0] == pytest.approx(7.0)
+
+
+def test_two_hop_cutoff_propagates():
+    """A grandchild after the entity's cutoff is still leakage, two hops out."""
+    users, orders, items = _two_hop_db()
+    users = users.copy()
+    users["cutoff"] = pd.to_datetime(["2026-01-10", "2026-02-01"])  # excludes order 11
+
+    out = flatten_relational(
+        users,
+        "uid",
+        [
+            Table(
+                orders,
+                foreign_key="uid",
+                name="ord",
+                time_column="ts",
+                primary_key="oid",
+                children=[Table(items, foreign_key="oid", name="item", time_column="ts")],
+            )
+        ],
+        cutoff_column="cutoff",
+    )
+    # user 0 keeps only order 10 (2026-01-05), so its 2 items and nothing from order 11.
+    assert out["ord__count"].iloc[0] == 1
+    assert out["ord__item__count__sum"].iloc[0] == pytest.approx(2.0)
+    assert out["ord__total__max"].iloc[0] == pytest.approx(5.0)
+
+
+def test_children_without_primary_key_raises():
+    _, orders, items = _two_hop_db()
+    bad = Table(orders, "uid", "ord", time_column="ts", children=[Table(items, "oid", "item")])
+    with pytest.raises(ValueError, match="primary_key"):
+        flatten_relational(
+            pd.DataFrame({"uid": [0, 1], "age": [1, 2]}), "uid", [bad]
+        )
+
+
 # --------------------------------------------------------------------------
 # 4. Test-time compute
 # --------------------------------------------------------------------------

@@ -79,9 +79,19 @@ RDBLearn, which converts tabular foundation models into relational ones by
 *"automatically flattening the underlying database into a table"*. So this is a
 featurization wrapper — no model change, no retraining.
 
-**Scope.** Depth-1..k aggregation over foreign keys (count/mean/sum/min/max/nunique
-for numerics, mode/nunique for categoricals), with timestamp truncation so no
-child row after the cutoff leaks in. Pure pandas.
+**Scope.** Depth-k aggregation over foreign keys (count/mean/sum/min/max/std for
+numerics, mode/nunique for categoricals), with timestamp truncation so no child row
+after the cutoff leaks in. Pure pandas.
+
+Multi-hop (`user -> order -> item`) is supported by giving a `Table` its own
+`primary_key` and `children`; the deeper level folds in first and the entity's cutoff
+propagates down, so a grandchild recorded after the prediction time is still excluded.
+
+Note the combinatorial cost: one grandchild numeric column becomes `len(aggs)` child
+features, each aggregated again by the parent -- 25 columns from one at depth 2.
+Nested levels therefore use a reduced aggregate set, and `Table(columns=...)` narrows
+it further. TabICL has a practical feature ceiling; depth 3 needs an explicit column
+list.
 
 ## 4. Test-time compute
 
