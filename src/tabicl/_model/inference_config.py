@@ -47,7 +47,16 @@ class MgrConfig:
 
     - ``row_chunk``: Whether to stream the column-embedding stage in row/column
       slabs instead of materialising the full ``(N, C, d)`` activation. Exactly
-      equivalent to the unchunked result. Default ``False``.
+      equivalent to the unchunked result.
+
+      - ``False``: never chunk (default, preserves historical behaviour).
+      - ``True``: always chunk.
+      - ``"auto"``: chunk only when the estimated unchunked activation would exceed
+        ``auto_row_chunk_threshold`` of free GPU memory. Decided per call from the
+        real tensor shape and the real free memory, so it adapts to the card.
+
+    - ``auto_row_chunk_threshold``: fraction of free GPU memory above which
+      ``row_chunk="auto"`` engages. Default 0.35.
     - ``row_chunk_size``: Rows per chunk. Default 8192.
     - ``col_chunk_size``: Columns per slab. Chunking rows alone caps the saving at
       roughly 2x, because the inducing-state phase still runs over every context
@@ -90,6 +99,7 @@ class MgrConfig:
         "auto_offload_threshold",
         # Row chunking
         "row_chunk",
+        "auto_row_chunk_threshold",
         "row_chunk_size",
         "col_chunk_size",
         # CPU offloading
@@ -140,7 +150,16 @@ class MgrConfig:
             "error_msg": "auto_offload_threshold must be a float between 0 and 1",
         },
         # Row chunking
-        "row_chunk": {"expected_type": bool, "validator": None, "error_msg": "row_chunk must be a boolean"},
+        "row_chunk": {
+            "expected_type": (bool, str),
+            "validator": lambda x: isinstance(x, bool) or x == "auto",
+            "error_msg": "row_chunk must be a boolean or 'auto'",
+        },
+        "auto_row_chunk_threshold": {
+            "expected_type": float,
+            "validator": lambda x: 0.0 <= x <= 1.0,
+            "error_msg": "auto_row_chunk_threshold must be a float between 0 and 1",
+        },
         "row_chunk_size": {
             "expected_type": int,
             "validator": lambda x: x >= 1,
@@ -206,7 +225,7 @@ class MgrConfig:
     # Consumed by ColEmbedding rather than InferenceManager. `configure` takes an
     # explicit signature with no **kwargs, so these must be filtered out before it
     # is called -- see `manager_items`.
-    _NON_MANAGER_KEYS = {"row_chunk", "row_chunk_size", "col_chunk_size"}
+    _NON_MANAGER_KEYS = {"row_chunk", "auto_row_chunk_threshold", "row_chunk_size", "col_chunk_size"}
 
     def keys(self):
         """Return set of keys that have values set."""
@@ -222,8 +241,10 @@ class MgrConfig:
 
     def chunk_options(self):
         """Row-chunking settings as a plain dict, with defaults filled in."""
+        mode = getattr(self, "row_chunk", False)
         return {
-            "row_chunk": bool(getattr(self, "row_chunk", False)),
+            "row_chunk": mode if mode == "auto" else bool(mode),
+            "auto_row_chunk_threshold": float(getattr(self, "auto_row_chunk_threshold", 0.35)),
             "row_chunk_size": int(getattr(self, "row_chunk_size", 8192)),
             "col_chunk_size": int(getattr(self, "col_chunk_size", 32)),
         }
@@ -317,6 +338,7 @@ class InferenceConfig:
                 auto_offload_threshold=0.5,
                 # Row chunking
                 row_chunk=False,
+                auto_row_chunk_threshold=0.35,
                 row_chunk_size=8192,
                 col_chunk_size=32,
                 # CPU offloading

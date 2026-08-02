@@ -146,6 +146,7 @@ def test_row_chunk_defaults_off():
 
     assert InferenceConfig().COL_CONFIG.chunk_options() == {
         "row_chunk": False,
+        "auto_row_chunk_threshold": 0.35,
         "row_chunk_size": 8192,
         "col_chunk_size": 32,
     }
@@ -153,13 +154,71 @@ def test_row_chunk_defaults_off():
 
 @pytest.mark.parametrize(
     "bad, exc",
-    [({"row_chunk": "yes"}, TypeError), ({"row_chunk_size": 0}, ValueError), ({"col_chunk_size": -1}, ValueError)],
+    [
+        ({"row_chunk": "yes"}, ValueError),  # str is allowed ("auto"), "yes" is not
+        ({"row_chunk": 1.5}, TypeError),
+        ({"row_chunk_size": 0}, ValueError),
+        ({"col_chunk_size": -1}, ValueError),
+    ],
 )
 def test_row_chunk_config_validation(bad, exc):
     from tabicl._model.inference_config import InferenceConfig
 
     with pytest.raises(exc):
         InferenceConfig().update_from_dict({"COL_CONFIG": bad})
+
+
+def test_auto_mode_validates_and_defaults():
+    from tabicl._model.inference_config import InferenceConfig
+
+    cfg = InferenceConfig()
+    cfg.update_from_dict({"COL_CONFIG": {"row_chunk": "auto"}})
+    opts = cfg.COL_CONFIG.chunk_options()
+    assert opts["row_chunk"] == "auto"
+    assert opts["auto_row_chunk_threshold"] == 0.35
+
+    with pytest.raises(ValueError, match="row_chunk must be"):
+        InferenceConfig().update_from_dict({"COL_CONFIG": {"row_chunk": "sometimes"}})
+    with pytest.raises(ValueError, match="auto_row_chunk_threshold"):
+        InferenceConfig().update_from_dict({"COL_CONFIG": {"auto_row_chunk_threshold": 1.5}})
+
+
+@pytest.mark.parametrize(
+    "mode, threshold, is_cuda, expected",
+    [
+        (False, 0.35, True, False),
+        (True, 0.35, False, True),  # explicit True chunks even on CPU
+        ("auto", 0.35, False, False),  # auto is a GPU-memory decision; CPU cannot OOM
+        ("auto", 0.0, True, True),  # threshold 0 => always over budget
+        ("auto", 1.0, True, False),  # tiny tensor, generous budget => skip
+    ],
+)
+def test_chunk_wanted_decision(backbone, mode, threshold, is_cuda, expected):
+    """The auto rule is a memory decision, so pin its branches without needing a GPU."""
+    col = backbone.model_.col_embedder
+    opts = {"row_chunk": mode, "auto_row_chunk_threshold": threshold}
+
+    class _Fake:
+        """Small stand-in so the CUDA branch is exercised without a CUDA device."""
+
+        numel = staticmethod(lambda: 1024)
+        element_size = staticmethod(lambda: 4)
+        is_cuda = False
+        device = "cpu"
+
+    fake = _Fake()
+    fake.is_cuda = is_cuda
+    if is_cuda and mode == "auto":
+        free = 1 << 30
+        monkey = lambda _dev: (free, free)  # noqa: E731
+        real = torch.cuda.mem_get_info
+        torch.cuda.mem_get_info = monkey
+        try:
+            assert col._chunk_wanted(fake, opts) is expected
+        finally:
+            torch.cuda.mem_get_info = real
+    else:
+        assert col._chunk_wanted(fake, opts) is expected
 
 
 def test_manager_items_excludes_chunk_keys():

@@ -337,6 +337,31 @@ class ColEmbedding(nn.Module):
 
         return (y.long() // divisor) % bases[digit_idx]
 
+    # Peak memory of the unchunked set transformer, as a multiple of its input tensor.
+    # Measured on an L40S: a 3277 MiB input peaked at 28140 MiB (64k rows x 100 features,
+    # fp32), i.e. 8.6x. Used only to decide whether to chunk, so it needs to be roughly
+    # right, not exact -- and erring high just chunks slightly sooner than necessary.
+    _UNCHUNKED_PEAK_FACTOR = 8.6
+
+    def _chunk_wanted(self, src: Tensor, opts: dict) -> bool:
+        """Decide whether this call should take the chunked path.
+
+        ``row_chunk="auto"`` compares the projected unchunked peak against actually
+        free GPU memory, so the same code adapts to a 12 GB card and an 80 GB one
+        without the caller having to know a row-count threshold.
+        """
+        mode = opts["row_chunk"]
+        if mode is not True and mode != "auto":
+            return False
+        if mode is True:
+            return True
+        if not src.is_cuda:
+            return False  # nothing to run out of; chunking would only add overhead
+
+        free, _total = torch.cuda.mem_get_info(src.device)
+        projected = src.numel() * src.element_size() * self._UNCHUNKED_PEAK_FACTOR
+        return projected > free * opts["auto_row_chunk_threshold"]
+
     def _run_tf_col(self, src: Tensor, train_size: Optional[int], inplace: bool = False) -> Tensor:
         """Run the column set transformer, optionally row/column chunked.
 
@@ -351,7 +376,7 @@ class ColEmbedding(nn.Module):
         afterwards (the mixed-radix loop) must leave it False.
         """
         opts = getattr(self, "_chunk_opts", None)
-        if not opts or not opts["row_chunk"]:
+        if not opts or not self._chunk_wanted(src, opts):
             return self.tf_col(src, train_size=train_size)
 
         # Imported lazily: tabicl.scaling imports from tabicl._model, so a

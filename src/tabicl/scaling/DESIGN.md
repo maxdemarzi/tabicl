@@ -254,10 +254,19 @@ baseline for test-time scaling on TabICL, not a reproduction.
 Row chunking is a first-class `InferenceConfig` option, alongside `offload`:
 
 ```python
-TabICLClassifier(
-    inference_config={"COL_CONFIG": {"row_chunk": True, "row_chunk_size": 8192, "col_chunk_size": 32}}
-)
+# always chunk
+TabICLClassifier(inference_config={"COL_CONFIG": {"row_chunk": True}})
+
+# chunk only when the projected activation would not fit comfortably
+TabICLClassifier(inference_config={"COL_CONFIG": {"row_chunk": "auto"}})
 ```
+
+`"auto"` decides per call from the real tensor shape and the real free VRAM, so the
+same setting adapts to a 12 GB card and an 80 GB one without the caller knowing the
+~150k-row threshold. It projects the unchunked peak as `input x 8.6` (measured: a
+3277 MiB input peaked at 28140 MiB on an L40S) and chunks when that exceeds
+`auto_row_chunk_threshold` (default 0.35) of free memory. On CPU it never engages,
+since there is nothing to run out of.
 
 Defaults to off, so existing behaviour is unchanged. It composes with `offload`
 and with `kv_cache`: offloading moves *outputs* off the GPU, chunking shrinks the
