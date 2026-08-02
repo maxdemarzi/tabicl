@@ -24,7 +24,17 @@ from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 
-__all__ = ["Atom", "wcoj_join", "triangle_counts", "motif_features"]
+try:  # optional compiled accelerator; see build_native.py
+    from . import _wcoj_native  # type: ignore
+except ImportError:  # pragma: no cover - depends on whether it was built
+    _wcoj_native = None
+
+__all__ = ["Atom", "wcoj_join", "triangle_counts", "motif_features", "native_available"]
+
+
+def native_available() -> bool:
+    """Whether the compiled hash-join backend is importable."""
+    return _wcoj_native is not None
 
 
 @dataclass
@@ -113,6 +123,8 @@ def wcoj_join(
     order: Sequence[str],
     max_results: int | None = None,
     less_than: Sequence[Tuple[str, str]] = (),
+    backend: str = "auto",
+    threads: int = 0,
 ) -> np.ndarray:
     """Evaluate a conjunctive query with leapfrog triejoin.
 
@@ -136,6 +148,16 @@ def wcoj_join(
         undirected triangle has 6 orientations, and requiring ``a < b < c`` stops the
         other 5 from ever being enumerated. ``u`` must precede ``v`` in ``order``.
 
+    threads : int, default=0
+        Worker threads for the compiled backend; 0 means one per core. Ignored by the
+        Python backend and when ``max_results`` is set, since capping makes *which*
+        tuples are returned order-dependent.
+
+    backend : {"auto", "native", "python"}, default="auto"
+        ``"auto"`` uses the compiled hash-join backend when it was built and falls
+        back to the pure-Python leapfrog triejoin otherwise. The two return the same
+        tuples; only the row order may differ, so compare as sets.
+
     Returns
     -------
     np.ndarray
@@ -153,6 +175,14 @@ def wcoj_join(
     [[1, 2, 3]]
     """
     order = list(order)
+
+    if backend not in ("auto", "native", "python"):
+        raise ValueError(f"backend must be auto/native/python, got {backend!r}")
+    if backend == "native" and _wcoj_native is None:
+        raise RuntimeError("native backend requested but not built; see build_native.py")
+    if backend != "python" and _wcoj_native is not None:
+        return _native_join(atoms, order, max_results, less_than, threads)
+
     prepared = []
     for atom in atoms:
         data, local = _sorted_for(atom, order)
@@ -247,6 +277,40 @@ def wcoj_join(
     return np.asarray(results, dtype=np.int64)
 
 
+def _native_join(
+    atoms: Sequence[Atom],
+    order: List[str],
+    max_results: int | None,
+    less_than: Sequence[Tuple[str, str]],
+    threads: int = 0,
+) -> np.ndarray:
+    """Marshal to the compiled backend: permute columns into global variable order."""
+    position = {v: i for i, v in enumerate(order)}
+    relations, var_ids = [], []
+    for atom in atoms:
+        missing = set(atom.variables) - set(order)
+        if missing:
+            raise ValueError(f"atom {atom.name!r} uses variables not in order: {sorted(missing)}")
+        local = [v for v in order if v in atom.variables]
+        cols = [list(atom.variables).index(v) for v in local]
+        relations.append(np.ascontiguousarray(atom.data[:, cols], dtype=np.int64))
+        var_ids.append([position[v] for v in local])
+
+    pairs = []
+    for lesser, greater in less_than:
+        if lesser not in position or greater not in position:
+            raise ValueError(f"less_than references unknown variable: {(lesser, greater)}")
+        if position[lesser] >= position[greater]:
+            raise ValueError(
+                f"less_than {(lesser, greater)} requires {lesser!r} to precede {greater!r} in order"
+            )
+        pairs.append((position[lesser], position[greater]))
+
+    return _wcoj_native.wcoj_hash_join(
+        relations, var_ids, len(order), pairs, 0 if max_results is None else int(max_results), int(threads)
+    )
+
+
 def _undirected_edges(edges: np.ndarray) -> np.ndarray:
     """Symmetrise and dedupe, so an undirected motif is counted once per orientation."""
     both = np.vstack([edges, edges[:, ::-1]])
@@ -257,13 +321,11 @@ def _undirected_edges(edges: np.ndarray) -> np.ndarray:
 def triangle_counts(edges: np.ndarray, nodes: np.ndarray | None = None) -> np.ndarray:
     """Count triangles through each node.
 
-    Uses sparse matrix multiplication, not :func:`wcoj_join`. Triangles have a closed
-    matrix form -- ``diag(A^3) / 2`` -- and BLAS-level sparse matmul beats a Python
-    leapfrog triejoin by 1-2 orders of magnitude at every size measured, including on
-    skewed graphs where the wedge intermediate is 1000x the output and the AGM bound
-    should have favoured the join. See ``DESIGN.md``.
-
-    :func:`wcoj_join` remains the tool for patterns with no such closed form.
+    Prefers the compiled join when it has been built, and falls back to sparse
+    ``diag(A^3)/2`` otherwise. Measured on this machine, the compiled join beats
+    ``scipy`` by 2-12x on uniform random graphs and by ~27x on hub-skewed ones, where
+    ``A^3`` densifies; the pure-Python join loses to everything and is never chosen
+    here. See ``DESIGN.md`` for the table.
 
     Parameters
     ----------
@@ -278,8 +340,6 @@ def triangle_counts(edges: np.ndarray, nodes: np.ndarray | None = None) -> np.nd
     np.ndarray
         Triangle count per node, aligned with ``nodes``.
     """
-    import scipy.sparse as sp
-
     e = _undirected_edges(np.asarray(edges))
     if nodes is None:
         nodes = np.unique(e) if e.size else np.empty(0, dtype=np.int64)
@@ -288,14 +348,33 @@ def triangle_counts(edges: np.ndarray, nodes: np.ndarray | None = None) -> np.nd
     if e.size == 0 or len(nodes) == 0:
         return np.zeros(len(nodes), dtype=np.int64)
 
+    if _wcoj_native is not None:
+        # a < b < c is pushed into the join, so each triangle is enumerated once.
+        tri = wcoj_join(
+            [Atom("e", ("a", "b"), e), Atom("e", ("b", "c"), e), Atom("e", ("a", "c"), e)],
+            ["a", "b", "c"],
+            less_than=[("a", "b"), ("b", "c")],
+            backend="native",
+        )
+        counts = np.zeros(len(nodes), dtype=np.int64)
+        if tri.size:
+            members, freq = np.unique(tri.ravel(), return_counts=True)
+            lookup = {int(n): i for i, n in enumerate(nodes)}
+            for member, count in zip(members, freq):
+                slot = lookup.get(int(member))
+                if slot is not None:
+                    counts[slot] = count
+        return counts
+
+    import scipy.sparse as sp
+
     size = int(max(e.max(), nodes.max())) + 1
     adj = sp.csr_matrix(
         (np.ones(len(e), dtype=np.int64), (e[:, 0], e[:, 1])), shape=(size, size)
     )
     # diag(A^3)[i] counts closed walks of length 3 through i, i.e. each of its
     # triangles once per direction -- hence the halving.
-    closed_walks = (adj @ adj @ adj).diagonal() // 2
-    return closed_walks[nodes].astype(np.int64)
+    return ((adj @ adj @ adj).diagonal() // 2)[nodes].astype(np.int64)
 
 
 def motif_features(edges: np.ndarray, nodes: np.ndarray | None = None):

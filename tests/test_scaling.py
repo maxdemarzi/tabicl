@@ -640,3 +640,31 @@ def test_triangle_counts_and_motifs():
     # node 3 has 3 neighbours -> 3 wedges, 1 closed
     assert feats.loc[3, "clustering"] == pytest.approx(1 / 3)
     assert feats.loc[4, "clustering"] == 0.0
+
+
+def test_native_backend_matches_python_when_built():
+    """The two backends must agree; only row order may differ."""
+    from tabicl.scaling import native_available
+
+    edges = _random_graph(25, 0.4, 5)
+    atoms = [
+        Atom("e", ("a", "b"), edges),
+        Atom("e", ("b", "c"), edges),
+        Atom("e", ("a", "c"), edges),
+    ]
+    py_rows = wcoj_join(atoms, ["a", "b", "c"], less_than=[("a", "b"), ("b", "c")], backend="python")
+    expected = sorted(map(tuple, py_rows))
+    assert expected == _brute_triangles(edges)
+
+    if not native_available():
+        pytest.skip("compiled backend not built")
+    native_rows = wcoj_join(
+        atoms, ["a", "b", "c"], less_than=[("a", "b"), ("b", "c")], backend="native"
+    )
+    assert sorted(map(tuple, native_rows)) == expected
+
+
+def test_backend_argument_is_validated():
+    e = np.array([[1, 2]], dtype=np.int64)
+    with pytest.raises(ValueError, match="backend must be"):
+        wcoj_join([Atom("e", ("a", "b"), e)], ["a", "b"], backend="fast")

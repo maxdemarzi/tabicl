@@ -13,7 +13,7 @@ from ._rowchunk import (
     row_chunked,
 )
 from ._ttc import ThinkingResult, think_predict_proba
-from ._wcoj import Atom, motif_features, triangle_counts, wcoj_join
+from ._wcoj import Atom, motif_features, native_available, triangle_counts, wcoj_join
 
 __all__ = [
     "chunked_set_transformer",
@@ -31,4 +31,5 @@ __all__ = [
     "wcoj_join",
     "triangle_counts",
     "motif_features",
+    "native_available",
 ]

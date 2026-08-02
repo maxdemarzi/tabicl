@@ -131,37 +131,55 @@ PODS 2012), whose cost is bounded by the AGM bound of the query rather than by a
 intermediate. `motif_features` exposes degree / triangle count / clustering
 coefficient per node, ready to concatenate onto a flattened feature table.
 
-**Measured against the realistic alternative, this implementation loses.** Timing
-triangle counting three ways -- Python leapfrog triejoin, a pandas binary-join
-pipeline, and `scipy` sparse `A^3`:
+**Two implementations.** A pure-Python leapfrog triejoin, and an optional compiled
+hash join built by `python -m tabicl.scaling.build_native` (needs a C++17 compiler and
+`pybind11`; on Windows that means MSVC Build Tools -- clang alone cannot link a
+CPython extension because it ships no Windows SDK). `wcoj_join` picks the compiled one
+when present.
 
-| graph | triangles | LFTJ (py) | pandas | scipy |
+**The Python one is not competitive, and comparing it to `pandas` measures the
+language, not the join.** Timing triangle counting, all single-threaded (verified by
+cpu-time/wall-time ~= 1 for each):
+
+| graph | triangles | LFTJ (py) | pandas | scipy A^3 | **compiled WCOJ** |
+|---|---:|---:|---:|---:|---:|
+| n=400, p=0.20 | 84837 | 1.803 s | 0.051 s | 0.030 s | **0.011 s** |
+| n=800, p=0.05 | 10458 | 0.747 s | 0.033 s | 0.061 s | **0.007 s** |
+| n=1500, p=0.02 | 4464 | — | 0.039 s | 0.110 s | **0.010 s** |
+| n=2000, p=0.02 | 10665 | — | 0.098 s | 0.267 s | **0.021 s** |
+
+Compiled, the join wins everywhere: 2.8-4.8x over `pandas`, 2.1-12.7x over `scipy`,
+and 110-167x over the same algorithm in Python. On hub-skewed graphs `scipy` collapses
+(3.2 s vs 0.12 s) because `A^3` densifies, while `pandas` stays competitive -- its
+`u < v` orientation happens to prune the star, so those graphs are not the AGM
+showcase they look like.
+
+So `triangle_counts` prefers the compiled join and falls back to sparse `diag(A^3)/2`.
+
+**Parallelism.** Only the compiled join is threaded; `pandas` `merge` and `scipy`
+sparse matmul are both serial by design. Cost model first, scheduler second:
+
+* Candidate cost is the **product** of touching relations' bucket sizes, not the min.
+  Relations sharing only a bound variable fan out multiplicatively, and a min estimate
+  underweights exactly the hub vertices that dominate.
+* Scheduling is a shared atomic cursor over a **cost-descending** list. Round-robin
+  over value-sorted candidates is systematically unfair (degree correlates with value
+  globally); static partitioning strands a thread whose batch outruns its estimate.
+* Items above a fair share (`total / threads`) are **pre-split** recursively, because
+  one oversized item runs start-to-finish on one thread and caps speedup regardless of
+  how well the rest is packed.
+
+Measured on 8 logical cores:
+
+| query | 1 thread | 2 | 4 | 8 |
 |---|---:|---:|---:|---:|
-| n=400, p=0.20 | 84837 | 1.894 s | 0.052 s | **0.030 s** |
-| n=800, p=0.05 | 10458 | 0.742 s | **0.033 s** | 0.060 s |
-| n=1500, p=0.02 | 4464 | 0.819 s | **0.037 s** | 0.112 s |
+| triangles, n=1400 p=0.12 (791k out) | 1.00x | 1.35x | 1.84x | 2.08x |
+| 4-clique, n=400 p=0.20 (67k out) | 1.00x | 1.59x | 2.52x | 2.94x |
 
-10-60x slower everywhere. This is mostly a language gap -- pandas `merge` and
-`scipy` matmul are compiled, this is Python recursion with a `searchsorted` per seek,
-which is why production systems write LFTJ in C++ -- but the gap is not rescued by
-picking a friendlier regime. On a hub graph with **2.9M wedges and 2400 triangles**
-(a 1200:1 intermediate-to-output ratio, exactly what the AGM bound is about) pandas
-still won by **50x**. Vectorised C over a large intermediate beats per-tuple
-interpreter overhead long before asymptotics take over.
-
-Consequences, applied:
-
-* **`triangle_counts` and `motif_features` use sparse `diag(A^3)/2`, not the join.**
-  Triangles have a closed matrix form, so paying for generality there was simply a
-  bug: 1.894 s -> 0.081 s, a **23x** speed-up, same counts.
-* **`wcoj_join` earns its place on generality, not speed** -- arbitrary conjunctive
-  patterns with no closed form. It is correct and asymptotically right; it is not
-  fast, and it should not be reached for when a matrix formulation exists.
-* Symmetry breaking still matters within the join: pushing `a < b < c` inside rather
-  than filtering after measured **4.8x** on a 220-node graph, same 1776 triangles.
-* **Variable ordering dominates LFTJ cost** and is the caller's problem. Adaptive
-  ordering (ADOPT, arXiv:2307.16540) picks it online with UCT -- worth revisiting
-  only if a compiled implementation ever makes the constant factor competitive.
+Sub-linear, honestly: at 20-50 ms per query the serial trie build, the per-thread
+output merge, and thread startup are a real fraction of the total, and the
+output-heavy triangle query is worse than the search-heavy clique one. These are small
+workloads; the serial fraction shrinks as inputs grow.
 
 Verified against brute-force enumeration on random graphs up to density 0.9, on
 4-cycles, and per-node counts against exhaustive triple enumeration.

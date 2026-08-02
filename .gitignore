@@ -145,3 +145,9 @@ papers/
 CLAUDE.md
 ckpts/
 src_private/
+
+# compiled scaling accelerator (built on demand via build_native.py)
+src/tabicl/scaling/_wcoj_native*.pyd
+src/tabicl/scaling/_wcoj_native*.so
+src/tabicl/scaling/_build_tmp/
+src/tabicl/scaling/build/
