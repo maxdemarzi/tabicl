@@ -16,19 +16,17 @@ recorded after the cutoff leaks the future. ``cutoff_column`` enforces that.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Set, Tuple
 
 import numpy as np
 import pandas as pd
 
 __all__ = ["Table", "flatten_relational"]
 
-_NUMERIC_AGGS = ("count", "mean", "sum", "min", "max", "std")
-# Depth >= 2 multiplies: one grandchild column becomes len(_NUMERIC_AGGS) child
-# features, each of which the parent aggregates again -- 25 columns from one.
-# Deeper levels therefore use a reduced set. Pass Table(columns=...) to narrow
-# further; TabICL has a practical feature ceiling.
-_NESTED_AGGS = ("count", "mean", "sum", "max")
+# Suffix -> the combiner that rolls that statistic up one level. This is the
+# semiring part: each is associative, so a chain of joins collapses bottom-up
+# without ever materialising the join.
+_STAT_ROLLUP = {"count": "sum", "sum": "sum", "sumsq": "sum", "min": "min", "max": "max"}
 
 
 @dataclass
@@ -74,8 +72,8 @@ class Table:
     children: Sequence["Table"] = field(default=())
 
 
-def _resolve(child: Table, cutoff_by_key: Optional[pd.Series]) -> pd.DataFrame:
-    """Fold ``child.children`` into ``child.df``, one column block per grandchild.
+def _resolve(child: Table, cutoff_by_key: Optional[pd.Series]) -> Tuple[pd.DataFrame, Set[str]]:
+    """Fold ``child.children`` into ``child.df``, returning it plus its stat columns.
 
     ``cutoff_by_key`` maps this table's foreign key -> the entity's cutoff, so the
     deadline propagates down the chain: a grandchild recorded after the entity's
@@ -83,7 +81,7 @@ def _resolve(child: Table, cutoff_by_key: Optional[pd.Series]) -> pd.DataFrame:
     """
     df = child.df
     if not child.children:
-        return df
+        return df, set()
 
     if child.primary_key is None:
         raise ValueError(f"table {child.name!r} has children, so it needs primary_key")
@@ -96,16 +94,24 @@ def _resolve(child: Table, cutoff_by_key: Optional[pd.Series]) -> pd.DataFrame:
         parent_cutoff = None
 
     blocks = [df.reset_index(drop=True)]
+    stat_cols: Set[str] = set()
     for grandchild in child.children:
-        blocks.append(
-            _aggregate(grandchild, df[child.primary_key], parent_cutoff)
-        )
-    return pd.concat(blocks, axis=1)
+        block = _aggregate(grandchild, df[child.primary_key], parent_cutoff)
+        stat_cols |= set(block.columns)
+        blocks.append(block)
+    return pd.concat(blocks, axis=1), stat_cols
 
 
 def _aggregate(child: Table, keys: pd.Series, cutoff: Optional[pd.Series]) -> pd.DataFrame:
-    """Aggregate one child table down to one row per key in ``keys``."""
-    df = _resolve(child, pd.Series(cutoff.values, index=keys.values) if cutoff is not None else None)
+    """Aggregate one child table to one row per key, as sufficient statistics.
+
+    Emits only decomposable aggregates (count/sum/sumsq/min/max). Anything a caller
+    actually wants -- mean, std -- is derived once at the root by
+    :func:`_derive_features`. See that function for why.
+    """
+    df, nested_stats = _resolve(
+        child, pd.Series(cutoff.values, index=keys.values) if cutoff is not None else None
+    )
 
     if cutoff is not None:
         if child.time_column is None:
@@ -124,26 +130,73 @@ def _aggregate(child: Table, keys: pd.Series, cutoff: Optional[pd.Series]) -> pd
 
     stem = child.name
     grouped = df.groupby(child.foreign_key)
-    out = pd.DataFrame(index=pd.Index(keys.values, name=child.foreign_key))
+    index = pd.Index(keys.values, name=child.foreign_key)
+    out = pd.DataFrame(index=index)
     out[f"{stem}__count"] = grouped.size()
 
     for col in use_cols:
+        combiner = _STAT_ROLLUP.get(col.rsplit("__", 1)[-1]) if col in nested_stats else None
+        if combiner is not None:
+            # Already a sufficient statistic from a deeper level. Roll it up with the
+            # combiner its own suffix names -- summing sums, min-ing mins -- rather
+            # than aggregating it as if it were raw data. This is what keeps depth-k
+            # linear instead of exponential, and what makes the result equal to the
+            # aggregate over the fully joined table.
+            out[f"{stem}__{col}"] = grouped[col].agg(combiner)
+            continue
+
         series = df[col]
         if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
-            aggs = _NESTED_AGGS if child.children else _NUMERIC_AGGS
-            agg = grouped[col].agg([a for a in aggs if a != "count"])
-            for a in agg.columns:
-                out[f"{stem}__{col}__{a}"] = agg[a]
+            out[f"{stem}__{col}__count"] = grouped[col].count()
+            out[f"{stem}__{col}__sum"] = grouped[col].sum()
+            out[f"{stem}__{col}__sumsq"] = df.assign(_sq=series**2).groupby(child.foreign_key)["_sq"].sum()
+            out[f"{stem}__{col}__min"] = grouped[col].min()
+            out[f"{stem}__{col}__max"] = grouped[col].max()
         else:
+            # nunique and mode are NOT semiring aggregates -- distinct-count cannot be
+            # rolled up exactly without a sketch (HyperLogLog et al.), and a mode of
+            # modes is not a mode. At depth 1 these are exact; deeper, they become
+            # "per-parent distinct count" summarised further, which is a different
+            # quantity. Documented rather than silently wrong.
             out[f"{stem}__{col}__nunique"] = grouped[col].nunique()
-            # mode() per group is quadratic on wide categoricals; first-most-common
-            # via value_counts is close enough and far cheaper.
             out[f"{stem}__{col}__mode"] = grouped[col].agg(
                 lambda s: s.value_counts().index[0] if len(s) else np.nan
             )
 
     out[f"{stem}__count"] = out[f"{stem}__count"].fillna(0)
     return out.reset_index(drop=True)
+
+
+def _derive_features(frame: pd.DataFrame) -> pd.DataFrame:
+    """Turn sufficient statistics into the features a model wants.
+
+    mean and std are not decomposable over a join, but they are *functions of*
+    statistics that are: mean = sum/count, var = sumsq/count - mean^2. Deriving them
+    once here gives the true aggregate over the joined table, whereas aggregating
+    means level by level gives a mean of means -- for a user with a 3-item order and a
+    1-item order, 51.0 instead of 26.5.
+
+    ``sumsq`` is dropped afterwards; it is a carrier, not a feature.
+    """
+    derived = {}
+    for col in frame.columns:
+        if not col.endswith("__sum"):
+            continue
+        base = col[: -len("__sum")]
+        count_col = f"{base}__count"
+        if count_col not in frame.columns:
+            continue
+        count = frame[count_col].replace(0, np.nan)
+        mean = frame[col] / count
+        derived[f"{base}__mean"] = mean
+        sumsq_col = f"{base}__sumsq"
+        if sumsq_col in frame.columns:
+            var = (frame[sumsq_col] / count) - mean**2
+            derived[f"{base}__std"] = np.sqrt(var.clip(lower=0))
+
+    if derived:
+        frame = pd.concat([frame, pd.DataFrame(derived, index=frame.index)], axis=1)
+    return frame.drop(columns=[c for c in frame.columns if c.endswith("__sumsq")])
 
 
 def flatten_relational(
@@ -202,4 +255,4 @@ def flatten_relational(
     for child in children:
         parts.append(_aggregate(child, keys, cutoff))
 
-    return pd.concat(parts, axis=1)
+    return _derive_features(pd.concat(parts, axis=1))

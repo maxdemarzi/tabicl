@@ -374,11 +374,13 @@ def test_two_hop_aggregation():
         ],
     )
     assert len(out) == 2
-    # user 0 has 2 orders; grandchild features are aggregated per order then per user.
     assert out["ord__count"].tolist() == [2, 1]
-    # order 10 has 2 items, order 11 has 1 -> mean item count for user 0 is 1.5
-    assert out["ord__item__count__mean"].iloc[0] == pytest.approx(1.5)
-    assert out["ord__item__price__sum__max"].iloc[0] == pytest.approx(7.0)
+    # Counts roll up by ADDITION, not by averaging: user 0 owns 2 + 1 = 3 items.
+    assert out["ord__item__count"].iloc[0] == pytest.approx(3.0)
+    # And the mean is the true mean over all three items (2, 3, 7), not a mean of
+    # per-order means -- which would be (2.5 + 7) / 2 = 4.75.
+    assert out["ord__item__price__mean"].iloc[0] == pytest.approx(4.0)
+    assert out["ord__item__price__max"].iloc[0] == pytest.approx(7.0)
 
 
 def test_two_hop_cutoff_propagates():
@@ -404,8 +406,75 @@ def test_two_hop_cutoff_propagates():
     )
     # user 0 keeps only order 10 (2026-01-05), so its 2 items and nothing from order 11.
     assert out["ord__count"].iloc[0] == 1
-    assert out["ord__item__count__sum"].iloc[0] == pytest.approx(2.0)
+    assert out["ord__item__count"].iloc[0] == pytest.approx(2.0)
+    assert out["ord__item__price__mean"].iloc[0] == pytest.approx(2.5)
     assert out["ord__total__max"].iloc[0] == pytest.approx(5.0)
+
+
+def test_factorized_two_hop_equals_materialized_join():
+    """The whole justification for sufficient statistics: it must equal the join.
+
+    Aggregating level by level is only valid if the result matches aggregating the
+    fully joined table. mean/std are not decomposable, so they are derived at the
+    root from count/sum/sumsq, which are.
+    """
+    rng = np.random.default_rng(0)
+    n_users, n_orders, n_items = 40, 200, 900
+    users = pd.DataFrame({"uid": np.arange(n_users), "age": rng.integers(20, 70, n_users)})
+    orders = pd.DataFrame({"oid": np.arange(n_orders), "uid": rng.integers(0, n_users, n_orders)})
+    items = pd.DataFrame(
+        {"oid": rng.integers(0, n_orders, n_items), "price": rng.gamma(2.0, 10.0, n_items)}
+    )
+
+    out = flatten_relational(
+        users,
+        "uid",
+        [Table(orders, "uid", "ord", primary_key="oid", children=[Table(items, "oid", "item")])],
+    )
+
+    joined = items.merge(orders, on="oid").merge(users, on="uid")
+    g = joined.groupby("uid")["price"]
+    truth = pd.DataFrame(
+        {
+            "count": g.count(),
+            "sum": g.sum(),
+            "mean": g.mean(),
+            "min": g.min(),
+            "max": g.max(),
+            "std": g.std(ddof=0),
+        }
+    ).reindex(users.uid)
+
+    for stat in truth.columns:
+        expected = truth[stat].to_numpy(dtype=float)
+        actual = out[f"ord__item__price__{stat}"].to_numpy(dtype=float)
+        both_nan = np.isnan(expected) & np.isnan(actual)
+        np.testing.assert_allclose(expected[~both_nan], actual[~both_nan], rtol=1e-9, atol=1e-9)
+
+
+def test_nested_stats_do_not_blow_up_columns():
+    """Depth-k must stay linear: statistics roll up 1:1, they do not cross-multiply."""
+    users = pd.DataFrame({"uid": [0, 1], "age": [1, 2]})
+    orders = pd.DataFrame({"oid": [0, 1], "uid": [0, 1]})
+    items = pd.DataFrame({"oid": [0, 1], "price": [1.0, 2.0]})
+
+    one_hop = flatten_relational(users, "uid", [Table(items, "oid", "item")])
+    two_hop = flatten_relational(
+        users,
+        "uid",
+        [Table(orders, "uid", "ord", primary_key="oid", children=[Table(items, "oid", "item")])],
+    )
+    # The extra hop adds a bounded number of columns, not a multiplicative factor.
+    assert len(two_hop.columns) < 2 * len(one_hop.columns)
+
+
+def test_sumsq_is_not_leaked_as_a_feature():
+    """sumsq carries variance up the tree; it is not something to train on."""
+    users = pd.DataFrame({"uid": [0, 1], "age": [1, 2]})
+    items = pd.DataFrame({"uid": [0, 0, 1], "price": [1.0, 3.0, 5.0]})
+    out = flatten_relational(users, "uid", [Table(items, "uid", "item")])
+    assert not [c for c in out.columns if c.endswith("__sumsq")]
+    assert out["item__price__std"].iloc[0] == pytest.approx(1.0)
 
 
 def test_children_without_primary_key_raises():

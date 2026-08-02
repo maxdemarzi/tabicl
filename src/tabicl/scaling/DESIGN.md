@@ -87,11 +87,42 @@ Multi-hop (`user -> order -> item`) is supported by giving a `Table` its own
 `primary_key` and `children`; the deeper level folds in first and the entity's cutoff
 propagates down, so a grandchild recorded after the prediction time is still excluded.
 
-Note the combinatorial cost: one grandchild numeric column becomes `len(aggs)` child
-features, each aggregated again by the parent -- 25 columns from one at depth 2.
-Nested levels therefore use a reduced aggregate set, and `Table(columns=...)` narrows
-it further. TabICL has a practical feature ceiling; depth 3 needs an explicit column
-list.
+**Multi-hop uses factorized aggregation, and has to.** The naive approach --
+aggregate items into orders, then aggregate those aggregates into users -- computes a
+mean of means, which is not the mean. For a user with a 3-item order (prices 1, 2, 3)
+and a 1-item order (price 100), it reports **51.0** where the true average item price
+is **26.5**. The error is unbounded and grows with how unevenly children are
+distributed.
+
+The fix is the standard one from factorized databases (Olteanu & Schleich; FAQ /
+semiring aggregation over a join tree): push only *decomposable* statistics up the
+tree and derive the rest at the root.
+
+| carried up each hop | combiner |
+|---|---|
+| `count`, `sum`, `sumsq` | `sum` |
+| `min` | `min` |
+| `max` | `max` |
+
+Each is associative, so a chain of joins collapses bottom-up without ever
+materialising the join. `mean` and `std` are *not* decomposable, but they are
+functions of statistics that are -- `mean = sum/count`,
+`var = sumsq/count - mean^2` -- so they are computed once at the root. `sumsq` is
+then dropped; it is a carrier, not a feature.
+
+Two consequences:
+
+* **Correctness.** A test checks every statistic against aggregating the fully
+  materialised join, and they agree to 1e-9.
+* **Cost.** Statistics roll up 1:1 rather than cross-multiplying, so depth-k is
+  linear. The earlier nested scheme turned one grandchild column into 25; this keeps
+  it at ~7, and depth 3 adds no more.
+
+**Not decomposable, and not faked:** `nunique` and `mode`. Exact distinct-count over
+a join needs a sketch (HyperLogLog and friends); a mode of modes is not a mode. At
+depth 1 both are exact. Deeper, `nunique` becomes "distinct values per parent,
+summarised again", which is a different quantity -- documented rather than silently
+wrong.
 
 ## 4. Test-time compute
 
