@@ -21,12 +21,21 @@ from typing import Optional, Sequence, Set, Tuple
 import numpy as np
 import pandas as pd
 
-__all__ = ["Table", "flatten_relational"]
+from ._semiring import MAX_PLUS, MIN_PLUS, SUM_PRODUCT, Semiring
 
-# Suffix -> the combiner that rolls that statistic up one level. This is the
-# semiring part: each is associative, so a chain of joins collapses bottom-up
-# without ever materialising the join.
-_STAT_ROLLUP = {"count": "sum", "sum": "sum", "sumsq": "sum", "min": "min", "max": "max"}
+__all__ = ["Table", "flatten_relational", "hop_product"]
+
+# Suffix -> the semiring whose `add` rolls that statistic up one level. Naming the
+# algebra rather than the pandas function keeps the invertibility fact attached: the
+# SUM_PRODUCT ones can be retracted when a row is deleted, the tropical ones cannot.
+_STAT_SEMIRING = {
+    "count": SUM_PRODUCT,
+    "sum": SUM_PRODUCT,
+    "sumsq": SUM_PRODUCT,
+    "min": MIN_PLUS,
+    "max": MAX_PLUS,
+}
+_STAT_ROLLUP = {suffix: ring.pandas_agg for suffix, ring in _STAT_SEMIRING.items()}
 
 
 @dataclass
@@ -197,6 +206,63 @@ def _derive_features(frame: pd.DataFrame) -> pd.DataFrame:
     if derived:
         frame = pd.concat([frame, pd.DataFrame(derived, index=frame.index)], axis=1)
     return frame.drop(columns=[c for c in frame.columns if c.endswith("__sumsq")])
+
+
+def hop_product(
+    frame: pd.DataFrame,
+    left: str,
+    right: str,
+    name: str,
+    semiring: Semiring = SUM_PRODUCT,
+) -> pd.Series:
+    """Combine two columns across a hop with the semiring's ``mul``.
+
+    The roll-up in :func:`flatten_relational` only ever applies ``add`` -- it sums
+    child sums, mins child mins. Combining *across* a hop is a different operation:
+    a per-order discount times that order's item total, a probability along a chain,
+    a cost accumulated hop by hop. That is ``mul``, and without it those features
+    cannot be expressed at all.
+
+    Parameters
+    ----------
+    frame : pd.DataFrame
+        Flattened output containing both columns.
+
+    left, right : str
+        Columns to combine.
+
+    name : str
+        Name for the resulting series.
+
+    semiring : Semiring, default=SUM_PRODUCT
+        Supplies ``mul``. ``SUM_PRODUCT`` multiplies; ``MIN_PLUS``/``MAX_PLUS`` add
+        (a cost accumulates along a path even though alternatives are min-ed).
+
+    Returns
+    -------
+    pd.Series
+        ``mul(frame[left], frame[right])``, with ``semiring.one`` for missing values
+        so an absent factor is neutral rather than poisoning the product.
+
+    Examples
+    --------
+    >>> feat["ord__value"] = hop_product(  # doctest: +SKIP
+    ...     feat, "ord__discount__mean", "ord__item__price__sum", "ord__value"
+    ... )
+    """
+    for column in (left, right):
+        if column not in frame.columns:
+            raise ValueError(f"column {column!r} not in frame")
+
+    lhs = frame[left].fillna(semiring.one)
+    rhs = frame[right].fillna(semiring.one)
+    if semiring is SUM_PRODUCT:
+        out = lhs * rhs
+    elif semiring in (MIN_PLUS, MAX_PLUS):
+        out = lhs + rhs
+    else:
+        out = pd.Series([semiring.mul(a, b) for a, b in zip(lhs, rhs)], index=frame.index)
+    return out.rename(name)
 
 
 def flatten_relational(

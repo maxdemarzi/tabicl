@@ -5,7 +5,16 @@ attention) that cannot be fully realised without pretraining.
 """
 
 from ._mqa import collapse_kv_heads, expand_kv_heads, kv_cache_bytes
-from ._relational import Table, flatten_relational
+from ._relational import Table, flatten_relational, hop_product
+from ._semiring import (
+    BOOLEAN,
+    BUILTIN_SEMIRINGS,
+    MAX_PLUS,
+    MIN_PLUS,
+    SUM_PRODUCT,
+    Semiring,
+    check_semiring_laws,
+)
 from ._rowchunk import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_COL_CHUNK_SIZE,
@@ -18,6 +27,7 @@ from ._wcoj import (
     motif_features,
     native_available,
     triangle_counts,
+    wcoj_aggregate,
     wcoj_count,
     wcoj_join,
 )
@@ -32,11 +42,20 @@ __all__ = [
     "expand_kv_heads",
     "Table",
     "flatten_relational",
+    "hop_product",
+    "Semiring",
+    "SUM_PRODUCT",
+    "MIN_PLUS",
+    "MAX_PLUS",
+    "BOOLEAN",
+    "BUILTIN_SEMIRINGS",
+    "check_semiring_laws",
     "think_predict_proba",
     "ThinkingResult",
     "Atom",
     "wcoj_join",
     "wcoj_count",
+    "wcoj_aggregate",
     "triangle_counts",
     "motif_features",
     "native_available",

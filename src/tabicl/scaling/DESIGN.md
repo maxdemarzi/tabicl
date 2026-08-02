@@ -210,6 +210,55 @@ code path.
 
 `triangle_counts` uses the counting path.
 
+### Semirings, and FAQ over them
+
+`_semiring.py` names the algebra both aggregation paths were special cases of. A
+semiring's `add` combines *alternatives*, `mul` combines *independent parts*;
+aggregation over a join is variable elimination in one of them, which is why counting
+a pattern, summing weights over it, and finding its cheapest witness are one algorithm
+with three operators rather than three algorithms.
+
+| semiring | add | mul | answers | invertible |
+|---|---|---|---|---|
+| `SUM_PRODUCT` | `+` | `x` | how much / how many | **yes** |
+| `MIN_PLUS` | `min` | `+` | cheapest witness | no |
+| `MAX_PLUS` | `max` | `+` | strongest witness | no |
+| `BOOLEAN` | `or` | `and` | does one exist | no |
+
+`invertible` is not decoration: it is exactly the line between statistics that survive
+incremental maintenance and ones that need a rebuild. Counts and sums can be
+un-added when a row is deleted; removing the current minimum tells you nothing about
+the next one. That is why `_relational.py` carries `count/sum/sumsq` and derives
+`mean`/`std`, rather than storing them.
+
+`check_semiring_laws` verifies the axioms on samples. Worth running on a custom
+semiring: one that fails distributivity still produces numbers during elimination,
+they are just silently the wrong numbers.
+
+**What this unlocked.** The tree roll-up only ever applied `add` -- it sums child
+sums, mins child mins. Combining *across a hop* had no expression at all: a per-order
+discount times that order's item total, a probability along a chain. `hop_product`
+supplies `mul`.
+
+`wcoj_aggregate` is the cyclic counterpart, and full FAQ: `mul` accumulates along a
+witness, `add` combines alternative witnesses, folded during elimination so no witness
+is materialised. Counting is the case where every payload is 1.
+
+```python
+# cheapest triangle each node sits in, over node weights
+total, overall, per_node = wcoj_aggregate(
+    atoms, ["a", "b", "c"], weights, semiring=MIN_PLUS, less_than=[("a", "b"), ("b", "c")]
+)
+```
+
+This is what tree aggregation genuinely cannot do: a cyclic pattern has no root to
+roll up from, so "the cheapest triangle containing v" has no parent-child formulation
+at all. Verified against brute-force enumeration for all three rings, on the overall
+aggregate and per node.
+
+The compiled kernel implements `SUM_PRODUCT`, `MIN_PLUS` and `MAX_PLUS`; a custom
+semiring raises rather than silently falling back to the wrong operator.
+
 Verified against brute-force enumeration on random graphs up to density 0.9, on
 4-cycles, and per-node counts against exhaustive triple enumeration.
 

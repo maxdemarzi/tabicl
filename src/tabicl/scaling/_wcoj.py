@@ -24,6 +24,8 @@ from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 
+from ._semiring import MAX_PLUS, MIN_PLUS, SUM_PRODUCT, Semiring
+
 try:  # optional compiled accelerator; see build_native.py
     from . import _wcoj_native  # type: ignore
 except ImportError:  # pragma: no cover - depends on whether it was built
@@ -33,6 +35,7 @@ __all__ = [
     "Atom",
     "wcoj_join",
     "wcoj_count",
+    "wcoj_aggregate",
     "triangle_counts",
     "motif_features",
     "native_available",
@@ -363,6 +366,78 @@ def wcoj_count(
     relations, var_ids, pairs = _marshal(atoms, order, less_than)
     total, counts = _wcoj_native.wcoj_count(relations, var_ids, len(order), pairs, int(threads))
     return int(total), counts
+
+
+_RING_CODES = {SUM_PRODUCT.name: 0, MIN_PLUS.name: 1, MAX_PLUS.name: 2}
+
+
+def wcoj_aggregate(
+    atoms: Sequence[Atom],
+    order: Sequence[str],
+    weights: np.ndarray,
+    semiring: Semiring = SUM_PRODUCT,
+    less_than: Sequence[Tuple[str, str]] = (),
+    threads: int = 0,
+) -> Tuple[int, float, np.ndarray]:
+    """Aggregate a payload over every witness of a pattern, without enumerating them.
+
+    Full FAQ: ``semiring.mul`` accumulates along a witness, ``semiring.add`` combines
+    alternative witnesses, and the fold happens during variable elimination. Counting
+    is the special case where every payload is 1.
+
+    This is what tree aggregation cannot express -- a cyclic pattern has no root to
+    roll up from, so "the cheapest triangle each node participates in" has no
+    formulation as a parent-child roll-up at all.
+
+    Parameters
+    ----------
+    atoms, order, less_than
+        As for :func:`wcoj_join`.
+
+    weights : np.ndarray
+        Payload per *value*, indexed by value. Length must cover the largest value
+        appearing in ``atoms``.
+
+    semiring : Semiring, default=SUM_PRODUCT
+        One of ``SUM_PRODUCT`` (sum over witnesses), ``MIN_PLUS`` (cheapest witness),
+        ``MAX_PLUS`` (strongest witness). Custom semirings are not supported by the
+        compiled kernel.
+
+    threads : int, default=0
+        Worker threads; 0 means one per core.
+
+    Returns
+    -------
+    total : int
+        Number of witnesses.
+
+    overall : float
+        The payload aggregated over all witnesses.
+
+    per_value : np.ndarray
+        ``per_value[v]`` aggregates over witnesses containing ``v``. Values in no
+        witness hold the semiring's ``zero``.
+    """
+    if _wcoj_native is None:
+        raise RuntimeError("wcoj_aggregate needs the compiled backend; see build_native.py")
+    code = _RING_CODES.get(semiring.name)
+    if code is None:
+        raise ValueError(
+            f"semiring {semiring.name!r} is not supported by the compiled kernel; "
+            f"expected one of {sorted(_RING_CODES)}"
+        )
+
+    order = list(order)
+    relations, var_ids, pairs = _marshal(atoms, order, less_than)
+    largest = max((int(r.max()) for r in relations if r.size), default=-1)
+    weights = np.ascontiguousarray(weights, dtype=np.float64)
+    if len(weights) <= largest:
+        raise ValueError(f"weights has length {len(weights)} but values reach {largest}")
+
+    total, overall, per_value = _wcoj_native.wcoj_aggregate(
+        relations, var_ids, len(order), pairs, code, weights.tolist(), int(threads)
+    )
+    return int(total), float(overall), per_value
 
 
 def _undirected_edges(edges: np.ndarray) -> np.ndarray:

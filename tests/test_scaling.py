@@ -698,3 +698,142 @@ def test_wcoj_count_needs_native():
         pytest.skip("backend is built, so the error path is unreachable")
     with pytest.raises(RuntimeError, match="compiled backend"):
         wcoj_count([Atom("e", ("a", "b"), np.array([[1, 2]]))], ["a", "b"])
+
+
+# --------------------------------------------------------------------------
+# 6. Semirings
+# --------------------------------------------------------------------------
+
+from tabicl.scaling import (
+    BUILTIN_SEMIRINGS,
+    MAX_PLUS,
+    MIN_PLUS,
+    SUM_PRODUCT,
+    Semiring,
+    check_semiring_laws,
+    hop_product,
+)
+
+
+@pytest.mark.parametrize("name", sorted(BUILTIN_SEMIRINGS))
+def test_builtin_semirings_satisfy_the_axioms(name):
+    ring = BUILTIN_SEMIRINGS[name]
+    samples = [False, True] if name == "boolean" else [0.0, 1.0, 2.5, -3.0]
+    check_semiring_laws(ring, samples)
+
+
+def test_check_semiring_laws_rejects_a_broken_one():
+    """A structure that fails distributivity still produces numbers -- silently wrong."""
+    broken = Semiring(name="broken", zero=0.0, one=1.0, add=lambda x, y: x + y, mul=lambda x, y: x + y)
+    with pytest.raises(ValueError, match="distribute|identity|annihilate"):
+        check_semiring_laws(broken, [1.0, 2.0, 3.0])
+
+
+def test_invertibility_matches_maintainability():
+    """Only invertible rings can retract a deleted row from a maintained aggregate."""
+    assert SUM_PRODUCT.invertible
+    assert not MIN_PLUS.invertible
+    assert not MAX_PLUS.invertible
+
+
+def test_semiring_fold_helpers():
+    assert SUM_PRODUCT.sum([1.0, 2.0, 3.0]) == 6.0
+    assert SUM_PRODUCT.product([2.0, 3.0]) == 6.0
+    assert SUM_PRODUCT.sum([]) == SUM_PRODUCT.zero
+    assert MIN_PLUS.sum([3.0, 1.0, 2.0]) == 1.0
+    assert MIN_PLUS.product([3.0, 1.0]) == 4.0  # mul is addition
+
+
+def test_hop_product_combines_across_a_hop():
+    """The operation the roll-up could not express: mul across a hop, not add."""
+    users = pd.DataFrame({"uid": [0, 1], "age": [30, 40]})
+    orders = pd.DataFrame({"oid": [10, 11, 12], "uid": [0, 0, 1], "discount": [0.5, 0.25, 1.0]})
+    items = pd.DataFrame({"oid": [10, 10, 11, 12], "price": [2.0, 3.0, 7.0, 100.0]})
+
+    feat = flatten_relational(
+        users,
+        "uid",
+        [Table(orders, "uid", "ord", primary_key="oid", children=[Table(items, "oid", "item")])],
+    )
+    value = hop_product(feat, "ord__discount__mean", "ord__item__price__sum", "v")
+    # user 0: mean discount (0.5 + 0.25)/2 = 0.375, item total 2 + 3 + 7 = 12
+    assert value.iloc[0] == pytest.approx(0.375 * 12.0)
+    # tropical mul is addition, so the same hop accumulates instead of scaling
+    tropical = hop_product(feat, "ord__discount__mean", "ord__item__price__sum", "v", semiring=MIN_PLUS)
+    assert tropical.iloc[0] == pytest.approx(0.375 + 12.0)
+
+
+def test_hop_product_rejects_missing_column():
+    frame = pd.DataFrame({"a": [1.0]})
+    with pytest.raises(ValueError, match="not in frame"):
+        hop_product(frame, "a", "nope", "x")
+
+
+# --------------------------------------------------------------------------
+# 7. FAQ aggregation over a semiring
+# --------------------------------------------------------------------------
+
+
+def _triangles_of(edges):
+    present = {(int(a), int(b)) for a, b in edges}
+    nodes = sorted({int(x) for x in edges.ravel()})
+    return [
+        (a, b, c)
+        for a, b, c in itertools.combinations(nodes, 3)
+        if (a, b) in present and (b, c) in present and (a, c) in present
+    ]
+
+
+@pytest.mark.parametrize("ring", [SUM_PRODUCT, MIN_PLUS, MAX_PLUS])
+def test_wcoj_aggregate_matches_brute_force(ring):
+    """mul accumulates along a witness, add combines witnesses -- verified directly."""
+    from tabicl.scaling import native_available, wcoj_aggregate
+
+    if not native_available():
+        pytest.skip("compiled backend not built")
+
+    edges = _random_graph(18, 0.45, 9)
+    atoms = [
+        Atom("e", ("a", "b"), edges),
+        Atom("e", ("b", "c"), edges),
+        Atom("e", ("a", "c"), edges),
+    ]
+    rng = np.random.default_rng(3)
+    weights = rng.uniform(1.0, 5.0, int(edges.max()) + 1)
+
+    total, overall, per_value = wcoj_aggregate(
+        atoms, ["a", "b", "c"], weights, semiring=ring, less_than=[("a", "b"), ("b", "c")]
+    )
+    triangles = _triangles_of(edges)
+    assert total == len(triangles)
+
+    def payload(t):
+        vals = [weights[v] for v in t]
+        return float(np.prod(vals)) if ring is SUM_PRODUCT else float(np.sum(vals))
+
+    reduce = {SUM_PRODUCT: sum, MIN_PLUS: min, MAX_PLUS: max}[ring]
+    assert overall == pytest.approx(reduce([payload(t) for t in triangles]))
+
+    for node in {v for t in triangles for v in t}:
+        expected = reduce([payload(t) for t in triangles if node in t])
+        assert per_value[node] == pytest.approx(expected)
+
+
+def test_wcoj_aggregate_rejects_unsupported_semiring():
+    from tabicl.scaling import BOOLEAN, native_available, wcoj_aggregate
+
+    if not native_available():
+        pytest.skip("compiled backend not built")
+    e = np.array([[1, 2], [2, 1]], dtype=np.int64)
+    with pytest.raises(ValueError, match="not supported by the compiled kernel"):
+        wcoj_aggregate([Atom("e", ("a", "b"), e)], ["a", "b"], np.ones(3), semiring=BOOLEAN)
+
+
+def test_wcoj_aggregate_rejects_short_weights():
+    from tabicl.scaling import native_available, wcoj_aggregate
+
+    if not native_available():
+        pytest.skip("compiled backend not built")
+    e = np.array([[1, 5], [5, 1]], dtype=np.int64)
+    with pytest.raises(ValueError, match="weights has length"):
+        wcoj_aggregate([Atom("e", ("a", "b"), e)], ["a", "b"], np.ones(2))

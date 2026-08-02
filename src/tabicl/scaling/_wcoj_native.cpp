@@ -59,6 +59,7 @@
 #include <atomic>
 #include <thread>
 #include <climits>
+#include <limits>
 #include <cstdint>
 #include <functional>
 #include <iterator>
@@ -156,6 +157,11 @@ struct JoinState {
 	// Aggregation mode (FAQ): accumulate during elimination instead of emitting
 	// tuples. `counts[v]` is how many results contain v in any position.
 	bool counting = false;
+	// 0 = sum/count, 1 = min-plus, 2 = max-plus. Selects how completions combine.
+	int ring = 0;
+	const std::vector<double> *weights = nullptr; // per final-variable value, or null
+	double agg_total = 0.0;
+	std::vector<double> agg;
 	i64 total = 0;
 	std::vector<i64> counts;
 
@@ -219,6 +225,46 @@ void JoinState::recurse(int level) {
 			}
 			for (i64 v : acc) {
 				counts[v] += 1;
+			}
+
+			if (ring != 0 || weights) {
+				// FAQ with a payload: `mul` accumulates along the witness, `add`
+				// combines alternative witnesses. Ring 0 sums, 1 takes the min, 2 the max.
+				// `mul` along the witness: the payload of a whole witness combines the
+				// payloads of every variable in it, not just the last. For SUM_PRODUCT
+				// that is a product; for the tropical rings `mul` is addition, so a cost
+				// accumulates along the witness while alternatives are min-ed.
+				double prefix_payload = (ring == 0) ? 1.0 : 0.0;
+				if (weights) {
+					for (int j = 0; j < level; ++j) {
+						const double wj = (*weights)[static_cast<std::size_t>(binding[j])];
+						prefix_payload = (ring == 0) ? prefix_payload * wj : prefix_payload + wj;
+					}
+				}
+				for (i64 v : acc) {
+					const double wv = weights ? (*weights)[static_cast<std::size_t>(v)] : 1.0;
+					const double w = !weights ? 1.0
+					                 : (ring == 0) ? prefix_payload * wv
+					                               : prefix_payload + wv;
+					if (ring == 0) {
+						agg_total += w;
+						agg[binding[0]] += w;
+						agg[v] += w;
+						for (int j = 1; j < level; ++j) {
+							agg[binding[j]] += w;
+						}
+					} else {
+						const bool take_min = (ring == 1);
+						auto combine = [&](double &slot) {
+							slot = take_min ? std::min(slot, w) : std::max(slot, w);
+						};
+						agg_total = take_min ? std::min(agg_total, w) : std::max(agg_total, w);
+						for (int j = 0; j < level; ++j) {
+							combine(agg[binding[j]]);
+						}
+						combine(agg[v]);
+					}
+				}
 			}
 			return;
 		}
@@ -396,8 +442,9 @@ void expand(const std::vector<Trie> &T, const std::vector<std::vector<std::pair<
 // only what happens at a completed prefix differs.
 static void run_join(const std::vector<py::array_t<i64>> &relations, const std::vector<std::vector<int>> &var_ids,
                      int n_vars, const std::vector<std::pair<int, int>> &less_than, std::size_t max_results,
-                     int threads, bool counting, std::vector<i64> &merged, i64 &grand_total,
-                     std::vector<i64> &merged_counts) {
+                     int threads, bool counting, int ring, const std::vector<double> *weights_ptr,
+                     std::vector<i64> &merged, i64 &grand_total, std::vector<i64> &merged_counts,
+                     double &grand_agg, std::vector<double> &merged_agg) {
 	const int n_rel = static_cast<int>(relations.size());
 	if (n_rel > kMaxRelations) {
 		throw std::runtime_error("too many relations");
@@ -477,8 +524,16 @@ static void run_join(const std::vector<py::array_t<i64>> &relations, const std::
 			st.node.assign(n_rel, 0);
 			st.binding.assign(n_vars, 0);
 			st.counting = counting;
+			st.ring = ring;
+			st.weights = weights_ptr;
 			if (counting) {
 				st.counts.assign(static_cast<std::size_t>(domain), 0);
+				if (ring != 0 || weights_ptr) {
+					const double init = ring == 1 ? std::numeric_limits<double>::infinity()
+					                              : (ring == 2 ? -std::numeric_limits<double>::infinity() : 0.0);
+					st.agg.assign(static_cast<std::size_t>(domain), init);
+					st.agg_total = init;
+				}
 			}
 			return st;
 		};
@@ -497,6 +552,8 @@ static void run_join(const std::vector<py::array_t<i64>> &relations, const std::
 			merged.swap(st.out);
 			grand_total = st.total;
 			merged_counts.swap(st.counts);
+			grand_agg = st.agg_total;
+			merged_agg.swap(st.agg);
 		} else {
 			// Seed the work list by binding variable 0.
 			WorkItem root;
@@ -576,10 +633,27 @@ static void run_join(const std::vector<py::array_t<i64>> &relations, const std::
 
 			if (counting) {
 				merged_counts.assign(static_cast<std::size_t>(domain), 0);
+				const bool has_agg = (ring != 0 || weights_ptr);
+				if (has_agg) {
+					const double init = ring == 1 ? std::numeric_limits<double>::infinity()
+					                              : (ring == 2 ? -std::numeric_limits<double>::infinity() : 0.0);
+					merged_agg.assign(static_cast<std::size_t>(domain), init);
+					grand_agg = init;
+				}
 				for (const auto &w : workers) {
 					grand_total += w.total;
 					for (std::size_t v = 0; v < merged_counts.size(); ++v) {
 						merged_counts[v] += w.counts[v];
+					}
+					if (has_agg) {
+						grand_agg = ring == 0   ? grand_agg + w.agg_total
+						            : ring == 1 ? std::min(grand_agg, w.agg_total)
+						                        : std::max(grand_agg, w.agg_total);
+						for (std::size_t v = 0; v < merged_agg.size(); ++v) {
+							merged_agg[v] = ring == 0   ? merged_agg[v] + w.agg[v]
+							                : ring == 1 ? std::min(merged_agg[v], w.agg[v])
+							                            : std::max(merged_agg[v], w.agg[v]);
+						}
 					}
 				}
 			} else {
@@ -603,7 +677,10 @@ static py::array_t<i64> wcoj_hash_join(const std::vector<py::array_t<i64>> &rela
                                        int threads) {
 	std::vector<i64> merged, counts;
 	i64 total = 0;
-	run_join(relations, var_ids, n_vars, less_than, max_results, threads, false, merged, total, counts);
+	double agg_total = 0.0;
+	std::vector<double> agg;
+	run_join(relations, var_ids, n_vars, less_than, max_results, threads, false, 0, nullptr, merged, total,
+	         counts, agg_total, agg);
 
 	const std::size_t n_out = merged.size() / static_cast<std::size_t>(n_vars);
 	py::array_t<i64> result({n_out, static_cast<std::size_t>(n_vars)});
@@ -619,8 +696,11 @@ static py::tuple wcoj_count(const std::vector<py::array_t<i64>> &relations,
                             const std::vector<std::vector<int>> &var_ids, int n_vars,
                             const std::vector<std::pair<int, int>> &less_than, int threads) {
 	std::vector<i64> merged, counts;
+	std::vector<double> agg;
 	i64 total = 0;
-	run_join(relations, var_ids, n_vars, less_than, 0, threads, true, merged, total, counts);
+	double agg_total = 0.0;
+	run_join(relations, var_ids, n_vars, less_than, 0, threads, true, 0, nullptr, merged, total, counts, agg_total,
+	         agg);
 
 	py::array_t<i64> out(static_cast<py::ssize_t>(counts.size()));
 	if (!counts.empty()) {
@@ -629,10 +709,35 @@ static py::tuple wcoj_count(const std::vector<py::array_t<i64>> &relations,
 	return py::make_tuple(total, out);
 }
 
+// FAQ with a payload. `ring` selects how alternative witnesses combine: 0 sums,
+// 1 takes the minimum, 2 the maximum. `weights` is indexed by value.
+static py::tuple wcoj_aggregate(const std::vector<py::array_t<i64>> &relations,
+                                const std::vector<std::vector<int>> &var_ids, int n_vars,
+                                const std::vector<std::pair<int, int>> &less_than, int ring,
+                                const std::vector<double> &weights, int threads) {
+	if (ring < 0 || ring > 2) {
+		throw std::runtime_error("ring must be 0 (sum), 1 (min) or 2 (max)");
+	}
+	std::vector<i64> merged, counts;
+	std::vector<double> agg;
+	i64 total = 0;
+	double agg_total = 0.0;
+	run_join(relations, var_ids, n_vars, less_than, 0, threads, true, ring, &weights, merged, total, counts,
+	         agg_total, agg);
+
+	py::array_t<double> out(static_cast<py::ssize_t>(agg.size()));
+	if (!agg.empty()) {
+		std::copy(agg.begin(), agg.end(), static_cast<double *>(out.request().ptr));
+	}
+	return py::make_tuple(total, agg_total, out);
+}
+
 PYBIND11_MODULE(_wcoj_native, m) {
 	m.doc() = "Worst-case optimal join (Umbra, VLDB 2020, Algorithm 3)";
 	m.def("wcoj_hash_join", &wcoj_hash_join, py::arg("relations"), py::arg("var_ids"), py::arg("n_vars"),
 	      py::arg("less_than"), py::arg("max_results") = 0, py::arg("threads") = 0);
 	m.def("wcoj_count", &wcoj_count, py::arg("relations"), py::arg("var_ids"), py::arg("n_vars"),
 	      py::arg("less_than"), py::arg("threads") = 0);
+	m.def("wcoj_aggregate", &wcoj_aggregate, py::arg("relations"), py::arg("var_ids"), py::arg("n_vars"),
+	      py::arg("less_than"), py::arg("ring"), py::arg("weights"), py::arg("threads") = 0);
 }
