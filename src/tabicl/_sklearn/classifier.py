@@ -271,6 +271,21 @@ class TabICLClassifier(ClassifierMixin, TabICLBaseEstimator):
         Created during ``fit()`` when ``kv_cache`` is enabled. When set,
         ``predict_proba()`` reuses the cached key-value projections instead of
         re-processing training data, enabling faster inference on multiple test sets.
+
+    n_targets_ : int
+        Number of targets. 1 for single-target, >1 for multi-target.
+
+    y_encoders_ : list[LabelEncoder]
+        Per-target label encoders. Only set when ``n_targets_ > 1``.
+
+    classes_list_ : list[ndarray]
+        Per-target class labels. Only set when ``n_targets_ > 1``.
+
+    n_classes_list_ : list[int]
+        Per-target number of classes. Only set when ``n_targets_ > 1``.
+
+    y_train_encoded_ : ndarray of shape (n_samples, n_targets)
+        Encoded training labels. Only set when ``n_targets_ > 1``.
     """
 
     def __init__(
@@ -434,8 +449,9 @@ class TabICLClassifier(ClassifierMixin, TabICLBaseEstimator):
         X : array-like of shape (n_samples, n_features)
             Training input data.
 
-        y : array-like of shape (n_samples,)
-            Training target labels.
+        y : array-like of shape (n_samples,) or (n_samples, n_targets)
+            Training target labels. For multi-target classification, pass a 2D
+            array where each column is a separate classification target.
 
         Returns
         -------
@@ -454,6 +470,38 @@ class TabICLClassifier(ClassifierMixin, TabICLBaseEstimator):
 
         X, y = validate_data(self, X, y, dtype=None, skip_check_array=True)
         check_classification_targets(y)
+        y = np.asarray(y)
+
+        # Warn and flatten 2D column-vector y
+        if y.ndim == 2 and y.shape[1] == 1:
+            from sklearn.exceptions import DataConversionWarning
+
+            warnings.warn(
+                "A column-vector y was passed when a 1d array was expected. Please change "
+                "the shape of y to (n_samples, ), for example using ravel().",
+                DataConversionWarning,
+                stacklevel=2,
+            )
+            y = y.ravel()
+
+        # Multi-target
+        if y.ndim == 2 and y.shape[1] > 1:
+            self.n_targets_ = y.shape[1]
+            self.y_encoders_ = [LabelEncoder() for _ in range(y.shape[1])]
+            self.y_train_encoded_ = np.column_stack(
+                [enc.fit_transform(y[:, t]) for t, enc in enumerate(self.y_encoders_)]
+            )
+            self.classes_list_ = [enc.classes_ for enc in self.y_encoders_]
+            self.n_classes_list_ = [len(c) for c in self.classes_list_]
+            y = self.y_train_encoded_[:, 0]  # representative for EnsembleGenerator
+            # Clean up single-target attributes from a previous fit
+            for attr in ("y_encoder_", "classes_", "n_classes_"):
+                self.__dict__.pop(attr, None)
+        else:
+            self.n_targets_ = 1
+            # Clean up multi-target attributes from a previous fit
+            for attr in ("y_encoders_", "classes_list_", "n_classes_list_", "y_train_encoded_"):
+                self.__dict__.pop(attr, None)
 
         # Device setup
         self._resolve_device()
@@ -467,30 +515,37 @@ class TabICLClassifier(ClassifierMixin, TabICLBaseEstimator):
         self.model_.to(self.device_)
 
         # Encode class labels
-        self.y_encoder_ = LabelEncoder()
-        y = self.y_encoder_.fit_transform(y)
-        self.classes_ = self.y_encoder_.classes_
-        self.n_classes_ = len(self.y_encoder_.classes_)
+        if self.n_targets_ == 1:
+            self.y_encoder_ = LabelEncoder()
+            y = self.y_encoder_.fit_transform(y)
+            self.classes_ = self.y_encoder_.classes_
+            self.n_classes_ = len(self.y_encoder_.classes_)
 
-        if self.n_classes_ > self.model_.max_classes:
-            if self.kv_cache:
+            if self.n_classes_ > self.model_.max_classes:
+                if self.kv_cache:
+                    raise ValueError(
+                        f"KV caching is not supported when the number of classes ({self.n_classes_}) exceeds the max number "
+                        f"of classes ({self.model_.max_classes}) natively supported by the model."
+                    )
+
+                if not self.support_many_classes:
+                    raise ValueError(
+                        f"The number of classes ({self.n_classes_}) exceeds the max number of classes ({self.model_.max_classes}) "
+                        f"natively supported by the model. Consider enabling many-class support which performs mixed-radix "
+                        f"ensembling during column-wise embedding and hierarchical classification during in-context learning."
+                    )
+
+                if self.verbose:
+                    print(
+                        f"The number of classes ({self.n_classes_}) exceeds the max number of classes ({self.model_.max_classes}) "
+                        f"natively supported by the model. Therefore, many-class strategy is enabled to perform mixed-radix "
+                        f"ensembling during column-wise embedding and hierarchical classification during in-context learning."
+                    )
+        else:
+            if max(self.n_classes_list_) > self.model_.max_classes:
                 raise ValueError(
-                    f"KV caching is not supported when the number of classes ({self.n_classes_}) exceeds the max number "
-                    f"of classes ({self.model_.max_classes}) natively supported by the model."
-                )
-
-            if not self.support_many_classes:
-                raise ValueError(
-                    f"The number of classes ({self.n_classes_}) exceeds the max number of classes ({self.model_.max_classes}) "
-                    f"natively supported by the model. Consider enabling many-class support which performs mixed-radix "
-                    f"ensembling during column-wise embedding and hierarchical classification during in-context learning."
-                )
-
-            if self.verbose:
-                print(
-                    f"The number of classes ({self.n_classes_}) exceeds the max number of classes ({self.model_.max_classes}) "
-                    f"natively supported by the model. Therefore, many-class strategy is enabled to perform mixed-radix "
-                    f"ensembling during column-wise embedding and hierarchical classification during in-context learning."
+                    f"Multi-target classification requires all targets to have at most "
+                    f"{self.model_.max_classes} classes, but found {max(self.n_classes_list_)}."
                 )
 
         #  Transform input features
@@ -498,19 +553,37 @@ class TabICLClassifier(ClassifierMixin, TabICLBaseEstimator):
         X = self.X_encoder_.fit_transform(X)
 
         # Fit ensemble generator to create multiple dataset views
-        self.ensemble_generator_ = EnsembleGenerator(
-            classification=True,
-            n_estimators=self.n_estimators,
-            norm_methods=self.norm_methods or ["none", "power"],
-            feat_shuffle_method=self.feat_shuffle_method,
-            class_shuffle_method=self.class_shuffle_method,
-            outlier_threshold=self.outlier_threshold,
-            random_state=self.random_state,
-        )
+        if self.n_targets_ == 1:
+            self.ensemble_generator_ = EnsembleGenerator(
+                classification=True,
+                n_estimators=self.n_estimators,
+                norm_methods=self.norm_methods or ["none", "power"],
+                feat_shuffle_method=self.feat_shuffle_method,
+                class_shuffle_method=self.class_shuffle_method,
+                outlier_threshold=self.outlier_threshold,
+                random_state=self.random_state,
+            )
+        else:
+            # classification=False: each target has a different class space,
+            # so class shuffling cannot be applied uniformly across targets.
+            self.ensemble_generator_ = EnsembleGenerator(
+                classification=False,
+                n_estimators=self.n_estimators,
+                norm_methods=self.norm_methods or ["none", "power"],
+                feat_shuffle_method=self.feat_shuffle_method,
+                outlier_threshold=self.outlier_threshold,
+                random_state=self.random_state,
+            )
         self.ensemble_generator_.fit(X, y)
 
         self.model_kv_cache_ = None
-        if self.kv_cache:
+        self.cache_mode_ = None
+        if self.kv_cache and self.n_targets_ > 1:
+            warnings.warn(
+                "KV caching is not supported for multi-target prediction and will be ignored.",
+                stacklevel=2,
+            )
+        if self.kv_cache and self.n_targets_ == 1:
             if self.kv_cache is True or self.kv_cache == "kv":
                 self.cache_mode_ = "kv"
             elif self.kv_cache == "repr":
@@ -679,8 +752,10 @@ class TabICLClassifier(ClassifierMixin, TabICLBaseEstimator):
 
         Returns
         -------
-        np.ndarray of shape (n_samples, n_classes)
-            Class probabilities for each test sample.
+        np.ndarray of shape (n_samples, n_classes) or list[np.ndarray]
+            Class probabilities for each test sample. For multi-target
+            classifiers, returns a list of arrays, one per target, where the
+            *i*-th array has shape ``(n_samples, n_classes_i)``.
         """
         check_is_fitted(self)
         if isinstance(X, np.ndarray) and len(X.shape) == 1:
@@ -743,6 +818,13 @@ class TabICLClassifier(ClassifierMixin, TabICLBaseEstimator):
 
         X = self.X_encoder_.transform(X)
 
+        # Multi-target prediction
+        if self.n_targets_ > 1:
+            result = self._predict_proba_multi_target(X, feature_mask)
+            if self.n_jobs is not None:
+                torch.set_num_threads(old_n_threads)
+            return result
+
         # Skip KV cache when features are masked
         has_kv_cache = hasattr(self, "model_kv_cache_") and self.model_kv_cache_ is not None
         use_cache = has_kv_cache and feature_mask is None
@@ -796,6 +878,28 @@ class TabICLClassifier(ClassifierMixin, TabICLBaseEstimator):
         # Normalize probabilities
         return avg / avg.sum(axis=1, keepdims=True)
 
+    def _predict_proba_multi_target(self, X, feature_mask):
+        """Predict class probabilities for each target separately."""
+        data = self.ensemble_generator_.transform(X, mode="both", feature_mask=feature_mask)
+        results = []
+        for t in range(self.n_targets_):
+            outputs = []
+            for norm_method, (Xs, _) in data.items():
+                if feature_mask is None:
+                    fs = self.ensemble_generator_.feature_shuffles_[norm_method]
+                else:
+                    fs = self.ensemble_generator_.masked_feature_shuffles_[norm_method]
+                ys = np.tile(self.y_train_encoded_[:, t], (Xs.shape[0], 1))
+                outputs.append(self._batch_forward(Xs, ys, np.array(fs)))
+
+            arr = np.concatenate(outputs, axis=0)
+            avg = np.mean(arr, axis=0)
+            if self.average_logits:
+                avg = self.softmax(avg, axis=-1, temperature=self.softmax_temperature)
+            avg = avg[:, :self.n_classes_list_[t]]
+            results.append(avg / avg.sum(axis=1, keepdims=True))
+        return results
+
     def predict(self, X: np.ndarray) -> np.ndarray:
         """Predict class labels for test samples.
 
@@ -812,9 +916,18 @@ class TabICLClassifier(ClassifierMixin, TabICLBaseEstimator):
 
         Returns
         -------
-        array-like of shape (n_samples,)
-            Predicted class labels for each test sample.
+        np.ndarray of shape (n_samples,) or (n_samples, n_targets)
+            Predicted class labels for each test sample. For multi-target
+            classifiers, returns a 2D array of shape ``(n_samples, n_targets)``.
         """
+        check_is_fitted(self)
+        if self.n_targets_ > 1:
+            probas = self.predict_proba(X)
+            return np.column_stack([
+                self.y_encoders_[t].inverse_transform(np.argmax(p, axis=1))
+                for t, p in enumerate(probas)
+            ])
+
         proba = self.predict_proba(X)
         y = np.argmax(proba, axis=1)
 
