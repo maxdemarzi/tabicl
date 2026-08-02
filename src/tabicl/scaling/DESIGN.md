@@ -170,6 +170,32 @@ visible to that prediction, making this an upper bound on a strictly causal vers
 And on this task TabICL and GBDT end up level (0.7332 vs 0.7304) -- the features carry
 the win, not the model.
 
+**Which column actually earns it.** Ablating (n_estimators=1, so absolute numbers
+sit slightly below the table above; the comparison is internally consistent):
+
+| features | AUC | delta |
+|---|---:|---:|
+| relational only | 0.6032 | — |
+| + degree | 0.7183 | **+0.115** |
+| + degree, triangles | 0.7345 | +0.016 |
+| + all three | 0.7321 | -0.002 |
+| + triangles only | 0.6742 | +0.071 |
+| + clustering only | 0.6832 | +0.080 |
+
+**`degree` -- a one-line `np.bincount` -- captures ~85% of the lift.** Triangles add
++0.016 on top of it, and clustering adds nothing once both are present, which is
+expected since it is a deterministic function of them.
+
+So on this task the compiled WCOJ, the semiring layer and the FAQ elimination are
+collectively worth about +0.016 AUC. That is a real gain and it is not nothing, but it
+is an order of magnitude less than the free feature, and the honest reading is that
+the join machinery is not what pays off here. Triangles are worth more in isolation
+(+0.071) than alongside degree, i.e. much of what they carry is degree in disguise.
+
+Where the machinery would justify itself is a task whose signal is genuinely local
+density -- fraud rings, collusion, mutual-connection patterns -- rather than
+popularity. That has not been demonstrated, and should not be assumed from this.
+
 **A bug this found.** `user_friends` is 30.4M rows of which all but 213,703 have null
 keys. `pd.factorize` maps nulls to -1, and the counting kernels accumulate into arrays
 indexed *by value*, so a negative value was an out-of-bounds write rather than a wrong
