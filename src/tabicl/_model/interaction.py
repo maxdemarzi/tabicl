@@ -231,7 +231,7 @@ class RowInteraction(nn.Module):
         # Configure inference parameters
         if mgr_config is None:
             mgr_config = InferenceConfig().ROW_CONFIG
-        self.inference_mgr.configure(**mgr_config)
+        self.inference_mgr.configure(**mgr_config.manager_items())
 
         B, T = embeddings.shape[:2]
         cls_tokens = self.cls_tokens.expand(B, T, self.num_cls, self.embed_dim)

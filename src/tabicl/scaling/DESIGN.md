@@ -181,6 +181,41 @@ TabPFN-3-Plus's claimed +200 Elo — unsurprising, since their mechanism is
 undisclosed and this is a generic wrapper rather than a port. Treat this as a
 baseline for test-time scaling on TabICL, not a reproduction.
 
+## Enabling row chunking
+
+Row chunking is a first-class `InferenceConfig` option, alongside `offload`:
+
+```python
+TabICLClassifier(
+    inference_config={"COL_CONFIG": {"row_chunk": True, "row_chunk_size": 8192, "col_chunk_size": 32}}
+)
+```
+
+Defaults to off, so existing behaviour is unchanged. It composes with `offload`
+and with `kv_cache`: offloading moves *outputs* off the GPU, chunking shrinks the
+*activations*, and the two are independent.
+
+`tabicl.scaling.row_chunked(model)` remains as a context manager for ad-hoc use on
+an already-fitted estimator.
+
+One wiring note: `InferenceManager.configure` takes an explicit signature with no
+`**kwargs`, so the three chunking keys are filtered out by `MgrConfig.manager_items()`
+before the call. New caller-side options should follow the same route.
+
+## Known measurement limits
+
+* The 3060 numbers never observed a true OOM. On Windows, WDDM silently spills to
+  host memory, so the 32k-row unchunked run reporting 14078 MiB on a 12288 MiB card
+  was paging, not failing — its 15.9 s reflects spill, not compute. On Linux the same
+  shape OOMs outright.
+* Largest shape tested is 32k rows x 100 features. TabPFN-3's claim concerns 1M
+  rows; whether the ~6x holds and whether chunk overhead amortises at 10^5-10^6 rows
+  is untested here.
+* **Not yet compared against TabICLv2's own `offload` path.** That is the real
+  competitive baseline -- the paper's criticism of TabICLv2 is that offloading costs
+  ~250 GB host RAM or ~4x slowdown, and chunking is only clearly better if it beats
+  offload, not merely the naive path.
+
 ## Status
 
 | # | Feature | Status |

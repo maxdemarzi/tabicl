@@ -96,6 +96,83 @@ def test_row_chunked_disabled_is_noop(backbone):
 
 
 # --------------------------------------------------------------------------
+# 1b. Row chunking as a first-class InferenceConfig option
+# --------------------------------------------------------------------------
+
+_CHUNK_CFG = {"COL_CONFIG": {"row_chunk": True, "row_chunk_size": 64, "col_chunk_size": 2}}
+
+
+def _xy(n=260, d=8, seed=0):
+    rng = np.random.RandomState(seed)
+    X = rng.rand(n, d).astype(np.float32)
+    w = rng.randn(d)
+    return X, (X @ w > np.median(X @ w)).astype(int), (X @ w).astype(np.float32)
+
+
+def test_config_row_chunk_matches_default_classifier():
+    X, y, _ = _xy()
+    base = TabICLClassifier(n_estimators=1, device="cpu", random_state=0)
+    base.fit(X[:200], y[:200])
+    chunked = TabICLClassifier(n_estimators=1, device="cpu", random_state=0, inference_config=_CHUNK_CFG)
+    chunked.fit(X[:200], y[:200])
+    np.testing.assert_allclose(chunked.predict_proba(X[200:]), base.predict_proba(X[200:]), atol=1e-4)
+
+
+def test_config_row_chunk_matches_default_regressor():
+    from tabicl import TabICLRegressor
+
+    X, _, y = _xy()
+    base = TabICLRegressor(n_estimators=1, device="cpu", random_state=0)
+    base.fit(X[:200], y[:200])
+    chunked = TabICLRegressor(n_estimators=1, device="cpu", random_state=0, inference_config=_CHUNK_CFG)
+    chunked.fit(X[:200], y[:200])
+    np.testing.assert_allclose(chunked.predict(X[200:]), base.predict(X[200:]), atol=1e-3, rtol=1e-3)
+
+
+def test_config_row_chunk_works_with_kv_cache():
+    """The cached path uses a second configure() site; it must be wired too."""
+    X, y, _ = _xy()
+    clf = TabICLClassifier(
+        n_estimators=1, device="cpu", random_state=0, kv_cache=True, inference_config=_CHUNK_CFG
+    )
+    clf.fit(X[:200], y[:200])
+    proba = clf.predict_proba(X[200:])
+    assert proba.shape == (60, 2)
+    np.testing.assert_allclose(proba.sum(axis=1), 1.0, rtol=1e-5)
+
+
+def test_row_chunk_defaults_off():
+    from tabicl._model.inference_config import InferenceConfig
+
+    assert InferenceConfig().COL_CONFIG.chunk_options() == {
+        "row_chunk": False,
+        "row_chunk_size": 8192,
+        "col_chunk_size": 32,
+    }
+
+
+@pytest.mark.parametrize(
+    "bad, exc",
+    [({"row_chunk": "yes"}, TypeError), ({"row_chunk_size": 0}, ValueError), ({"col_chunk_size": -1}, ValueError)],
+)
+def test_row_chunk_config_validation(bad, exc):
+    from tabicl._model.inference_config import InferenceConfig
+
+    with pytest.raises(exc):
+        InferenceConfig().update_from_dict({"COL_CONFIG": bad})
+
+
+def test_manager_items_excludes_chunk_keys():
+    """InferenceManager.configure has no **kwargs, so these must be filtered out."""
+    from tabicl._model.inference_config import InferenceConfig
+
+    cfg = InferenceConfig().COL_CONFIG
+    items = cfg.manager_items()
+    assert not {"row_chunk", "row_chunk_size", "col_chunk_size"} & set(items)
+    assert "offload" in items
+
+
+# --------------------------------------------------------------------------
 # 2. Multi-query KV cache
 # --------------------------------------------------------------------------
 

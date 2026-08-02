@@ -39,6 +39,20 @@ class MgrConfig:
       When ``offload="auto"``, outputs exceeding this fraction of available GPU memory
       are offloaded to CPU or disk. Default is 0.5 (50%).
 
+    **Row chunking (column embedding only):**
+
+    Offloading moves *outputs* off the GPU; row chunking instead shrinks the
+    *activations* the column embedder materialises, keeping everything resident. The
+    two are independent and can be combined.
+
+    - ``row_chunk``: Whether to stream the column-embedding stage in row/column
+      slabs instead of materialising the full ``(N, C, d)`` activation. Exactly
+      equivalent to the unchunked result. Default ``False``.
+    - ``row_chunk_size``: Rows per chunk. Default 8192.
+    - ``col_chunk_size``: Columns per slab. Chunking rows alone caps the saving at
+      roughly 2x, because the inducing-state phase still runs over every context
+      row; slabbing columns bounds that too. Default 32.
+
     **CPU offloading:**
 
     - ``cpu_safety_factor``: Safety margin (0-1) for CPU memory estimation.
@@ -74,6 +88,10 @@ class MgrConfig:
         # Offloading
         "offload",
         "auto_offload_threshold",
+        # Row chunking
+        "row_chunk",
+        "row_chunk_size",
+        "col_chunk_size",
         # CPU offloading
         "cpu_safety_factor",
         "max_pinned_memory_mb",
@@ -120,6 +138,18 @@ class MgrConfig:
             "expected_type": float,
             "validator": lambda x: 0.0 <= x <= 1.0,
             "error_msg": "auto_offload_threshold must be a float between 0 and 1",
+        },
+        # Row chunking
+        "row_chunk": {"expected_type": bool, "validator": None, "error_msg": "row_chunk must be a boolean"},
+        "row_chunk_size": {
+            "expected_type": int,
+            "validator": lambda x: x >= 1,
+            "error_msg": "row_chunk_size must be an integer >= 1",
+        },
+        "col_chunk_size": {
+            "expected_type": int,
+            "validator": lambda x: x >= 1,
+            "error_msg": "col_chunk_size must be an integer >= 1",
         },
         # CPU offloading
         "cpu_safety_factor": {
@@ -173,9 +203,30 @@ class MgrConfig:
         for key, value in kwargs.items():
             self._validate_and_set(key, value)
 
+    # Consumed by ColEmbedding rather than InferenceManager. `configure` takes an
+    # explicit signature with no **kwargs, so these must be filtered out before it
+    # is called -- see `manager_items`.
+    _NON_MANAGER_KEYS = {"row_chunk", "row_chunk_size", "col_chunk_size"}
+
     def keys(self):
         """Return set of keys that have values set."""
         return {k for k in self._ALLOWED_KEYS if hasattr(self, k)}
+
+    def manager_items(self):
+        """Items accepted by ``InferenceManager.configure``.
+
+        Excludes keys that configure the caller rather than the manager, so
+        ``configure(**cfg.manager_items())`` stays valid as new options are added.
+        """
+        return {k: getattr(self, k) for k in self.keys() if k not in self._NON_MANAGER_KEYS}
+
+    def chunk_options(self):
+        """Row-chunking settings as a plain dict, with defaults filled in."""
+        return {
+            "row_chunk": bool(getattr(self, "row_chunk", False)),
+            "row_chunk_size": int(getattr(self, "row_chunk_size", 8192)),
+            "col_chunk_size": int(getattr(self, "col_chunk_size", 32)),
+        }
 
     def items(self):
         """Return items as dict.items()."""
@@ -264,6 +315,10 @@ class InferenceConfig:
                 # Offloading
                 offload="auto",
                 auto_offload_threshold=0.5,
+                # Row chunking
+                row_chunk=False,
+                row_chunk_size=8192,
+                col_chunk_size=32,
                 # CPU offloading
                 cpu_safety_factor=0.85,
                 max_pinned_memory_mb=32768.0,  # 32 GB

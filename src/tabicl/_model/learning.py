@@ -452,7 +452,7 @@ class ICLearning(nn.Module):
         # Configure inference parameters
         if mgr_config is None:
             mgr_config = InferenceConfig().ICL_CONFIG
-        self.inference_mgr.configure(**mgr_config)
+        self.inference_mgr.configure(**mgr_config.manager_items())
 
         if self.max_classes == 0:  # Regression
             out = self._predict_standard(R, y_train)
@@ -651,7 +651,7 @@ class ICLearning(nn.Module):
 
         if mgr_config is None:
             mgr_config = InferenceConfig().ICL_CONFIG
-        self.inference_mgr.configure(**mgr_config)
+        self.inference_mgr.configure(**mgr_config.manager_items())
 
         out = self.inference_mgr(
             self._icl_predictions_repr_cache,
@@ -804,7 +804,7 @@ class ICLearning(nn.Module):
 
         if mgr_config is None:
             mgr_config = InferenceConfig().ICL_CONFIG
-        self.inference_mgr.configure(**mgr_config)
+        self.inference_mgr.configure(**mgr_config.manager_items())
 
         out = self.inference_mgr(
             self._icl_predictions_with_cache,

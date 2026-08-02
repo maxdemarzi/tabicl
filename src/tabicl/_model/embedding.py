@@ -337,6 +337,29 @@ class ColEmbedding(nn.Module):
 
         return (y.long() // divisor) % bases[digit_idx]
 
+    def _run_tf_col(self, src: Tensor, train_size: Optional[int]) -> Tensor:
+        """Run the column set transformer, optionally row/column chunked.
+
+        Chunking is exactly equivalent to the direct call; it only bounds the peak
+        activation. Enabled via ``COL_CONFIG["row_chunk"]``. Training always takes
+        the direct path, since ``_chunk_opts`` is only set during inference.
+        """
+        opts = getattr(self, "_chunk_opts", None)
+        if not opts or not opts["row_chunk"]:
+            return self.tf_col(src, train_size=train_size)
+
+        # Imported lazily: tabicl.scaling imports from tabicl._model, so a
+        # module-level import here would be circular.
+        from ..scaling._rowchunk import chunked_set_transformer
+
+        return chunked_set_transformer(
+            self.tf_col,
+            src,
+            train_size,
+            chunk_size=opts["row_chunk_size"],
+            col_chunk_size=opts["col_chunk_size"],
+        )
+
     def _compute_embeddings(
         self, features: Tensor, train_size: int, y_train: Optional[Tensor] = None, embed_with_test: bool = False
     ) -> Tensor:
@@ -372,7 +395,7 @@ class ColEmbedding(nn.Module):
         src = self.in_linear(features)  # (..., T, in_dim) -> (..., T, E)
 
         if not self.target_aware:
-            src = self.tf_col(src, train_size=None if embed_with_test else train_size)
+            src = self._run_tf_col(src, None if embed_with_test else train_size)
         else:
             assert y_train is not None, "y_train must be provided when target_aware=True."
 
@@ -387,7 +410,7 @@ class ColEmbedding(nn.Module):
                 else:
                     y_emb = self.y_encoder(y_train.unsqueeze(-1))
                 src[..., :train_size, :] = src[..., :train_size, :] + y_emb
-                src = self.tf_col(src, train_size=None if embed_with_test else train_size)
+                src = self._run_tf_col(src, None if embed_with_test else train_size)
             else:
                 # Mixed-radix ensembling for many-class classification
                 if not self.mixed_radix_ensemble:
@@ -407,7 +430,9 @@ class ColEmbedding(nn.Module):
                     y_digit = self._extract_mixed_radix_digit(y_train, digit_idx, bases)
                     y_emb = self.y_encoder(y_digit.float())
                     src_with_y[..., :train_size, :] = src[..., :train_size, :] + y_emb
-                    src_accum = src_accum + self.tf_col(src_with_y, train_size=None if embed_with_test else train_size)
+                    src_accum = src_accum + self._run_tf_col(
+                        src_with_y, None if embed_with_test else train_size
+                    )
 
                 src = src_accum / num_digits
 
@@ -565,7 +590,8 @@ class ColEmbedding(nn.Module):
         # Configure inference parameters
         if mgr_config is None:
             mgr_config = InferenceConfig().COL_CONFIG
-        self.inference_mgr.configure(**mgr_config)
+        self._chunk_opts = mgr_config.chunk_options()
+        self.inference_mgr.configure(**mgr_config.manager_items())
 
         train_size = y_train.shape[1]
         if self.feature_group:
@@ -857,7 +883,8 @@ class ColEmbedding(nn.Module):
 
         if mgr_config is None:
             mgr_config = InferenceConfig().COL_CONFIG
-        self.inference_mgr.configure(**mgr_config)
+        self._chunk_opts = mgr_config.chunk_options()
+        self.inference_mgr.configure(**mgr_config.manager_items())
 
         if self.feature_group:
             X = self.feature_grouping(X)  # (B, T, G, group_size)
