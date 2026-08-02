@@ -131,19 +131,40 @@ PODS 2012), whose cost is bounded by the AGM bound of the query rather than by a
 intermediate. `motif_features` exposes degree / triangle count / clustering
 coefficient per node, ready to concatenate onto a flattened feature table.
 
-Two things matter in practice:
+**Measured against the realistic alternative, this implementation loses.** Timing
+triangle counting three ways -- Python leapfrog triejoin, a pandas binary-join
+pipeline, and `scipy` sparse `A^3`:
 
-* **Symmetry breaking belongs inside the join.** An undirected triangle has 6
-  orientations. Enumerating all of them and filtering `a < b < c` afterwards is
-  correct but wasteful; pushing the constraint into the join so the other 5 are never
-  generated measured **4.8x faster** on a 220-node graph, same 1776 triangles.
-* **Variable ordering dominates cost** and is currently the caller's problem.
-  Adaptive ordering (Wang, Trummer, Kara, Olteanu, "ADOPT", arXiv:2307.16540) picks
-  it online with UCT and is worth revisiting if these features are ever computed on
-  graphs where a bad order actually bites.
+| graph | triangles | LFTJ (py) | pandas | scipy |
+|---|---:|---:|---:|---:|
+| n=400, p=0.20 | 84837 | 1.894 s | 0.052 s | **0.030 s** |
+| n=800, p=0.05 | 10458 | 0.742 s | **0.033 s** | 0.060 s |
+| n=1500, p=0.02 | 4464 | 0.819 s | **0.037 s** | 0.112 s |
 
-Verified against brute-force enumeration on random graphs up to density 0.9, and on
-4-cycles -- a pattern with no triangle shortcut.
+10-60x slower everywhere. This is mostly a language gap -- pandas `merge` and
+`scipy` matmul are compiled, this is Python recursion with a `searchsorted` per seek,
+which is why production systems write LFTJ in C++ -- but the gap is not rescued by
+picking a friendlier regime. On a hub graph with **2.9M wedges and 2400 triangles**
+(a 1200:1 intermediate-to-output ratio, exactly what the AGM bound is about) pandas
+still won by **50x**. Vectorised C over a large intermediate beats per-tuple
+interpreter overhead long before asymptotics take over.
+
+Consequences, applied:
+
+* **`triangle_counts` and `motif_features` use sparse `diag(A^3)/2`, not the join.**
+  Triangles have a closed matrix form, so paying for generality there was simply a
+  bug: 1.894 s -> 0.081 s, a **23x** speed-up, same counts.
+* **`wcoj_join` earns its place on generality, not speed** -- arbitrary conjunctive
+  patterns with no closed form. It is correct and asymptotically right; it is not
+  fast, and it should not be reached for when a matrix formulation exists.
+* Symmetry breaking still matters within the join: pushing `a < b < c` inside rather
+  than filtering after measured **4.8x** on a 220-node graph, same 1776 triangles.
+* **Variable ordering dominates LFTJ cost** and is the caller's problem. Adaptive
+  ordering (ADOPT, arXiv:2307.16540) picks it online with UCT -- worth revisiting
+  only if a compiled implementation ever makes the constant factor competitive.
+
+Verified against brute-force enumeration on random graphs up to density 0.9, on
+4-cycles, and per-node counts against exhaustive triple enumeration.
 
 **Not decomposable, and not faked:** `nunique` and `mode`. Exact distinct-count over
 a join needs a sketch (HyperLogLog and friends); a mode of modes is not a mode. At

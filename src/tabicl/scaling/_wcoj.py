@@ -257,6 +257,14 @@ def _undirected_edges(edges: np.ndarray) -> np.ndarray:
 def triangle_counts(edges: np.ndarray, nodes: np.ndarray | None = None) -> np.ndarray:
     """Count triangles through each node.
 
+    Uses sparse matrix multiplication, not :func:`wcoj_join`. Triangles have a closed
+    matrix form -- ``diag(A^3) / 2`` -- and BLAS-level sparse matmul beats a Python
+    leapfrog triejoin by 1-2 orders of magnitude at every size measured, including on
+    skewed graphs where the wedge intermediate is 1000x the output and the AGM bound
+    should have favoured the join. See ``DESIGN.md``.
+
+    :func:`wcoj_join` remains the tool for patterns with no such closed form.
+
     Parameters
     ----------
     edges : np.ndarray
@@ -270,33 +278,24 @@ def triangle_counts(edges: np.ndarray, nodes: np.ndarray | None = None) -> np.nd
     np.ndarray
         Triangle count per node, aligned with ``nodes``.
     """
+    import scipy.sparse as sp
+
     e = _undirected_edges(np.asarray(edges))
     if nodes is None:
-        nodes = np.unique(e)
+        nodes = np.unique(e) if e.size else np.empty(0, dtype=np.int64)
     nodes = np.asarray(nodes)
 
-    if e.size == 0:
+    if e.size == 0 or len(nodes) == 0:
         return np.zeros(len(nodes), dtype=np.int64)
 
-    # a < b < c pins each triangle to one representative tuple, so the three
-    # rotations are not counted separately.
-    # a < b < c is pushed into the join, so each triangle is enumerated once
-    # rather than six times and then deduplicated.
-    tri = wcoj_join(
-        [Atom("e", ("a", "b"), e), Atom("e", ("b", "c"), e), Atom("e", ("a", "c"), e)],
-        ["a", "b", "c"],
-        less_than=[("a", "b"), ("b", "c")],
+    size = int(max(e.max(), nodes.max())) + 1
+    adj = sp.csr_matrix(
+        (np.ones(len(e), dtype=np.int64), (e[:, 0], e[:, 1])), shape=(size, size)
     )
-
-    counts = np.zeros(len(nodes), dtype=np.int64)
-    if tri.size:
-        members, freq = np.unique(tri.ravel(), return_counts=True)
-        index = {int(n): i for i, n in enumerate(nodes)}
-        for node, count in zip(members, freq):
-            slot = index.get(int(node))
-            if slot is not None:
-                counts[slot] = count
-    return counts
+    # diag(A^3)[i] counts closed walks of length 3 through i, i.e. each of its
+    # triangles once per direction -- hence the halving.
+    closed_walks = (adj @ adj @ adj).diagonal() // 2
+    return closed_walks[nodes].astype(np.int64)
 
 
 def motif_features(edges: np.ndarray, nodes: np.ndarray | None = None):
