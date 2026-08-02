@@ -29,7 +29,14 @@ try:  # optional compiled accelerator; see build_native.py
 except ImportError:  # pragma: no cover - depends on whether it was built
     _wcoj_native = None
 
-__all__ = ["Atom", "wcoj_join", "triangle_counts", "motif_features", "native_available"]
+__all__ = [
+    "Atom",
+    "wcoj_join",
+    "wcoj_count",
+    "triangle_counts",
+    "motif_features",
+    "native_available",
+]
 
 
 def native_available() -> bool:
@@ -284,7 +291,15 @@ def _native_join(
     less_than: Sequence[Tuple[str, str]],
     threads: int = 0,
 ) -> np.ndarray:
-    """Marshal to the compiled backend: permute columns into global variable order."""
+    """Marshal to the compiled backend and enumerate."""
+    relations, var_ids, pairs = _marshal(atoms, order, less_than)
+    return _wcoj_native.wcoj_hash_join(
+        relations, var_ids, len(order), pairs, 0 if max_results is None else int(max_results), int(threads)
+    )
+
+
+def _marshal(atoms: Sequence[Atom], order: List[str], less_than: Sequence[Tuple[str, str]]):
+    """Permute columns into global variable order and translate names to indices."""
     position = {v: i for i, v in enumerate(order)}
     relations, var_ids = [], []
     for atom in atoms:
@@ -305,10 +320,49 @@ def _native_join(
                 f"less_than {(lesser, greater)} requires {lesser!r} to precede {greater!r} in order"
             )
         pairs.append((position[lesser], position[greater]))
+    return relations, var_ids, pairs
 
-    return _wcoj_native.wcoj_hash_join(
-        relations, var_ids, len(order), pairs, 0 if max_results is None else int(max_results), int(threads)
-    )
+
+def wcoj_count(
+    atoms: Sequence[Atom],
+    order: Sequence[str],
+    less_than: Sequence[Tuple[str, str]] = (),
+    threads: int = 0,
+) -> Tuple[int, np.ndarray]:
+    """Count results of a conjunctive query without materialising any of them.
+
+    This is the FAQ view of the query (Abo Khamis, Ngo, Rudra, PODS 2016): aggregation
+    is variable elimination over a semiring, so the count is accumulated *during* the
+    join rather than by enumerating tuples and counting afterwards. Once a prefix is
+    fixed, the number of completions is the size of an intersection -- known without
+    visiting its elements -- so every already-bound variable is credited in O(1).
+
+    Requires the compiled backend; there is no Python fallback, because a Python
+    implementation would be slower than enumerating.
+
+    Parameters
+    ----------
+    atoms, order, less_than
+        As for :func:`wcoj_join`.
+
+    threads : int, default=0
+        Worker threads; 0 means one per core.
+
+    Returns
+    -------
+    total : int
+        Number of result tuples.
+
+    occurrences : np.ndarray
+        ``occurrences[v]`` is how many result tuples contain ``v`` in any position,
+        indexed by value. Length is one past the largest value in ``atoms``.
+    """
+    if _wcoj_native is None:
+        raise RuntimeError("wcoj_count needs the compiled backend; see build_native.py")
+    order = list(order)
+    relations, var_ids, pairs = _marshal(atoms, order, less_than)
+    total, counts = _wcoj_native.wcoj_count(relations, var_ids, len(order), pairs, int(threads))
+    return int(total), counts
 
 
 def _undirected_edges(edges: np.ndarray) -> np.ndarray:
@@ -349,21 +403,16 @@ def triangle_counts(edges: np.ndarray, nodes: np.ndarray | None = None) -> np.nd
         return np.zeros(len(nodes), dtype=np.int64)
 
     if _wcoj_native is not None:
-        # a < b < c is pushed into the join, so each triangle is enumerated once.
-        tri = wcoj_join(
+        # a < b < c is pushed into the join, so each triangle is counted once; the
+        # count is accumulated during elimination, so no triangle is ever built.
+        _total, occurrences = wcoj_count(
             [Atom("e", ("a", "b"), e), Atom("e", ("b", "c"), e), Atom("e", ("a", "c"), e)],
             ["a", "b", "c"],
             less_than=[("a", "b"), ("b", "c")],
-            backend="native",
         )
+        in_range = nodes < len(occurrences)
         counts = np.zeros(len(nodes), dtype=np.int64)
-        if tri.size:
-            members, freq = np.unique(tri.ravel(), return_counts=True)
-            lookup = {int(n): i for i, n in enumerate(nodes)}
-            for member, count in zip(members, freq):
-                slot = lookup.get(int(member))
-                if slot is not None:
-                    counts[slot] = count
+        counts[in_range] = occurrences[nodes[in_range]]
         return counts
 
     import scipy.sparse as sp

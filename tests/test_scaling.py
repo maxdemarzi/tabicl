@@ -668,3 +668,33 @@ def test_backend_argument_is_validated():
     e = np.array([[1, 2]], dtype=np.int64)
     with pytest.raises(ValueError, match="backend must be"):
         wcoj_join([Atom("e", ("a", "b"), e)], ["a", "b"], backend="fast")
+
+
+def test_wcoj_count_matches_enumeration():
+    """FAQ counting must agree with enumerating and counting afterwards."""
+    from tabicl.scaling import native_available, wcoj_count
+
+    if not native_available():
+        pytest.skip("compiled backend not built")
+
+    edges = _random_graph(30, 0.4, 4)
+    atoms = [
+        Atom("e", ("a", "b"), edges),
+        Atom("e", ("b", "c"), edges),
+        Atom("e", ("a", "c"), edges),
+    ]
+    rows = wcoj_join(atoms, ["a", "b", "c"], less_than=[("a", "b"), ("b", "c")])
+    total, occurrences = wcoj_count(atoms, ["a", "b", "c"], less_than=[("a", "b"), ("b", "c")])
+
+    assert total == len(rows)
+    expected = np.bincount(rows.ravel(), minlength=len(occurrences))
+    np.testing.assert_array_equal(occurrences, expected[: len(occurrences)])
+
+
+def test_wcoj_count_needs_native():
+    from tabicl.scaling import native_available, wcoj_count
+
+    if native_available():
+        pytest.skip("backend is built, so the error path is unreachable")
+    with pytest.raises(RuntimeError, match="compiled backend"):
+        wcoj_count([Atom("e", ("a", "b"), np.array([[1, 2]]))], ["a", "b"])

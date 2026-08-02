@@ -153,6 +153,12 @@ struct JoinState {
 	std::vector<i64> acc, tmp;
 	bool capped = false;
 
+	// Aggregation mode (FAQ): accumulate during elimination instead of emitting
+	// tuples. `counts[v]` is how many results contain v in any position.
+	bool counting = false;
+	i64 total = 0;
+	std::vector<i64> counts;
+
 	void recurse(int level);
 };
 
@@ -199,6 +205,22 @@ void JoinState::recurse(int level) {
 			tmp.clear();
 			std::set_intersection(acc.begin(), acc.end(), obeg, oend, std::back_inserter(tmp));
 			acc.swap(tmp);
+		}
+
+		if (counting) {
+			// |I| completions are known without visiting them, so the already-bound
+			// variables are credited in O(1) rather than once per tuple, and nothing is
+			// materialised. Only the final variable needs a pass, and only because
+			// per-value counts were asked for.
+			const i64 n_completions = static_cast<i64>(acc.size());
+			total += n_completions;
+			for (int v = 0; v < level; ++v) {
+				counts[binding[v]] += n_completions;
+			}
+			for (i64 v : acc) {
+				counts[v] += 1;
+			}
+			return;
 		}
 
 		for (i64 v : acc) {
@@ -370,10 +392,12 @@ void expand(const std::vector<Trie> &T, const std::vector<std::vector<std::pair<
 
 } // namespace
 
-static py::array_t<i64> wcoj_hash_join(const std::vector<py::array_t<i64>> &relations,
-                                       const std::vector<std::vector<int>> &var_ids, int n_vars,
-                                       const std::vector<std::pair<int, int>> &less_than, std::size_t max_results,
-                                       int threads) {
+// Shared driver. `counting` selects FAQ-style aggregation: the search is identical,
+// only what happens at a completed prefix differs.
+static void run_join(const std::vector<py::array_t<i64>> &relations, const std::vector<std::vector<int>> &var_ids,
+                     int n_vars, const std::vector<std::pair<int, int>> &less_than, std::size_t max_results,
+                     int threads, bool counting, std::vector<i64> &merged, i64 &grand_total,
+                     std::vector<i64> &merged_counts) {
 	const int n_rel = static_cast<int>(relations.size());
 	if (n_rel > kMaxRelations) {
 		throw std::runtime_error("too many relations");
@@ -419,7 +443,22 @@ static py::array_t<i64> wcoj_hash_join(const std::vector<py::array_t<i64>> &rela
 		lower_bounds[lt.second].push_back(lt.first);
 	}
 
-	std::vector<i64> merged;
+	// Counter array is indexed by value, so it must span the value domain.
+	i64 domain = 0;
+	if (counting) {
+		for (int i = 0; i < n_rel; ++i) {
+			const i64 *d = ptrs[i];
+			const std::size_t n = rows[i] * static_cast<std::size_t>(arity[i]);
+			for (std::size_t j = 0; j < n; ++j) {
+				domain = std::max(domain, d[j]);
+			}
+		}
+		++domain;
+		if (domain <= 0) {
+			domain = 1;
+		}
+	}
+
 	{
 		// The join touches no Python objects, so hold nothing while it runs.
 		py::gil_scoped_release release;
@@ -437,6 +476,10 @@ static py::array_t<i64> wcoj_hash_join(const std::vector<py::array_t<i64>> &rela
 			st.max_results = max_results;
 			st.node.assign(n_rel, 0);
 			st.binding.assign(n_vars, 0);
+			st.counting = counting;
+			if (counting) {
+				st.counts.assign(static_cast<std::size_t>(domain), 0);
+			}
 			return st;
 		};
 
@@ -452,6 +495,8 @@ static py::array_t<i64> wcoj_hash_join(const std::vector<py::array_t<i64>> &rela
 			JoinState st = fresh();
 			st.recurse(0);
 			merged.swap(st.out);
+			grand_total = st.total;
+			merged_counts.swap(st.counts);
 		} else {
 			// Seed the work list by binding variable 0.
 			WorkItem root;
@@ -529,16 +574,36 @@ static py::array_t<i64> wcoj_hash_join(const std::vector<py::array_t<i64>> &rela
 				th.join();
 			}
 
-			std::size_t total_out = 0;
-			for (const auto &w : workers) {
-				total_out += w.out.size();
-			}
-			merged.reserve(total_out);
-			for (auto &w : workers) {
-				merged.insert(merged.end(), w.out.begin(), w.out.end());
+			if (counting) {
+				merged_counts.assign(static_cast<std::size_t>(domain), 0);
+				for (const auto &w : workers) {
+					grand_total += w.total;
+					for (std::size_t v = 0; v < merged_counts.size(); ++v) {
+						merged_counts[v] += w.counts[v];
+					}
+				}
+			} else {
+				std::size_t total_out = 0;
+				for (const auto &w : workers) {
+					total_out += w.out.size();
+				}
+				merged.reserve(total_out);
+				for (auto &w : workers) {
+					merged.insert(merged.end(), w.out.begin(), w.out.end());
+				}
 			}
 		}
 	}
+
+}
+
+static py::array_t<i64> wcoj_hash_join(const std::vector<py::array_t<i64>> &relations,
+                                       const std::vector<std::vector<int>> &var_ids, int n_vars,
+                                       const std::vector<std::pair<int, int>> &less_than, std::size_t max_results,
+                                       int threads) {
+	std::vector<i64> merged, counts;
+	i64 total = 0;
+	run_join(relations, var_ids, n_vars, less_than, max_results, threads, false, merged, total, counts);
 
 	const std::size_t n_out = merged.size() / static_cast<std::size_t>(n_vars);
 	py::array_t<i64> result({n_out, static_cast<std::size_t>(n_vars)});
@@ -548,8 +613,26 @@ static py::array_t<i64> wcoj_hash_join(const std::vector<py::array_t<i64>> &rela
 	return result;
 }
 
+// FAQ-style aggregation: returns (total results, per-value occurrence counts) without
+// ever materialising a result tuple.
+static py::tuple wcoj_count(const std::vector<py::array_t<i64>> &relations,
+                            const std::vector<std::vector<int>> &var_ids, int n_vars,
+                            const std::vector<std::pair<int, int>> &less_than, int threads) {
+	std::vector<i64> merged, counts;
+	i64 total = 0;
+	run_join(relations, var_ids, n_vars, less_than, 0, threads, true, merged, total, counts);
+
+	py::array_t<i64> out(static_cast<py::ssize_t>(counts.size()));
+	if (!counts.empty()) {
+		std::copy(counts.begin(), counts.end(), static_cast<i64 *>(out.request().ptr));
+	}
+	return py::make_tuple(total, out);
+}
+
 PYBIND11_MODULE(_wcoj_native, m) {
 	m.doc() = "Worst-case optimal join (Umbra, VLDB 2020, Algorithm 3)";
 	m.def("wcoj_hash_join", &wcoj_hash_join, py::arg("relations"), py::arg("var_ids"), py::arg("n_vars"),
 	      py::arg("less_than"), py::arg("max_results") = 0, py::arg("threads") = 0);
+	m.def("wcoj_count", &wcoj_count, py::arg("relations"), py::arg("var_ids"), py::arg("n_vars"),
+	      py::arg("less_than"), py::arg("threads") = 0);
 }

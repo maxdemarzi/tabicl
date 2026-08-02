@@ -181,6 +181,35 @@ output merge, and thread startup are a real fraction of the total, and the
 output-heavy triangle query is worse than the search-heavy clique one. These are small
 workloads; the serial fraction shrinks as inputs grow.
 
+### FAQ: counting without enumerating
+
+`wcoj_count` takes the FAQ view (Abo Khamis, Ngo, Rudra, PODS 2016) -- aggregation is
+variable elimination over a semiring -- and accumulates during the join instead of
+enumerating tuples and counting afterwards. Once a prefix is fixed, the number of
+completions is the size of an intersection, known without visiting its elements, so
+every already-bound variable is credited in O(1).
+
+| graph | triangles | enumerate | count |
+|---|---:|---:|---:|
+| n=1000, p=0.10 | 167782 | 0.0223 s | **0.0179 s** |
+| n=1400, p=0.12 | 791891 | 0.0637 s | **0.0488 s** |
+| n=1800, p=0.10 | 972916 | 0.0981 s | **0.0660 s** |
+
+**1.2-1.5x, and a prediction of mine that did not survive contact.** I expected this to
+lift the parallel ceiling too, on the theory that per-thread output buffers and the
+final merge were the serial bottleneck. They are not: counting scales no better than
+enumerating (1.5-1.8x on 8 threads either way). The dominant cost is the intersection
+work itself, which both paths do identically. What FAQ actually buys here is a modest
+constant factor plus O(1) rather than O(output) memory -- 23 MB of result tuples never
+allocated on the largest case above.
+
+A total-only variant that sizes the intersection by merging without storing it was
+built and then removed: it measured *slower* than the per-value path (0.077 s vs
+0.066 s), because avoiding one materialisation cost two others. Not worth a second
+code path.
+
+`triangle_counts` uses the counting path.
+
 Verified against brute-force enumeration on random graphs up to density 0.9, on
 4-cycles, and per-node counts against exhaustive triple enumeration.
 
