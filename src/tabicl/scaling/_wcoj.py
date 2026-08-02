@@ -19,8 +19,9 @@ References
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Mapping, Sequence, Tuple
 
 import numpy as np
 
@@ -38,8 +39,15 @@ __all__ = [
     "wcoj_aggregate",
     "triangle_counts",
     "motif_features",
+    "typed_triangle_counts",
+    "typed_motif_features",
+    "temporal_motif_features",
     "native_available",
 ]
+
+# k edge types need k**3 joins for the full typed triangle census. The guard is about
+# the cube, not the joins: 6 types is 216, 8 would be 512.
+MAX_EDGE_TYPES = 6
 
 
 def native_available() -> bool:
@@ -465,6 +473,32 @@ def _undirected_edges(edges: np.ndarray) -> np.ndarray:
     return np.unique(both, axis=0)
 
 
+def _gather(by_value: np.ndarray, nodes: np.ndarray) -> np.ndarray:
+    """Look up a value-indexed array at ``nodes``, scoring out-of-range nodes zero."""
+    out = np.zeros(len(nodes), dtype=np.int64)
+    if len(by_value) == 0 or len(nodes) == 0:
+        return out
+    in_range = (nodes >= 0) & (nodes < len(by_value))
+    out[in_range] = by_value[nodes[in_range]]
+    return out
+
+
+def _degrees(e: np.ndarray, nodes: np.ndarray) -> np.ndarray:
+    """Degree of each node in a symmetrised edge list.
+
+    Vectorised rather than a dict lookup per node: this runs once per (cutoff, window)
+    in the temporal path, so a Python loop over the node set is not affordable there.
+    """
+    degree = np.zeros(len(nodes), dtype=np.int64)
+    if e.size == 0 or len(nodes) == 0:
+        return degree
+    members, freq = np.unique(e[:, 0], return_counts=True)
+    slot = np.searchsorted(members, nodes)
+    hit = (slot < len(members)) & (members[np.minimum(slot, len(members) - 1)] == nodes)
+    degree[hit] = freq[slot[hit]]
+    return degree
+
+
 def triangle_counts(edges: np.ndarray, nodes: np.ndarray | None = None) -> np.ndarray:
     """Count triangles through each node.
 
@@ -503,10 +537,7 @@ def triangle_counts(edges: np.ndarray, nodes: np.ndarray | None = None) -> np.nd
             ["a", "b", "c"],
             less_than=[("a", "b"), ("b", "c")],
         )
-        in_range = nodes < len(occurrences)
-        counts = np.zeros(len(nodes), dtype=np.int64)
-        counts[in_range] = occurrences[nodes[in_range]]
-        return counts
+        return _gather(occurrences, nodes)
 
     import scipy.sparse as sp
 
@@ -546,15 +577,7 @@ def motif_features(edges: np.ndarray, nodes: np.ndarray | None = None):
         nodes = np.unique(e) if e.size else np.empty(0, dtype=np.int64)
     nodes = np.asarray(nodes)
 
-    degree = np.zeros(len(nodes), dtype=np.int64)
-    if e.size:
-        members, freq = np.unique(e[:, 0], return_counts=True)
-        index = {int(n): i for i, n in enumerate(nodes)}
-        for node, count in zip(members, freq):
-            slot = index.get(int(node))
-            if slot is not None:
-                degree[slot] = count
-
+    degree = _degrees(e, nodes)
     triangles = triangle_counts(e, nodes)
     wedges = degree * (degree - 1) / 2
     clustering = np.divide(triangles, wedges, out=np.zeros(len(nodes)), where=wedges > 0)
@@ -563,3 +586,360 @@ def motif_features(edges: np.ndarray, nodes: np.ndarray | None = None):
         {"degree": degree, "triangles": triangles, "clustering": clustering},
         index=pd.Index(nodes, name="node"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Typed motifs
+# ---------------------------------------------------------------------------
+#
+# The ablation in DESIGN.md found degree carrying ~85% of the lift on rel-event,
+# i.e. most of what an untyped triangle count contributes is degree in disguise.
+# That is the expected result rather than a surprise: motif counts are partly
+# *determined* by the degree sequence (Ginoza & Mugler, "Network motifs come in
+# sets", 2010; Bhat et al., "Motif conservation laws for the configuration model",
+# 2014), and a k-star count is a deterministic function of degree outright.
+#
+# Splitting counts by edge type is the standard way out, because a typed count is
+# not recoverable from the untyped degree: Lichtenwalter & Chawla's vertex
+# collocation profiles (WWW 2012; SpringerPlus 2014) make exactly this argument,
+# that the discriminative power comes from distinguishing isomorphism classes with
+# direction and relation type rather than from going to larger undirected motifs.
+
+
+def typed_triangle_counts(
+    edges_by_type: Mapping[str, np.ndarray],
+    nodes: np.ndarray | None = None,
+    threads: int = 0,
+):
+    """Count triangles per node, split by the *multiset* of edge types they use.
+
+    A triangle on ``{a, b, c}`` occupies three slots -- ``(a,b)``, ``(b,c)``, ``(a,c)``
+    under ``a < b < c`` -- and each slot's type is then determined. So running the join
+    once per *ordered* type triple and bucketing the result by the sorted triple counts
+    every triangle exactly once, with no double counting to correct for afterwards.
+    That is ``k ** 3`` joins for ``k`` types, each over a subset of the edges.
+
+    Parameters
+    ----------
+    edges_by_type : Mapping[str, np.ndarray]
+        One ``(n_edges, 2)`` integer array per type, over a shared node id space.
+        Each is treated as undirected. At most :data:`MAX_EDGE_TYPES` types.
+
+    nodes : np.ndarray, optional
+        Nodes to report, in order. Defaults to every node appearing in any type.
+
+    threads : int, default=0
+        Worker threads for the compiled backend; 0 means one per core.
+
+    Returns
+    -------
+    pd.DataFrame
+        Indexed by node, one ``tri__<t1>_<t2>_<t3>`` column per sorted type triple.
+        Column order follows the order of ``edges_by_type``.
+
+    Notes
+    -----
+    Types are assumed disjoint -- one type per edge. An edge listed under several
+    types is counted under each combination it satisfies, which is well defined but
+    means the columns no longer sum to the untyped triangle count.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> friend = np.array([[0, 1], [1, 2]])
+    >>> colleague = np.array([[0, 2]])
+    >>> out = typed_triangle_counts({"f": friend, "c": colleague})
+    >>> out.loc[0, "tri__c_f_f"]
+    1
+    """
+    import pandas as pd
+
+    types = list(edges_by_type)
+    if not types:
+        raise ValueError("edges_by_type is empty; give at least one edge type")
+    if len(types) > MAX_EDGE_TYPES:
+        raise ValueError(
+            f"{len(types)} edge types needs {len(types) ** 3} joins for the full typed "
+            f"census; at most {MAX_EDGE_TYPES} are allowed. Merge rare types first."
+        )
+
+    prepared = [_undirected_edges(np.asarray(edges_by_type[t])) for t in types]
+    if nodes is None:
+        present = [e for e in prepared if e.size]
+        nodes = np.unique(np.concatenate(present)) if present else np.empty(0, dtype=np.int64)
+    nodes = np.asarray(nodes, dtype=np.int64)
+
+    columns = {
+        combo: np.zeros(len(nodes), dtype=np.int64)
+        for combo in itertools.combinations_with_replacement(range(len(types)), 3)
+    }
+
+    for i, j, k in itertools.product(range(len(types)), repeat=3):
+        ab, bc, ac = prepared[i], prepared[j], prepared[k]
+        if ab.size == 0 or bc.size == 0 or ac.size == 0 or len(nodes) == 0:
+            continue
+        atoms = [
+            Atom(types[i], ("a", "b"), ab),
+            Atom(types[j], ("b", "c"), bc),
+            Atom(types[k], ("a", "c"), ac),
+        ]
+        slot = columns[tuple(sorted((i, j, k)))]
+        if _wcoj_native is not None:
+            _total, occurrences = wcoj_count(
+                atoms, ["a", "b", "c"], less_than=[("a", "b"), ("b", "c")], threads=threads
+            )
+            slot += _gather(occurrences, nodes)
+        else:
+            # No sparse shortcut here: diag(A^3) needs one adjacency matrix, and the
+            # three slots carry different ones. Enumerate and bincount instead.
+            found = wcoj_join(
+                atoms, ["a", "b", "c"], less_than=[("a", "b"), ("b", "c")], backend="python"
+            )
+            if found.size:
+                slot += _gather(np.bincount(found.ravel()), nodes)
+
+    return pd.DataFrame(
+        {"tri__" + "_".join(types[i] for i in combo): counts for combo, counts in columns.items()},
+        index=pd.Index(nodes, name="node"),
+    )
+
+
+def typed_motif_features(
+    edges_by_type: Mapping[str, np.ndarray],
+    nodes: np.ndarray | None = None,
+    threads: int = 0,
+):
+    """Per-type degree plus the typed triangle census, as one feature frame.
+
+    ``deg__<type>`` is the free part and ``tri__<t1>_<t2>_<t3>`` is what needs the
+    join. Keeping both in one frame is what makes the ablation possible: the typed
+    triangles have to be shown to beat typed degree, not just untyped degree.
+
+    Parameters
+    ----------
+    edges_by_type, nodes, threads
+        As for :func:`typed_triangle_counts`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Indexed by node, with one ``deg__`` column per type and one ``tri__`` column
+        per sorted type triple.
+    """
+    import pandas as pd
+
+    types = list(edges_by_type)
+    prepared = {t: _undirected_edges(np.asarray(edges_by_type[t])) for t in types}
+    if nodes is None:
+        present = [e for e in prepared.values() if e.size]
+        nodes = np.unique(np.concatenate(present)) if present else np.empty(0, dtype=np.int64)
+    nodes = np.asarray(nodes, dtype=np.int64)
+
+    degrees = {f"deg__{t}": _degrees(prepared[t], nodes) for t in types}
+    triangles = typed_triangle_counts(prepared, nodes=nodes, threads=threads)
+    return pd.concat(
+        [pd.DataFrame(degrees, index=pd.Index(nodes, name="node")), triangles], axis=1
+    )
+
+
+# ---------------------------------------------------------------------------
+# Temporal motifs
+# ---------------------------------------------------------------------------
+#
+# Two separate things, both needed, and worth not conflating.
+#
+# 1. *Causality.* `flatten_relational` already filters child rows to those strictly
+#    before the prediction time. The graph features did not, which is the caveat
+#    recorded against the rel-event result in DESIGN.md. A cutoff fixes that.
+#
+# 2. *Recency and ordering.* A triangle whose three edges appeared within a week is
+#    not the same feature as one that took three years, and degree cannot express
+#    the difference -- which is why the temporal-motif literature (Paranjape, Benson
+#    & Leskovec, WSDM 2017) reports gains that survive a degree baseline. Windows
+#    give the span; phases give the order, since "two edges early, one late" is
+#    triadic closure caught in the act.
+#
+# Phases reduce to types: a phase is an edge type that happens to be a time bucket,
+# so the ordering census is `typed_triangle_counts` over phase-partitioned edges and
+# needs no separate machinery.
+
+
+def _as_epoch(values, what: str) -> Tuple[np.ndarray, bool]:
+    """Normalise a time column to float64, reporting whether it was datetime-like."""
+    import pandas as pd
+
+    arr = np.asarray(values)
+    if np.issubdtype(arr.dtype, np.datetime64):
+        return arr.astype("datetime64[ns]").astype(np.int64).astype(np.float64), True
+    if np.issubdtype(arr.dtype, np.number):
+        return arr.astype(np.float64), False
+    try:
+        converted = pd.to_datetime(pd.Series(arr)).to_numpy(dtype="datetime64[ns]")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{what} must be numeric or datetime-like, got {arr.dtype}") from exc
+    return converted.astype(np.int64).astype(np.float64), True
+
+
+def _as_span(window, datetime_like: bool) -> float | None:
+    """Normalise a lookback width to the same units :func:`_as_epoch` produced."""
+    if window is None:
+        return None
+    if datetime_like:
+        import pandas as pd
+
+        return float(pd.Timedelta(window).value)
+    return float(window)
+
+
+def _split_phases(sub: np.ndarray, sub_t: np.ndarray, start: float, stop: float, n_phases: int):
+    """Partition a window's edges into equal-*duration* phases, oldest first."""
+    if len(sub) == 0:
+        return {f"p{i}": np.empty((0, 2), dtype=np.int64) for i in range(n_phases)}
+    inner = np.linspace(start, stop, n_phases + 1)[1:-1]
+    which = np.clip(np.searchsorted(inner, sub_t, side="right"), 0, n_phases - 1)
+    return {f"p{i}": sub[which == i] for i in range(n_phases)}
+
+
+def temporal_motif_features(
+    edges: np.ndarray,
+    times,
+    nodes: np.ndarray,
+    cutoffs,
+    windows: Mapping[str, object] | None = None,
+    n_phases: int = 1,
+    threads: int = 0,
+):
+    """Causal, windowed motif features: one row per ``(node, cutoff)`` query.
+
+    For each query row, the graph is restricted to edges appearing **strictly before**
+    that row's cutoff -- matching :func:`~tabicl.scaling.flatten_relational`, so the
+    two feature families share one notion of causality -- and then, per window, to the
+    edges within that lookback.
+
+    Parameters
+    ----------
+    edges : np.ndarray
+        Shape ``(n_edges, 2)``. Treated as undirected.
+
+    times : array-like
+        One timestamp per edge, numeric or datetime-like.
+
+    nodes : np.ndarray
+        Node id to describe, one per query row.
+
+    cutoffs : array-like
+        Prediction time for each query row, same length and time type as ``times``.
+
+    windows : Mapping[str, object], optional
+        Lookback width per named window; ``None`` as a width means all history. Widths
+        are ``pd.Timedelta``-compatible for datetime times and plain numbers otherwise.
+        Defaults to ``{"all": None}``.
+
+    n_phases : int, default=1
+        Split each window into this many equal-duration phases and add the ordered
+        triangle census over them. ``n_phases=2`` distinguishes a triangle already
+        closed early in the window (``p0_p0_p0``) from a wedge that closed late
+        (``p0_p0_p1``); ``1`` skips the census entirely.
+
+    threads : int, default=0
+        Worker threads for the compiled backend; 0 means one per core.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per query, in input order, with a ``RangeIndex``. Columns are
+        ``<window>__degree``, ``<window>__triangles``, ``<window>__clustering`` and,
+        when ``n_phases > 1``, ``<window>__tri__p0_p0_p1`` and friends.
+
+    Notes
+    -----
+    Cost is one motif computation per (distinct cutoff x window), times ``n_phases**3``
+    joins when the census is on. Distinct cutoffs, not rows -- RelBench task tables
+    have a handful of prediction timestamps shared by many rows, which is what makes
+    this affordable.
+
+    A node with no edges before its cutoff is reported as degree 0, which is
+    indistinguishable from a node absent from the graph. Carry a coverage indicator
+    separately if that distinction matters.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> e = np.array([[0, 1], [1, 2], [0, 2]])
+    >>> out = temporal_motif_features(e, [1, 2, 3], nodes=[0, 0], cutoffs=[3, 4])
+    >>> out["all__triangles"].tolist()   # the closing edge lands at t=3
+    [0, 1]
+    """
+    import pandas as pd
+
+    edges = np.asarray(edges)
+    if edges.ndim != 2 or edges.shape[1] != 2:
+        raise ValueError(f"edges must have shape (n, 2), got {edges.shape}")
+    edge_time, edges_are_dates = _as_epoch(times, "times")
+    if len(edge_time) != len(edges):
+        raise ValueError(f"times has length {len(edge_time)} but there are {len(edges)} edges")
+
+    nodes = np.asarray(nodes, dtype=np.int64)
+    cutoff_time, cutoffs_are_dates = _as_epoch(cutoffs, "cutoffs")
+    if len(cutoff_time) != len(nodes):
+        raise ValueError(
+            f"cutoffs has length {len(cutoff_time)} but there are {len(nodes)} query nodes"
+        )
+    if edges_are_dates != cutoffs_are_dates:
+        raise ValueError("times and cutoffs must both be datetime-like or both numeric")
+
+    if windows is None:
+        windows = {"all": None}
+    spans = {label: _as_span(width, edges_are_dates) for label, width in windows.items()}
+    if not spans:
+        raise ValueError("windows is empty; pass at least one, or None for all history")
+    if n_phases < 1 or n_phases > MAX_EDGE_TYPES:
+        raise ValueError(f"n_phases must be between 1 and {MAX_EDGE_TYPES}, got {n_phases}")
+
+    chronological = np.argsort(edge_time, kind="stable")
+    sorted_edges, sorted_time = edges[chronological], edge_time[chronological]
+
+    phase_combos = list(itertools.combinations_with_replacement(range(n_phases), 3))
+    out: Dict[str, np.ndarray] = {}
+    for label in spans:
+        out[f"{label}__degree"] = np.zeros(len(nodes), dtype=np.int64)
+        out[f"{label}__triangles"] = np.zeros(len(nodes), dtype=np.int64)
+        out[f"{label}__clustering"] = np.zeros(len(nodes), dtype=np.float64)
+        if n_phases > 1:
+            for combo in phase_combos:
+                name = "_".join(f"p{i}" for i in combo)
+                out[f"{label}__tri__{name}"] = np.zeros(len(nodes), dtype=np.int64)
+
+    for cutoff in np.unique(cutoff_time):
+        rows = np.flatnonzero(cutoff_time == cutoff)
+        asked = nodes[rows]
+        # Strictly before the cutoff: an edge recorded *at* the prediction time is
+        # already the future as far as that prediction is concerned.
+        stop = int(np.searchsorted(sorted_time, cutoff, side="left"))
+
+        for label, span in spans.items():
+            start = 0 if span is None else int(
+                np.searchsorted(sorted_time, cutoff - span, side="left")
+            )
+            window_edges = sorted_edges[start:stop]
+            window_time = sorted_time[start:stop]
+
+            feats = motif_features(window_edges, nodes=asked)
+            out[f"{label}__degree"][rows] = feats["degree"].to_numpy()
+            out[f"{label}__triangles"][rows] = feats["triangles"].to_numpy()
+            out[f"{label}__clustering"][rows] = feats["clustering"].to_numpy()
+
+            if n_phases > 1:
+                if span is not None:
+                    began = cutoff - span
+                elif len(window_time):
+                    began = float(window_time[0])
+                else:
+                    began = cutoff
+                by_phase = _split_phases(window_edges, window_time, began, cutoff, n_phases)
+                census = typed_triangle_counts(by_phase, nodes=asked, threads=threads)
+                for combo in phase_combos:
+                    name = "_".join(f"p{i}" for i in combo)
+                    out[f"{label}__tri__{name}"][rows] = census[f"tri__{name}"].to_numpy()
+
+    return pd.DataFrame(out, index=pd.RangeIndex(len(nodes)))

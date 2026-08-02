@@ -905,3 +905,261 @@ def test_negative_values_are_rejected_not_written_out_of_bounds():
     bad = np.array([[0, 1], [1, -1]], dtype=np.int64)
     with pytest.raises(ValueError, match="non-negative"):
         wcoj_count([Atom("e", ("a", "b"), bad)], ["a", "b"])
+
+
+# --------------------------------------------------------------------------
+# 6. Typed and temporal motifs
+# --------------------------------------------------------------------------
+
+from tabicl.scaling import (
+    temporal_motif_features,
+    typed_motif_features,
+    typed_triangle_counts,
+)
+
+
+def _typed_random_graph(n, p, n_types, seed):
+    """Undirected graph with one type per edge, as {type: (m, 2) array}."""
+    rng = np.random.default_rng(seed)
+    pairs = [(i, j) for i in range(n) for j in range(i + 1, n) if rng.random() < p]
+    labels = rng.integers(0, n_types, len(pairs))
+    out = {}
+    for t in range(n_types):
+        chosen = [pair for pair, lab in zip(pairs, labels) if lab == t]
+        out[f"t{t}"] = (
+            np.array(chosen, dtype=np.int64) if chosen else np.empty((0, 2), dtype=np.int64)
+        )
+    return out
+
+
+def _brute_typed_triangles(edges_by_type, nodes):
+    """Enumerate node triples directly; no join, no symmetry breaking."""
+    types = list(edges_by_type)
+    present = {}
+    for t in types:
+        e = np.asarray(edges_by_type[t])
+        present[t] = {(int(a), int(b)) for a, b in e} | {(int(b), int(a)) for a, b in e}
+
+    counts = {
+        combo: {int(v): 0 for v in nodes}
+        for combo in itertools.combinations_with_replacement(types, 3)
+    }
+    for a, b, c in itertools.combinations(sorted(int(v) for v in nodes), 3):
+        for tab in (t for t in types if (a, b) in present[t]):
+            for tbc in (t for t in types if (b, c) in present[t]):
+                for tac in (t for t in types if (a, c) in present[t]):
+                    key = tuple(sorted((tab, tbc, tac), key=types.index))
+                    for node in (a, b, c):
+                        counts[key][node] += 1
+    return counts
+
+
+@pytest.mark.parametrize("n, p, n_types, seed", [(14, 0.4, 2, 0), (12, 0.5, 3, 1), (16, 0.3, 3, 2)])
+def test_typed_triangles_match_brute_force(n, p, n_types, seed):
+    """The type-per-slot argument is the whole correctness claim; check it directly."""
+    by_type = _typed_random_graph(n, p, n_types, seed)
+    nodes = np.arange(n, dtype=np.int64)
+    got = typed_triangle_counts(by_type, nodes=nodes)
+    expected = _brute_typed_triangles(by_type, nodes)
+
+    for combo, per_node in expected.items():
+        column = "tri__" + "_".join(combo)
+        assert column in got.columns
+        assert got[column].tolist() == [per_node[int(v)] for v in nodes], column
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_typed_triangles_partition_the_untyped_count(seed):
+    """Types are disjoint here, so the census must sum back to the plain count.
+
+    This is the property that makes type splitting a refinement rather than a
+    different feature: no triangle is dropped and none is counted twice.
+    """
+    by_type = _typed_random_graph(15, 0.4, 3, seed)
+    nodes = np.arange(15, dtype=np.int64)
+    union = np.vstack([e for e in by_type.values() if e.size])
+
+    census = typed_triangle_counts(by_type, nodes=nodes)
+    assert census.sum(axis=1).tolist() == triangle_counts(union, nodes=nodes).tolist()
+
+
+def test_typed_triangles_distinguish_what_degree_cannot():
+    """Two nodes with identical degree and identical triangle count, different types.
+
+    If this passed with untyped features the split would be pointless, so the test
+    asserts the untyped columns really do collide first.
+    """
+    # 0-1-2 all-friend triangle; 3-4-5 all-colleague triangle.
+    friend = np.array([[0, 1], [1, 2], [0, 2], [3, 4]], dtype=np.int64)
+    colleague = np.array([[3, 5], [4, 5]], dtype=np.int64)
+    nodes = np.array([0, 3], dtype=np.int64)
+
+    plain = motif_features(np.vstack([friend, colleague]), nodes=nodes)
+    assert plain["degree"].tolist() == [2, 2]
+    assert plain["triangles"].tolist() == [1, 1]  # indistinguishable
+
+    typed = typed_motif_features({"f": friend, "c": colleague}, nodes=nodes)
+    assert typed.loc[0, "tri__f_f_f"] == 1
+    assert typed.loc[0, "tri__f_c_c"] == 0
+    assert typed.loc[3, "tri__f_f_f"] == 0
+    assert typed.loc[3, "tri__f_c_c"] == 1
+    assert typed.loc[3, "deg__f"] == 1 and typed.loc[3, "deg__c"] == 1
+
+
+def test_typed_motifs_handle_empty_types_and_reject_too_many():
+    empty = np.empty((0, 2), dtype=np.int64)
+    out = typed_triangle_counts({"a": np.array([[0, 1], [1, 2], [0, 2]]), "b": empty})
+    assert out["tri__a_a_a"].loc[0] == 1
+    assert out["tri__a_a_b"].sum() == 0
+
+    with pytest.raises(ValueError, match="at least one edge type"):
+        typed_triangle_counts({})
+    with pytest.raises(ValueError, match="at most 6"):
+        typed_triangle_counts({f"t{i}": empty for i in range(7)})
+
+
+def test_temporal_features_are_strictly_causal():
+    """The caveat this exists to remove: an edge at the cutoff is still the future."""
+    e = np.array([[0, 1], [1, 2], [0, 2]], dtype=np.int64)
+    out = temporal_motif_features(e, [1, 2, 3], nodes=[0, 0, 0], cutoffs=[3, 4, 10])
+
+    # At cutoff 3 the closing edge has not happened yet -- a wedge, not a triangle.
+    assert out["all__degree"].tolist() == [1, 2, 2]
+    assert out["all__triangles"].tolist() == [0, 1, 1]
+
+
+def test_temporal_features_match_static_motifs_once_all_history_is_in():
+    """With every edge before the cutoff and no window, this must reduce to the static case."""
+    edges = _random_graph(20, 0.3, 4)
+    times = np.arange(len(edges))
+    nodes = np.arange(20, dtype=np.int64)
+
+    static = motif_features(edges, nodes=nodes)
+    temporal = temporal_motif_features(
+        edges, times, nodes=nodes, cutoffs=np.full(len(nodes), len(edges) + 1)
+    )
+    assert temporal["all__degree"].tolist() == static["degree"].tolist()
+    assert temporal["all__triangles"].tolist() == static["triangles"].tolist()
+    np.testing.assert_allclose(temporal["all__clustering"], static["clustering"].to_numpy())
+
+
+def test_temporal_window_drops_stale_edges():
+    """A window is the part degree cannot fake: same node, same total degree, older ties."""
+    # Node 0 closes a triangle long ago and gains two fresh unrelated neighbours.
+    e = np.array([[0, 1], [1, 2], [0, 2], [0, 3], [0, 4]], dtype=np.int64)
+    t = [0, 0, 0, 100, 100]
+    out = temporal_motif_features(
+        e, t, nodes=[0, 0], cutoffs=[101, 101], windows={"all": None, "recent": 10}
+    )
+    assert out["all__degree"].iloc[0] == 4 and out["all__triangles"].iloc[0] == 1
+    assert out["recent__degree"].iloc[0] == 2 and out["recent__triangles"].iloc[0] == 0
+
+
+def test_temporal_phases_separate_closure_in_time_from_old_triangles():
+    """Ordering is the point: a wedge that closes late is not an already-closed triangle."""
+    # 0-1-2 fully formed early; 3-4-5 is a wedge early that closes in the late phase.
+    e = np.array([[0, 1], [1, 2], [0, 2], [3, 4], [4, 5], [3, 5]], dtype=np.int64)
+    t = [0, 1, 2, 0, 1, 9]
+    out = temporal_motif_features(
+        e, t, nodes=[0, 3], cutoffs=[10, 10], windows={"w": 10}, n_phases=2
+    )
+    # Window is [0, 10), so phase 0 is [0, 5) and phase 1 is [5, 10).
+    assert out["w__tri__p0_p0_p0"].tolist() == [1, 0]
+    assert out["w__tri__p0_p0_p1"].tolist() == [0, 1]
+    # Both nodes look identical without the ordering.
+    assert out["w__triangles"].tolist() == [1, 1]
+
+
+@pytest.mark.parametrize("n_phases", [2, 3])
+def test_temporal_phase_census_sums_to_the_window_count(n_phases):
+    """Phases are types, so the same partition property has to hold."""
+    edges = _random_graph(16, 0.35, 9)
+    rng = np.random.default_rng(3)
+    times = rng.integers(0, 50, len(edges))
+    # Both directions of an edge must share a timestamp or the phases disagree.
+    keyed = {}
+    for (a, b), t in zip(edges, times):
+        keyed.setdefault((min(a, b), max(a, b)), int(t))
+    times = np.array([keyed[(min(a, b), max(a, b))] for a, b in edges])
+
+    nodes = np.arange(16, dtype=np.int64)
+    out = temporal_motif_features(
+        edges, times, nodes=nodes, cutoffs=np.full(len(nodes), 60), n_phases=n_phases
+    )
+    census = out[[c for c in out.columns if "__tri__" in c]]
+    assert census.sum(axis=1).tolist() == out["all__triangles"].tolist()
+
+
+def test_temporal_features_accept_datetimes():
+    """RelBench task tables carry pandas timestamps, not integers."""
+    e = np.array([[0, 1], [1, 2], [0, 2]], dtype=np.int64)
+    t = pd.to_datetime(["2026-01-01", "2026-01-02", "2026-03-01"])
+    out = temporal_motif_features(
+        e,
+        t,
+        nodes=[0, 0],
+        cutoffs=pd.to_datetime(["2026-02-01", "2026-04-01"]),
+        windows={"30d": pd.Timedelta("30D")},
+    )
+    assert out["30d__triangles"].tolist() == [0, 0]  # the 30d window never spans all three
+    full = temporal_motif_features(
+        e, t, nodes=[0, 0], cutoffs=pd.to_datetime(["2026-02-01", "2026-04-01"])
+    )
+    assert full["all__triangles"].tolist() == [0, 1]
+
+
+def test_temporal_features_reject_mismatched_inputs():
+    e = np.array([[0, 1], [1, 2]], dtype=np.int64)
+    with pytest.raises(ValueError, match="times has length"):
+        temporal_motif_features(e, [1], nodes=[0], cutoffs=[5])
+    with pytest.raises(ValueError, match="cutoffs has length"):
+        temporal_motif_features(e, [1, 2], nodes=[0, 1], cutoffs=[5])
+    with pytest.raises(ValueError, match="both datetime-like or both numeric"):
+        temporal_motif_features(
+            e, [1, 2], nodes=[0], cutoffs=pd.to_datetime(["2026-01-01"])
+        )
+    with pytest.raises(ValueError, match="n_phases must be"):
+        temporal_motif_features(e, [1, 2], nodes=[0], cutoffs=[5], n_phases=0)
+
+
+def test_chunked_icl_encoder_matches_unchunked(backbone):
+    """The ICL stack is chunkable over query rows: only train rows supply K/V."""
+    from tabicl.scaling._rowchunk import chunked_icl_encoder
+
+    tf_icl = backbone.model_.icl_predictor.tf_icl
+    d_model = tf_icl.blocks[0].linear1.in_features
+    torch.manual_seed(0)
+    src = torch.randn(1, 130, d_model)
+
+    with torch.no_grad():
+        expected = tf_icl(src, train_size=60)
+        for chunk in (16, 64, 10_000):
+            got = chunked_icl_encoder(tf_icl, src, 60, chunk_size=chunk)
+            torch.testing.assert_close(got, expected, rtol=1e-4, atol=1e-4)
+
+
+def test_chunked_icl_encoder_refuses_rope():
+    """A chunk would be encoded at the wrong absolute positions, so refuse."""
+    from tabicl.scaling._rowchunk import chunked_icl_encoder
+
+    class _WithRope:
+        rope = object()
+        blocks = []
+
+    with pytest.raises(ValueError, match="rope"):
+        chunked_icl_encoder(_WithRope(), torch.zeros(1, 4, 8), 2)
+
+
+def test_icl_chunking_via_config_preserves_labels():
+    X, y, _ = _xy(n=300, d=8)
+    base = TabICLClassifier(n_estimators=1, device="cpu", random_state=0)
+    base.fit(X[:200], y[:200])
+    chunked = TabICLClassifier(
+        n_estimators=1,
+        device="cpu",
+        random_state=0,
+        inference_config={"ICL_CONFIG": {"row_chunk": True, "row_chunk_size": 32}},
+    )
+    chunked.fit(X[:200], y[:200])
+    p_base, p_chunk = base.predict_proba(X[200:]), chunked.predict_proba(X[200:])
+    np.testing.assert_array_equal(p_chunk.argmax(1), p_base.argmax(1))

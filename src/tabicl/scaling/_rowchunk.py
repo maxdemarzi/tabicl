@@ -23,6 +23,7 @@ from .._model.kv_cache import KVCache
 
 __all__ = [
     "chunked_set_transformer",
+    "chunked_icl_encoder",
     "row_chunked",
     "DEFAULT_CHUNK_SIZE",
     "DEFAULT_COL_CHUNK_SIZE",
@@ -231,3 +232,84 @@ def row_chunked(
         yield model
     finally:
         col_embedder.tf_col = original
+
+
+def chunked_icl_encoder(
+    tf_icl,
+    src: Tensor,
+    train_size: Optional[int],
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    inplace: bool = False,
+) -> Tensor:
+    """Run the ICL transformer with peak memory decoupled from the row count.
+
+    Beyond roughly 150k rows the ICL stack, not the column embedder, owns the peak --
+    measured at 9x its own input tensor, since every one of its 12 blocks carries a
+    residual stream plus a feed-forward intermediate across all rows at once.
+
+    The same observation that chunks the column embedder applies here. Within a block
+    every row is a *query*, but only the first ``train_size`` rows supply keys and
+    values, so a query row's output depends on that row and the shared train-derived
+    K/V and nothing else. Harvest the K/V once per block, then stream queries.
+
+    Two details make it exact rather than approximate:
+
+    * The K/V are projected from the train rows *before* any row is overwritten, so
+      writing results back in place cannot corrupt the context.
+    * Train rows are queries too, and their outputs become the next block's context.
+      Streaming them in the same pass keeps that correct, because the next block
+      re-derives its K/V from the updated rows.
+
+    Requires no positional encoding on the stack: rows in the ICL stage are
+    exchangeable and ``tf_icl.rope`` is ``None``. A stack with rope would need the
+    chunk's absolute offsets threading through, so this refuses rather than silently
+    encoding the wrong positions.
+
+    Parameters
+    ----------
+    tf_icl : Encoder
+        The ICL transformer (``model.icl_predictor.tf_icl``).
+
+    src : Tensor
+        Row representations, shape ``(..., T, d_model)``.
+
+    train_size : Optional[int]
+        Rows ``[0:train_size]`` supply keys and values. ``None`` means all rows do.
+
+    chunk_size : int, default=8192
+        Query rows per step.
+
+    inplace : bool, default=False
+        Overwrite ``src`` rather than allocating an output buffer.
+
+    Returns
+    -------
+    Tensor
+        Same shape as ``src``; numerically equivalent to ``tf_icl(src, train_size)``.
+    """
+    if getattr(tf_icl, "rope", None) is not None:
+        raise ValueError(
+            "chunked_icl_encoder requires rope=None; a chunk would otherwise be "
+            "encoded at the wrong absolute positions"
+        )
+
+    from .._model.kv_cache import KVCacheEntry
+
+    n_rows = src.shape[-2]
+    ctx_len = n_rows if train_size is None else train_size
+    out = src if inplace else src.clone()
+
+    for block in tf_icl.blocks:
+        context = out[..., :ctx_len, :]
+        # A single dummy query row is enough to project the context's K/V, exactly as
+        # in the column embedder: the projections depend on the keys, not the query.
+        _, k_proj, v_proj = block(q=out[..., :1, :], k=context, v=context, need_kv=True)
+        cache = KVCacheEntry(key=k_proj, value=v_proj)
+
+        for start in range(0, n_rows, chunk_size):
+            stop = min(start + chunk_size, n_rows)
+            out[..., start:stop, :] = block(q=out[..., start:stop, :], cached_kv=cache)
+
+        del cache, k_proj, v_proj
+
+    return out

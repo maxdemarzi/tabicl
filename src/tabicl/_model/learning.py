@@ -238,6 +238,31 @@ class ICLearning(nn.Module):
         indices = unique_vals.argsort()
         return indices[torch.searchsorted(unique_vals, y)]
 
+    def _run_tf_icl(self, src: Tensor, train_size: Optional[int], inplace: bool = False) -> Tensor:
+        """Run the ICL transformer, optionally chunked over query rows.
+
+        Beyond roughly 150k rows this stack, not the column embedder, owns peak
+        memory -- measured at 9x its own input, since each of its blocks carries a
+        residual stream and a feed-forward intermediate across every row at once.
+        Chunking is exactly equivalent; it only bounds the activation.
+        """
+        opts = getattr(self, "_chunk_opts", None)
+        if not opts or not opts["row_chunk"]:
+            return self.tf_icl(src, train_size=train_size)
+        if opts["row_chunk"] == "auto" and not src.is_cuda:
+            return self.tf_icl(src, train_size=train_size)
+
+        from ..scaling._rowchunk import chunked_icl_encoder
+
+        try:
+            return chunked_icl_encoder(
+                self.tf_icl, src, train_size, chunk_size=opts["row_chunk_size"], inplace=inplace
+            )
+        except ValueError:
+            # Only raised when the stack carries positional encoding, where a chunk
+            # would be encoded at the wrong absolute positions. Correctness first.
+            return self.tf_icl(src, train_size=train_size)
+
     def _icl_predictions(self, R: Tensor, y_train: Tensor) -> Tensor:
         """In-context learning predictions.
 
@@ -269,7 +294,7 @@ class ICLearning(nn.Module):
             Ry_train = self.y_encoder(y_train.unsqueeze(-1))
         R[:, :train_size] = R[:, :train_size] + Ry_train
 
-        src = self.tf_icl(R, train_size=train_size)
+        src = self._run_tf_icl(R, train_size, inplace=True)
         if self.norm_first:
             src = self.ln(src)
         out = self.decoder(src)
@@ -452,6 +477,7 @@ class ICLearning(nn.Module):
         # Configure inference parameters
         if mgr_config is None:
             mgr_config = InferenceConfig().ICL_CONFIG
+        self._chunk_opts = mgr_config.chunk_options()
         self.inference_mgr.configure(**mgr_config.manager_items())
 
         if self.max_classes == 0:  # Regression
@@ -595,7 +621,7 @@ class ICLearning(nn.Module):
             Predictions of shape (B, T, out_dim).
         """
 
-        src = self.tf_icl(R, train_size=train_size)
+        src = self._run_tf_icl(R, train_size, inplace=True)
         if self.norm_first:
             src = self.ln(src)
         out = self.decoder(src)
@@ -651,6 +677,7 @@ class ICLearning(nn.Module):
 
         if mgr_config is None:
             mgr_config = InferenceConfig().ICL_CONFIG
+        self._chunk_opts = mgr_config.chunk_options()
         self.inference_mgr.configure(**mgr_config.manager_items())
 
         out = self.inference_mgr(
@@ -804,6 +831,7 @@ class ICLearning(nn.Module):
 
         if mgr_config is None:
             mgr_config = InferenceConfig().ICL_CONFIG
+        self._chunk_opts = mgr_config.chunk_options()
         self.inference_mgr.configure(**mgr_config.manager_items())
 
         out = self.inference_mgr(

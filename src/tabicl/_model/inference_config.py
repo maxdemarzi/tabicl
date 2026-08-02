@@ -421,6 +421,10 @@ class InferenceConfig:
                 # Async transfer
                 use_async=True,
                 async_depth=4,
+                row_chunk=False,
+                auto_row_chunk_threshold=0.35,
+                row_chunk_size=8192,
+                col_chunk_size=32
             )
         elif not isinstance(self.ICL_CONFIG, MgrConfig):
             raise TypeError(f"ICL_CONFIG must be a dict or MgrConfig, got {type(self.ICL_CONFIG)}")
