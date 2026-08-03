@@ -34,6 +34,9 @@ _STAT_SEMIRING = {
     "sumsq": SUM_PRODUCT,
     "min": MIN_PLUS,
     "max": MAX_PLUS,
+    # The pivot each column is accumulated around. Constant per column, so `max`
+    # carries it through a roll-up unchanged; it is consumed and dropped at the root.
+    "shift": MAX_PLUS,
 }
 _STAT_ROLLUP = {suffix: ring.pandas_agg for suffix, ring in _STAT_SEMIRING.items()}
 
@@ -144,12 +147,22 @@ def _stat_columns(
 
         series = df[col]
         if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
-            out[f"{stem}__{col}__count"] = grouped[col].count()
-            out[f"{stem}__{col}__sum"] = grouped[col].sum()
+            # Accumulate around a pivot. sumsq of raw values, then E[X^2] - E[X]^2,
+            # loses every significant digit on large-magnitude columns: measured
+            # returning std 18.5 for a true value of 1.0 on data offset by 1e9.
+            # Centring keeps the running sums near zero where doubles have precision
+            # to spare. Both centred accumulators are still additive, so multi-hop
+            # roll-up is unaffected; the pivot rides along and is undone at the root.
+            #
             # Vectorised, not `.apply(lambda ...)`: a Python callback per group was
             # measured at a third of total runtime for no gain in accuracy.
-            squares = df.assign(**{"__sq": series.astype("float64") ** 2})
-            out[f"{stem}__{col}__sumsq"] = squares.groupby(group_key)["__sq"].sum()
+            values = series.astype("float64")
+            shift = float(values.mean()) if values.notna().any() else 0.0
+            centred = df.assign(**{"__c": values - shift, "__csq": (values - shift) ** 2})
+            out[f"{stem}__{col}__count"] = grouped[col].count()
+            out[f"{stem}__{col}__sum"] = centred.groupby(group_key)["__c"].sum()
+            out[f"{stem}__{col}__sumsq"] = centred.groupby(group_key)["__csq"].sum()
+            out[f"{stem}__{col}__shift"] = shift
             out[f"{stem}__{col}__min"] = grouped[col].min()
             out[f"{stem}__{col}__max"] = grouped[col].max()
         else:
@@ -277,6 +290,7 @@ def _derive_features(frame: pd.DataFrame) -> pd.DataFrame:
     ``sumsq`` is dropped afterwards; it is a carrier, not a feature.
     """
     derived = {}
+    restored = {}
     for col in frame.columns:
         if not col.endswith("__sum"):
             continue
@@ -285,16 +299,24 @@ def _derive_features(frame: pd.DataFrame) -> pd.DataFrame:
         if count_col not in frame.columns:
             continue
         count = frame[count_col].replace(0, np.nan)
-        mean = frame[col] / count
-        derived[f"{base}__mean"] = mean
+        # `sum` holds the CENTRED total; undo the pivot for the reported sum and mean,
+        # but take the variance straight from the centred accumulators, which is where
+        # the precision was preserved.
+        shift = frame[f"{base}__shift"] if f"{base}__shift" in frame.columns else 0.0
+        centred_mean = frame[col] / count
+        derived[f"{base}__mean"] = centred_mean + shift
+        restored[col] = frame[col] + count * shift
         sumsq_col = f"{base}__sumsq"
         if sumsq_col in frame.columns:
-            var = (frame[sumsq_col] / count) - mean**2
+            var = (frame[sumsq_col] / count) - centred_mean**2
             derived[f"{base}__std"] = np.sqrt(var.clip(lower=0))
 
+    if restored:
+        frame = frame.assign(**restored)
     if derived:
         frame = pd.concat([frame, pd.DataFrame(derived, index=frame.index)], axis=1)
-    return frame.drop(columns=[c for c in frame.columns if c.endswith("__sumsq")])
+    carriers = [c for c in frame.columns if c.endswith("__sumsq") or c.endswith("__shift")]
+    return frame.drop(columns=carriers)
 
 
 def hop_product(

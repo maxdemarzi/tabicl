@@ -1399,3 +1399,33 @@ def test_asof_requires_a_time_column():
     ch = pd.DataFrame({"uid": [0], "amt": [1.0]})
     with pytest.raises(ValueError, match="time_column"):
         asof_statistics(Table(ch, "uid", "ev"), np.array([0]), np.array([0]))
+
+
+@pytest.mark.parametrize("offset", [0.0, 1e6, 1e9])
+def test_std_survives_large_magnitude_columns(offset):
+    """sumsq of raw values then E[X^2]-E[X]^2 returned std 18.5 for a true 1.0 at 1e9."""
+    rng = np.random.default_rng(0)
+    ent = pd.DataFrame({"uid": [0] * 3, "cut": pd.to_datetime(["2026-06-01"] * 3)})
+    ch = pd.DataFrame({
+        "uid": [0] * 400,
+        "ts": pd.Timestamp("2026-01-01") + pd.to_timedelta(np.arange(400), unit="D"),
+        "amt": rng.normal(size=400) + offset,
+    })
+    out = flatten_relational(
+        ent, "uid", [Table(ch, "uid", "ev", time_column="ts")], cutoff_column="cut"
+    )
+    seen = ch.loc[ch["ts"] < pd.Timestamp("2026-06-01"), "amt"]
+    assert out["ev__amt__std"].iloc[0] == pytest.approx(seen.std(ddof=0), abs=1e-8)
+    assert out["ev__amt__mean"].iloc[0] == pytest.approx(seen.mean(), rel=1e-12)
+    assert out["ev__amt__sum"].iloc[0] == pytest.approx(seen.sum(), rel=1e-12)
+
+
+def test_pivot_carriers_do_not_leak_into_features():
+    """sumsq and shift are carriers; a model should never see them."""
+    ent = pd.DataFrame({"uid": [0], "cut": pd.to_datetime(["2026-02-01"])})
+    ch = pd.DataFrame({"uid": [0, 0], "ts": pd.to_datetime(["2026-01-01"] * 2), "v": [1.0, 3.0]})
+    out = flatten_relational(
+        ent, "uid", [Table(ch, "uid", "ev", time_column="ts")], cutoff_column="cut"
+    )
+    assert not [c for c in out.columns if c.endswith("__sumsq") or c.endswith("__shift")]
+    assert out["ev__v__std"].iloc[0] == pytest.approx(1.0)
