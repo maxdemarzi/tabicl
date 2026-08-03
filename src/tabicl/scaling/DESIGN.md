@@ -832,6 +832,58 @@ second dataset (windows: +0.089 on rel-f1, median +0.001 elsewhere; the "2.5-poi
 categorical gap" that turned out to be a three-variable comparison). The pattern is
 consistent enough to be a rule: **no lever goes in as a recommendation on one task.**
 
+### Categorical statistics on the as-of scan -- built, correct, and not a win
+
+The as-of path was numeric-only. Diffing what the two paths emit located the gap
+exactly: identical source columns and identical numeric families, with the join path
+additionally producing `mode` on every block and `nunique` on windows. At matched
+relation breadth on rel-trial that was worth 2.21 (65.40 as-of vs 67.61 join).
+
+Two blocks were added, on the argument that neither needed a sketch:
+
+* **Top-K category histograms.** Fix a global codebook of the most frequent values,
+  emit one indicator per category, prefix-sum it. An indicator is a counter, and
+  counters are what this scan already carries -- so the block is exact rather than
+  approximate and extends to windows for free, which `mode` cannot do.
+* **Prefix mode.** The claim that `mode` "has no linear range algorithm at all" holds
+  for a *range* and not for a *prefix*. Counts rise by one, so the leader changes only
+  when a count strictly exceeds every count before it, and the row that does it holds
+  the new mode. Three segmented scans, no Python loop.
+
+Both are exact and tested. Neither should be turned on by default:
+
+| task | baseline | + histogram + mode | effect |
+|---|---:|---:|---:|
+| rel-trial / study-outcome | 65.40 | 66.65 | **+1.25** |
+| rel-f1 / driver-top3 | 60.31 | 60.31 | 0.00 (children are all numeric) |
+| rel-event / user-ignore | 79.85 | **76.64** | **-3.21** |
+
+**It hurts rel-event by more than it helps rel-trial**, and costs 2.3x the model time
+there (403s -> 912s). The explanation is consistent with everything else measured here:
+the block's price is paid in *columns*, and rel-event is the task where column count is
+already the binding constraint -- its cap sweep improved monotonically as features
+shrank, 1,670 to 74. Adding columns loses there whatever information they carry.
+
+Isolating the two on rel-trial also inverts the order they were proposed in:
+
+| block | rel-trial |
+|---|---:|
+| mode only | -0.33 |
+| histogram only | +0.94 |
+| both | +1.25 |
+
+`mode` alone is *negative*; it only pays as a complement, and +0.31 marginal is inside
+the noise. The block built second on the cleaner theoretical argument is the weaker one.
+
+Kept because it is correct, exact, tested, and the right tool when a schema's signal
+really is categorical -- `top_k_categories` and `include_mode` are both **off by
+default**. Not kept as a recommendation. The remaining ~0.96 to the join path on
+rel-trial is windowed `nunique`, which needs an offline dominance count; on this
+evidence that is not worth building.
+
+One incidental fix: the join path resolved a tied `mode` with a non-stable sort, so a
+tie could resolve differently between runs on identical data. Now stable.
+
 ### Where this lands against published RelBench numbers
 
 Official protocol throughout: fit on `train`, score the held-out `test` split, whose

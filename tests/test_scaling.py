@@ -1773,3 +1773,75 @@ def test_category_codebook_is_deterministic_under_ties():
     df = pd.DataFrame({"v": ["b", "b", "a", "a", "c", "c"]})   # a three-way tie
     shuffled = df.iloc[::-1].reset_index(drop=True)
     assert _category_codebook(df, "v", 3) == _category_codebook(shuffled, "v", 3)
+
+
+def test_prefix_mode_matches_the_join_path_on_random_data():
+    """The vectorised running argmax must agree with the join path's mode.
+
+    The scan version replaces a sequential loop with three segmented passes, on the
+    argument that a leader only changes when some count strictly exceeds every count
+    before it. Randomised keys, values, ties and nulls are what makes that argument
+    testable rather than merely plausible.
+    """
+    from tabicl.scaling import asof_statistics
+
+    rng = np.random.default_rng(0)
+    n = 4000
+    child = pd.DataFrame(
+        {
+            "uid": rng.integers(0, 60, n),
+            "ts": pd.to_datetime("2026-01-01") + pd.to_timedelta(rng.integers(0, 300, n), unit="D"),
+            "kind": rng.choice(["a", "b", "c", "d", None], size=n),
+        }
+    )
+    entity = pd.DataFrame({"uid": np.arange(60), "cut": pd.to_datetime("2027-01-01")})
+
+    scanned = asof_statistics(
+        Table(child, "uid", "ev", time_column="ts", include_mode=True),
+        entity["uid"].to_numpy(),
+        entity["cut"].to_numpy(),
+    )
+    joined = flatten_relational(
+        entity, "uid", [Table(child, "uid", "ev", time_column="ts")], cutoff_column="cut"
+    )
+
+    codes, uniques = pd.factorize(child["kind"], use_na_sentinel=True)
+    got = [uniques[int(v)] if pd.notna(v) else None for v in scanned["ev__kind__mode"]]
+    want = [v if pd.notna(v) else None for v in joined["ev__kind__mode"]]
+
+    # Tied groups are excluded, and the exclusion is the point: with a tie there is no
+    # single mode, and the two paths resolve it by different deterministic rules -- the
+    # scan takes the first value to reach the leading count in time order, the join path
+    # takes the smallest value. Asserting agreement there would be asserting an
+    # arbitrary choice. Everywhere the mode is actually well defined they must agree.
+    unambiguous = []
+    for uid in entity["uid"]:
+        counts = child.loc[child["uid"] == uid, "kind"].value_counts()
+        unambiguous.append(len(counts) > 0 and (counts == counts.max()).sum() == 1)
+
+    assert any(unambiguous), "test data degenerated to all-ties"
+    for i, ok in enumerate(unambiguous):
+        if ok:
+            assert got[i] == want[i], f"uid={entity['uid'][i]}: scan={got[i]} join={want[i]}"
+
+
+def test_prefix_mode_ignores_nulls_and_empty_prefixes():
+    from tabicl.scaling import asof_statistics
+
+    child = pd.DataFrame(
+        {
+            "uid": [0, 0, 0, 1],
+            "ts": pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-03", "2026-03-01"]),
+            "kind": [None, "z", None, "q"],
+        }
+    )
+    out = asof_statistics(
+        Table(child, "uid", "ev", time_column="ts", include_mode=True),
+        np.array([0, 1]),
+        np.array(pd.to_datetime(["2026-02-01"] * 2)),
+    )
+    codes, uniques = pd.factorize(child["kind"], use_na_sentinel=True)
+    # uid 0: nulls cannot lead, so the only non-null value wins.
+    assert uniques[int(out["ev__kind__mode"].to_numpy()[0])] == "z"
+    # uid 1: its only row is after the cutoff, so the prefix is empty.
+    assert np.isnan(out["ev__kind__mode"].to_numpy()[1])

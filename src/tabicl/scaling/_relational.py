@@ -235,7 +235,18 @@ def _stat_columns(
                 .reset_index()
             )
             if len(pair_counts):
-                best = pair_counts.sort_values("__n", ascending=False).drop_duplicates(
+                # `sort_values` defaults to quicksort, which is not stable, so a tied
+                # mode was resolved arbitrarily and could differ between runs on the
+                # same data. A stable sort keeps the groupby's value order, which makes
+                # the tie-break "smallest value wins" and reproducible.
+                #
+                # The as-of scan breaks ties differently -- first value to reach the
+                # leading count, in time order -- because that is what a single forward
+                # pass can see. Both are deterministic; they need not agree, and a tied
+                # mode is arbitrary either way.
+                best = pair_counts.sort_values(
+                    "__n", ascending=False, kind="stable"
+                ).drop_duplicates(
                     subset=[group_key if isinstance(group_key, str) else pair_counts.columns[0]]
                 )
                 out[f"{stem}__{col}__mode"] = best.set_index(best.columns[0])[series.name]
@@ -855,36 +866,41 @@ def _prefix_mode(out, label, child, df, order, sorted_key, hi_idx, lo_idx) -> No
     hi_arr = np.asarray(hi_idx, dtype=np.int64)
     lo_arr = np.asarray(lo_idx, dtype=np.int64)
     n_rows = len(df)
-    # Key boundaries in sorted order, so the counter resets exactly where a key starts.
+    if not n_rows:
+        return
+    # Key boundaries in sorted order, so every running quantity resets where a key does.
     new_key = np.empty(n_rows, dtype=bool)
-    if n_rows:
-        new_key[0] = True
-        new_key[1:] = sorted_key[1:] != sorted_key[:-1]
+    new_key[0] = True
+    new_key[1:] = sorted_key[1:] != sorted_key[:-1]
+    positions = np.arange(n_rows)
 
     for col in cats:
         codes, _ = pd.factorize(df[col], use_na_sentinel=True)
         codes = codes[order]
-        counts = np.zeros(int(codes.max()) + 2 if len(codes) else 1, dtype=np.int64)
+
+        # The running argmax looks sequential, but it is not. Counts rise by exactly one
+        # per occurrence, so the leader changes only when some value's count *strictly*
+        # exceeds every count seen so far in that key -- and the row that does it holds
+        # the new modal value. So the mode at any position is the value of the last row
+        # that set a new maximum, which is three segmented scans rather than a Python
+        # loop. On rel-event's 8.4M-row child table that difference is the difference
+        # between a usable function and an unusable one.
+        occurrence = pd.DataFrame({"k": sorted_key, "v": codes}).groupby(["k", "v"]).cumcount().to_numpy() + 1
+        occurrence = np.where(codes >= 0, occurrence, 0)   # nulls never lead
+        running_max = pd.Series(occurrence).groupby(sorted_key).cummax().to_numpy()
+        previous = np.empty_like(running_max)
+        previous[0] = 0
+        previous[1:] = running_max[:-1]
+        previous = np.where(new_key, 0, previous)
+
+        leader_at = np.where(running_max > previous, positions, -1)
+        leader_at = pd.Series(leader_at).groupby(sorted_key).cummax().to_numpy()
+
         running = np.full(n_rows + 1, np.nan)
-        touched: List[int] = []
-        best_code, best_count = -1, 0
-        for i in range(n_rows):
-            if new_key[i]:
-                for c in touched:
-                    counts[c] = 0
-                touched.clear()
-                best_code, best_count = -1, 0
-            code = codes[i]
-            if code >= 0:            # -1 is the null sentinel; nulls have no mode
-                counts[code] += 1
-                touched.append(code)
-                if counts[code] > best_count:
-                    best_code, best_count = code, counts[code]
-            running[i + 1] = best_code if best_code >= 0 else np.nan
+        running[1:] = np.where(leader_at >= 0, codes[np.maximum(leader_at, 0)], np.nan)
         # running[j] is the mode of the key's rows up to sorted position j, so a prefix
         # ending at hi is read directly; an empty range has no mode.
-        values = np.where(hi_arr > lo_arr, running[hi_arr], np.nan)
-        out[f"{label}__{col}__mode"] = values
+        out[f"{label}__{col}__mode"] = np.where(hi_arr > lo_arr, running[hi_arr], np.nan)
 
 
 def _extremes(out, label, columns, df, order, hi_idx, lo_idx) -> None:
