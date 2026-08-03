@@ -5,7 +5,7 @@ attention) that cannot be fully realised without pretraining.
 """
 
 from ._mqa import collapse_kv_heads, expand_kv_heads, kv_cache_bytes
-from ._relational import Table, flatten_relational, hop_product
+from ._relational import Table, asof_statistics, flatten_relational, hop_product
 from ._retrieval import select_context
 from ._semiring import (
     BOOLEAN,
@@ -48,6 +48,7 @@ __all__ = [
     "Table",
     "flatten_relational",
     "hop_product",
+    "asof_statistics",
     "Semiring",
     "SUM_PRODUCT",
     "MIN_PLUS",

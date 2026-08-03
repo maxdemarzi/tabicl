@@ -1348,3 +1348,54 @@ def test_duplicate_child_names_are_rejected():
         flatten_relational(
             entity, "uid", [Table(child, "uid", "ev"), Table(child, "uid", "ev")]
         )
+
+
+def test_asof_matches_join_path_on_invertible_statistics():
+    """Same answers, different algorithm: prefix differences instead of a join."""
+    from tabicl.scaling import asof_statistics
+
+    rng = np.random.default_rng(0)
+    ent = pd.DataFrame({
+        "uid": rng.integers(0, 40, 200),
+        "cut": pd.Timestamp("2026-01-01") + pd.to_timedelta(rng.integers(0, 300, 200), unit="D"),
+    })
+    ch = pd.DataFrame({
+        "uid": rng.integers(0, 40, 5000),
+        "ts": pd.Timestamp("2026-01-01") + pd.to_timedelta(rng.integers(0, 300, 5000), unit="D"),
+        "amt": rng.normal(size=5000),
+    })
+    tbl = Table(ch, "uid", "ev", time_column="ts", windows=[pd.Timedelta(days=30)])
+    joined = flatten_relational(ent, "uid", [tbl], cutoff_column="cut")
+    scanned = asof_statistics(tbl, ent["uid"].to_numpy(), ent["cut"].to_numpy())
+
+    for col in ("ev__count", "ev__amt__mean", "ev_30d__count", "ev_30d__amt__mean"):
+        a = joined[col].to_numpy(dtype=float)
+        b = scanned[col].to_numpy(dtype=float)
+        both_nan = np.isnan(a) & np.isnan(b)
+        np.testing.assert_allclose(a[~both_nan], b[~both_nan], rtol=1e-9, atol=1e-9)
+
+
+def test_asof_std_survives_large_offsets():
+    """The join path loses every digit here; the shifted accumulator does not."""
+    from tabicl.scaling import asof_statistics
+
+    rng = np.random.default_rng(1)
+    ent = pd.DataFrame({"uid": [0] * 5,
+                        "cut": pd.to_datetime(["2026-06-01"] * 5)})
+    ch = pd.DataFrame({
+        "uid": [0] * 400,
+        "ts": pd.Timestamp("2026-01-01") + pd.to_timedelta(np.arange(400), unit="D"),
+        "amt": rng.normal(size=400) + 1e9,
+    })
+    tbl = Table(ch, "uid", "ev", time_column="ts")
+    scanned = asof_statistics(tbl, ent["uid"].to_numpy(), ent["cut"].to_numpy())
+    truth = ch.loc[ch["ts"] < pd.Timestamp("2026-06-01"), "amt"].std(ddof=0)
+    assert scanned["ev__amt__std"].iloc[0] == pytest.approx(truth, abs=1e-6)
+
+
+def test_asof_requires_a_time_column():
+    from tabicl.scaling import asof_statistics
+
+    ch = pd.DataFrame({"uid": [0], "amt": [1.0]})
+    with pytest.raises(ValueError, match="time_column"):
+        asof_statistics(Table(ch, "uid", "ev"), np.array([0]), np.array([0]))
