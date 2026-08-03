@@ -6,6 +6,7 @@ attention) that cannot be fully realised without pretraining.
 
 from ._mqa import collapse_kv_heads, expand_kv_heads, kv_cache_bytes
 from ._relational import Table, asof_statistics, flatten_relational, hop_product
+from ._calibrate import Calibration, calibrate_context_size, sweep_configurations
 from ._retrieval import select_context
 from ._selection import prune_features
 from ._semiring import (
@@ -57,6 +58,9 @@ __all__ = [
     "BOOLEAN",
     "BUILTIN_SEMIRINGS",
     "check_semiring_laws",
+    "Calibration",
+    "calibrate_context_size",
+    "sweep_configurations",
     "select_context",
     "prune_features",
     "think_predict_proba",

@@ -1845,3 +1845,103 @@ def test_prefix_mode_ignores_nulls_and_empty_prefixes():
     assert uniques[int(out["ev__kind__mode"].to_numpy()[0])] == "z"
     # uid 1: its only row is after the cutoff, so the prefix is empty.
     assert np.isnan(out["ev__kind__mode"].to_numpy()[1])
+
+
+def test_sweep_picks_the_cheapest_within_tolerance_not_the_argmax():
+    """The whole reason to calibrate a cost knob is to spend less.
+
+    Selecting the argmax gives the saving straight back and chases validation noise, so
+    the rule is the cheapest candidate that is good enough.
+    """
+    from tabicl.scaling import sweep_configurations
+
+    scores = {1000: 0.800, 5000: 0.803, 20000: 0.804}
+    result = sweep_configurations(list(scores), lambda c: scores[c], tolerance=0.005)
+
+    assert result.chosen == 1000        # within 0.005 of the best, and cheapest
+    assert result.best == 20000
+    assert result.chosen_score == pytest.approx(0.800)
+    assert result.best_score == pytest.approx(0.804)
+
+
+def test_sweep_with_zero_tolerance_is_the_argmax():
+    from tabicl.scaling import sweep_configurations
+
+    scores = {1000: 0.800, 5000: 0.803, 20000: 0.804}
+    result = sweep_configurations(list(scores), lambda c: scores[c], tolerance=0.0)
+    assert result.chosen == 20000 == result.best
+
+
+def test_sweep_respects_a_genuinely_steep_curve():
+    """A knob that matters must not be shrunk away.
+
+    max_columns=2 cost rel-f1 19.5 points. A calibration that still chose the cheap end
+    on a curve like that would be worse than no calibration at all.
+    """
+    from tabicl.scaling import sweep_configurations
+
+    scores = {1000: 0.60, 5000: 0.72, 20000: 0.80}
+    result = sweep_configurations(list(scores), lambda c: scores[c], tolerance=0.005)
+    assert result.chosen == 20000
+
+
+def test_calibrate_context_size_shrinks_a_flat_curve():
+    """End to end, with a scorer that ignores context size: take the smallest."""
+    from tabicl.scaling import calibrate_context_size
+
+    rng = np.random.default_rng(0)
+    X_tr, y_tr = rng.normal(size=(400, 3)), rng.integers(0, 2, 400)
+    X_va, y_va = rng.normal(size=(60, 3)), rng.integers(0, 2, 60)
+
+    seen = []
+
+    def fit_score(Xc, yc, Xv, yv):
+        seen.append(len(Xc))
+        return 0.75
+
+    result = calibrate_context_size(
+        X_tr, y_tr, X_va, y_va, fit_score, candidates=(50, 100, None), tolerance=0.005
+    )
+    assert result.chosen == 50
+    assert seen[0] == 50 and seen[-1] == 400          # None means the full pool
+    assert len(result.curve) == 3
+
+
+def test_calibrate_context_size_collapses_duplicate_sizes():
+    """Candidates at or above the pool size are the same experiment; run it once."""
+    from tabicl.scaling import calibrate_context_size
+
+    rng = np.random.default_rng(0)
+    X_tr, y_tr = rng.normal(size=(80, 2)), rng.integers(0, 2, 80)
+    X_va, y_va = rng.normal(size=(20, 2)), rng.integers(0, 2, 20)
+
+    calls = []
+    result = calibrate_context_size(
+        X_tr, y_tr, X_va, y_va,
+        lambda Xc, yc, Xv, yv: (calls.append(len(Xc)), 0.5)[1],
+        candidates=(1000, 5000, None),
+    )
+    assert len(result.curve) == 1
+    assert calls == [80]
+
+
+def test_calibrate_context_size_stratifies_by_default():
+    """At small budgets on a skewed target, an unstratified draw measures the draw.
+
+    rel-avito's positive rate is 0.905; this asserts the minority class survives.
+    """
+    from tabicl.scaling import calibrate_context_size
+
+    rng = np.random.default_rng(0)
+    n = 2000
+    y_tr = (rng.random(n) < 0.905).astype(int)
+    X_tr = rng.normal(size=(n, 2))
+    X_va, y_va = rng.normal(size=(50, 2)), rng.integers(0, 2, 50)
+
+    rates = []
+    calibrate_context_size(
+        X_tr, y_tr, X_va, y_va,
+        lambda Xc, yc, Xv, yv: (rates.append(float(yc.mean())), 0.5)[1],
+        candidates=(100,),
+    )
+    assert rates[0] == pytest.approx(y_tr.mean(), abs=0.02)
