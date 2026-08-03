@@ -56,6 +56,24 @@ free memory). It never engages on CPU. It composes with `offload`: offloading mo
 
 `row_chunked(model)` is the equivalent context manager for an already-fitted estimator.
 
+### Calibration
+
+Every lever here is task-dependent, several by margins larger than any average effect,
+so the settings are chosen per dataset rather than defaulted:
+
+```python
+from tabicl.scaling import calibrate_context_size, sweep_configurations
+
+result = calibrate_context_size(X_tr, y_tr, X_val, y_val, fit_score,
+                                candidates=(1000, 5000, 10000, None), tolerance=0.005)
+result.chosen      # cheapest context within tolerance of the best
+result.curve       # every (setting, score) — a curve still climbing means sweep wider
+```
+
+Selection takes the **cheapest** candidate within `tolerance`, not the argmax: the argmax
+chases validation noise and hands the saving back. A genuinely steep curve still selects
+the expensive end. Subsampling stratifies by default.
+
 ## Relational features
 
 ```python
@@ -139,6 +157,7 @@ Ranked by measured AUC contribution, largest first:
 | look-back windows | +0.089 on rel-f1; median +0.001 elsewhere |
 | column budget | +3.0 rel-event, 0.0 rel-trial, **−19.5 rel-f1** — task-dependent |
 | categorical blocks (as-of) | +1.25 rel-trial, 0.0 rel-f1, **−3.21 rel-event** — off by default |
+| context size | rel-avito loses nothing at 8.6%; rel-trial loses 2.74 at 23% — calibrate |
 | type-aware motifs | +0.021 |
 | the whole WCOJ/FAQ engine | +0.016 |
 

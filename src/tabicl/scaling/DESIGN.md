@@ -884,6 +884,45 @@ evidence that is not worth building.
 One incidental fix: the join path resolved a tied `mode` with a non-stable sort, so a
 tie could resolve differently between runs on identical data. Now stable.
 
+### Context size: the curve is task-dependent too
+
+A TabICL context is quadratic in compute and linear in peak memory, so shrinking it is
+the cheapest lever on both. An independent evaluation across four temporal relational
+databases reported curves shallow enough that 10k-20k rows land within epsilon of the
+best score, and concluded 10k-20k is enough "on every relational dataset".
+
+That does not hold here. Two tasks, official test split:
+
+| context rows | rel-avito (full = 116,598) | rel-trial (full = 12,954) |
+|---:|---:|---:|
+| 1,000 | -- | 61.39 (-4.01) |
+| 3,000 | -- | 62.66 (-2.74) |
+| 5,000 | 63.30 (-1.16) | -- |
+| 10,000 | **64.85 (+0.39)** | -- |
+| full | 64.46 | 65.40 |
+
+**rel-avito's curve is flat and rel-trial's is not.** 10,000 rows -- 8.6% of rel-avito's
+context -- *beat* the full set, while rel-trial gives up 2.74 at 23% of its context. Same
+lever, opposite verdicts, which is the third setting in this file to behave that way.
+
+Two things follow. First, rel-avito never needed a GPU: 10k context on CPU scores better
+than 116,598 rows on an L40S, so `row_chunk` and `offload` are one cost lever and "use
+fewer rows" is a cheaper one that was never tried. Second, "10k-20k is enough" is not a
+default worth adopting -- it is a hypothesis to test per dataset, which is what
+`calibrate_context_size` is for.
+
+Plausibly the difference is pool size: rel-avito has 116k label rows and heavy
+redundancy among them, rel-trial has 12,954 and little. That predicts the curve flattens
+where the context is large relative to the task's diversity, and is worth checking
+before it is believed.
+
+Measurement note: the 20,000 arm of rel-avito was stopped rather than run. Model time at
+5,000 was 1,369s on CPU and the cost is quadratic, so it was ~6 hours for one point on a
+curve whose shape was already clear. Running it concurrently with the rel-trial sweep
+also drove committed memory to 99 GB against 64 GB physical and began paging -- the same
+thrash recorded elsewhere in this file, caused the same way, by running two heavy jobs
+at once. rel-trial's 6,000 arm was lost to it.
+
 ### Where this lands against published RelBench numbers
 
 Official protocol throughout: fit on `train`, score the held-out `test` split, whose
