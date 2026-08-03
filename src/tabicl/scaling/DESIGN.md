@@ -3,6 +3,11 @@
 Design + scope for four upgrades derived from *TabPFN-3: Technical Report*
 (arXiv 2605.13986, Prior Labs, 2026-05-12).
 
+> This file is the **history log**: derivations, what was tried, what failed, what the
+> measurements actually said, and the reasoning behind each decision. For the current
+> state of the package — API, configuration, standing results, known limits — see
+> [STATUS.md](STATUS.md).
+
 ## Why this is cheaper than it looks
 
 TabPFN-3 **adopted TabICL's architecture**, not the reverse. Figure 5: *"Architecture
@@ -811,16 +816,19 @@ are the published figures from the TabPFN-3 paper's Table 14.
 |---|---:|---:|---:|---:|
 | rel-f1 / driver-top3 | **79.77** | 79.98 | 85.69 | 82.72 |
 | rel-event / user-ignore | 80.81 | 85.38 | 86.18 | 73.70 |
+| rel-avito / user-visits | 64.46 | 66.68 | 66.18 | 66.76 |
 | rel-trial / study-outcome | 67.61 | 76.43 | 71.24 | 72.89 |
-| rel-avito / user-visits | *not run* | 66.68 | 66.18 | 66.76 |
 
-Level with TabPFN-REL on rel-f1, ~4.6 behind on rel-event, ~8.8 behind on rel-trial.
-Worth stating plainly: these are a generic flattening pipeline in front of a stock
-TabICL, against systems built for relational data, and rel-event's figure only exists
-because of the column budget above. rel-avito is unrun rather than failed -- 149
-features but 152,727 context rows, which OOMs at 59 GB in attention on CPU. That is a
-row-axis problem, so it is the case `row_chunk` and `offload` were actually built for,
-and it needs a GPU large enough to hold the context.
+Level with TabPFN-REL on rel-f1, -2.2 on rel-avito, -4.6 on rel-event, -8.8 on
+rel-trial. Worth stating plainly: these are a generic flattening pipeline in front of a
+stock TabICL, against systems built for relational data, and rel-event's figure only
+exists because of the column budget above.
+
+rel-avito is the case row chunking was actually built for, and it behaved that way. It
+had OOM'd at 59 GB in attention on CPU -- 116,598 context rows x 176 features, a
+row-axis problem, not a feature-count one. On an L40S with `row_chunk` and
+`offload="auto"` the same configuration fits and the model fits in 90s. The as-of scan
+built features over three children totalling 7.5M rows in 19s.
 
 ### Does schema depth help? A negative result on rel-trial
 
