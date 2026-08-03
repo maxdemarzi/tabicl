@@ -118,6 +118,31 @@ Two consequences:
   linear. The earlier nested scheme turned one grandchild column into 25; this keeps
   it at ~7, and depth 3 adds no more.
 
+### Look-back windows
+
+`Table(windows=[...])` emits an extra block of statistics per window, over child rows
+in `[cutoff - window, cutoff)`, alongside the all-history block. Recency is usually the
+strongest thing a history carries and an all-time mean dilutes it -- a driver's
+lifetime average says little about current form.
+
+On rel-f1 / driver-top3:
+
+| features | count | TabICL | GBDT |
+|---|---:|---:|---:|
+| all history only | 147 | 0.8125 | 0.7467 |
+| + 365d | 288 | 0.8834 | 0.8376 |
+| + 90d, 365d | 429 | 0.8984 | 0.8527 |
+| + 30d, 90d, 365d | 570 | **0.9011** | 0.8642 |
+
+**+0.089 AUC**, the largest feature-engineering gain measured here, from a filter
+inside the existing cutoff logic rather than any new machinery. TabICL leads GBDT at
+every level. Most of it arrives with the first window; the third adds +0.003, so the
+count is a cost/benefit choice, not a free lunch -- 570 columns approaches TabICL's
+comfortable feature range.
+
+Consistent with the motif finding that relation *choice* beat typing: what goes into
+the features has mattered more than what is computed over them, every time.
+
 ### Does any of this help TabICL? (RelBench rel-f1)
 
 Everything above is infrastructure; the synthetic relational benchmark only shows the

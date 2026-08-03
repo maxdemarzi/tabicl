@@ -1289,3 +1289,39 @@ def test_icl_chunking_via_config_preserves_labels():
     chunked.fit(X[:200], y[:200])
     p_base, p_chunk = base.predict_proba(X[200:]), chunked.predict_proba(X[200:])
     np.testing.assert_array_equal(p_chunk.argmax(1), p_base.argmax(1))
+
+
+def test_windows_restrict_to_recent_history():
+    """A window sees only [cutoff - window, cutoff); all-history still sees everything."""
+    entity = pd.DataFrame({"uid": [0, 1], "cutoff": pd.to_datetime(["2026-03-01"] * 2)})
+    child = pd.DataFrame(
+        {
+            "uid": [0, 0, 0, 1],
+            "ts": pd.to_datetime(["2026-02-25", "2026-01-01", "2025-06-01", "2026-02-20"]),
+            "amount": [10.0, 100.0, 1000.0, 5.0],
+        }
+    )
+    out = flatten_relational(
+        entity,
+        "uid",
+        [Table(child, "uid", "ev", time_column="ts",
+               windows=[pd.Timedelta(days=30), pd.Timedelta(days=90)])],
+        cutoff_column="cutoff",
+    )
+    assert out["ev__count"].iloc[0] == 3
+    assert out["ev_30d__count"].iloc[0] == 1
+    assert out["ev_90d__count"].iloc[0] == 2
+    # The all-time mean dilutes recency; the windows are what expose it.
+    assert out["ev__amount__mean"].iloc[0] == pytest.approx(370.0)
+    assert out["ev_90d__amount__mean"].iloc[0] == pytest.approx(55.0)
+    assert out["ev_30d__amount__mean"].iloc[0] == pytest.approx(10.0)
+
+
+def test_windows_without_a_cutoff_are_rejected():
+    entity = pd.DataFrame({"uid": [0]})
+    child = pd.DataFrame({"uid": [0], "ts": pd.to_datetime(["2026-01-01"]), "v": [1.0]})
+    with pytest.raises(ValueError, match="windows"):
+        flatten_relational(
+            entity, "uid",
+            [Table(child, "uid", "ev", time_column="ts", windows=[pd.Timedelta(days=7)])],
+        )

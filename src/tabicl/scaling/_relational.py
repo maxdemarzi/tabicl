@@ -65,6 +65,14 @@ class Table:
         This table's own identifier. Required only when it has ``children``, since
         that is what the grandchildren's foreign keys point at.
 
+    windows : Sequence, default=()
+        Look-back windows, e.g. ``[pd.Timedelta(days=30), pd.Timedelta(days=90)]``.
+        Each emits its own block of statistics over child rows falling in
+        ``[cutoff - window, cutoff)``, alongside the all-history block. Recency is
+        usually the strongest signal a history carries and an all-time mean dilutes
+        it: a driver's lifetime average says little about current form. Requires
+        ``time_column`` and a cutoff.
+
     children : Sequence[Table], default=()
         Tables one hop further out. They are aggregated into this table first, then
         this table is aggregated into the entity -- so a two-hop schema such as
@@ -78,6 +86,7 @@ class Table:
     time_column: Optional[str] = None
     columns: Optional[Sequence[str]] = field(default=None)
     primary_key: Optional[str] = None
+    windows: Sequence = field(default=())
     children: Sequence["Table"] = field(default=())
 
 
@@ -167,6 +176,15 @@ def _aggregate_by_key(child: Table, keys: pd.Series, cutoff: Optional[pd.Series]
     return _stat_columns(child, df, nested_stats, grouped, index).reset_index(drop=True)
 
 
+def _window_label(window) -> str:
+    """A short, stable column-name fragment for a window."""
+    try:
+        days = pd.Timedelta(window).days
+        return f"{days}d" if days else f"{int(pd.Timedelta(window).total_seconds())}s"
+    except (TypeError, ValueError):
+        return str(window).replace(" ", "")
+
+
 def _aggregate_by_row(child: Table, anchor: pd.DataFrame, n_rows: int) -> pd.DataFrame:
     """Aggregate to one row per *entity row*, not per key.
 
@@ -191,6 +209,30 @@ def _aggregate_by_row(child: Table, anchor: pd.DataFrame, n_rows: int) -> pd.Dat
     grouped = pairs.groupby("__row")
     stats = _stat_columns(child, pairs, nested_stats, grouped, grouped.size().index)
     stats = stats.reindex(range(n_rows))
+
+    # Windowed blocks. Each restricts the same join to a recent slice, so a model can
+    # see "lately" separately from "ever" rather than having to infer it from a mean
+    # that mixes the two.
+    for window in child.windows:
+        if child.time_column is None or "__cutoff" not in pairs.columns:
+            raise ValueError(
+                f"table {child.name!r} has windows, which need time_column and a cutoff"
+            )
+        recent = pairs[pairs[child.time_column] >= pairs["__cutoff"] - window]
+        label = _window_label(window)
+        windowed = Table(
+            df=child.df, foreign_key=child.foreign_key, name=f"{child.name}_{label}",
+            time_column=child.time_column, columns=child.columns,
+            primary_key=child.primary_key,
+        )
+        g = recent.groupby("__row")
+        block = _stat_columns(windowed, recent, nested_stats, g, g.size().index)
+        block = block.reindex(range(n_rows))
+        own = f"{windowed.name}__count"
+        if own in block.columns:
+            block[own] = block[own].fillna(0)
+        stats = pd.concat([stats, block], axis=1)
+
     # Reindexing introduces NaN for entity rows with no history. This table's own
     # count is genuinely zero there. Everything else stays unknown: a missing mean is
     # not 0, and a *nested* count belongs to a level that was never reached, so
