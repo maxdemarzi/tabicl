@@ -1,0 +1,217 @@
+"""RelBench under an honest protocol: every setting chosen on validation.
+
+The standing results table in ``STATUS.md`` reports, for each task, the best score over
+several configurations -- `max_columns` on rel-event, join-versus-scan on rel-trial,
+context size on rel-avito. Those configurations were compared *on the test split*, which
+means the table is a per-task maximum selected on test, not a single procedure evaluated
+once. It is not comparable with published single-configuration numbers, and it is
+inflated by an unknown amount.
+
+This script removes that. Configurations are compared on a validation split carved out
+of training data; the test split is touched exactly once, at the end, with whatever the
+validation comparison chose. Expect lower numbers than the hand-picked table. That is
+the point of running it.
+
+The settings swept are the three that have been measured to reverse across datasets:
+
+    max_columns     +3.0 rel-event    0.0 rel-trial    -19.5 rel-f1
+    context size    +0.4 rel-avito at 8.6%             -2.7 rel-trial at 23%
+    categoricals    +1.25 rel-trial   0.0 rel-f1        -3.21 rel-event
+
+No default serves all three, which is why they are calibrated rather than fixed.
+
+Usage
+-----
+    python -m tabicl.scaling.eval_relbench_calibrated rel-trial study-outcome
+    python -m tabicl.scaling.eval_relbench_calibrated rel-avito user-visits --children 3
+"""
+
+from __future__ import annotations
+
+import argparse
+import time
+import warnings
+from typing import List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+
+warnings.filterwarnings("ignore")
+
+from sklearn.metrics import roc_auc_score
+
+from relbench.datasets import get_dataset
+from relbench.tasks import get_task
+
+from tabicl import TabICLClassifier
+from tabicl.scaling import Table, asof_statistics, sweep_configurations
+
+WINDOWS = [pd.Timedelta(days=30), pd.Timedelta(days=365)]
+
+# Each candidate is (max_columns, top_k_categories, include_mode). Deliberately small:
+# the sweep costs one fit per candidate per task, and a wider grid would spend more
+# compute on selection than the settings are worth.
+FEATURE_CANDIDATES = [
+    (None, None, False),   # everything, no categorical blocks
+    (4, None, False),
+    (2, None, False),
+    (2, 4, True),          # the categorical blocks, where they might pay
+]
+CONTEXT_CANDIDATES: List[Optional[int]] = [5000, 10000, 20000, None]
+
+
+def _numeric(df: pd.DataFrame) -> np.ndarray:
+    out = df.copy()
+    for col in out.columns:
+        if not pd.api.types.is_numeric_dtype(out[col]):
+            out[col] = pd.factorize(out[col])[0]
+    return np.nan_to_num(out.to_numpy(dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def _stratified(frame: pd.DataFrame, target: str, n: int, seed: int = 0) -> pd.DataFrame:
+    """Keep ``n`` rows, preserving the label mix.
+
+    rel-avito's positive rate is 0.905; an unstratified draw at 5,000 rows measures the
+    draw rather than the setting.
+    """
+    if n >= len(frame):
+        return frame
+    rng = np.random.default_rng(seed)
+    parts = []
+    for _, group in frame.groupby(frame[target], sort=True):
+        take = max(1, int(round(n * len(group) / len(frame))))
+        parts.append(group.iloc[rng.permutation(len(group))[:take]])
+    return pd.concat(parts).sort_index().reset_index(drop=True)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("dataset")
+    parser.add_argument("task")
+    parser.add_argument("--children", type=int, default=4)
+    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--n-estimators", type=int, default=4)
+    parser.add_argument("--select-estimators", type=int, default=1,
+                        help="ensemble size during selection; the final fit uses --n-estimators")
+    parser.add_argument("--tolerance", type=float, default=0.005)
+    parser.add_argument("--select-context", type=int, default=5000,
+                        help="context held fixed while feature specs are compared; the "
+                             "feature sweep would otherwise run at full context, which "
+                             "is quadratic and unaffordable on the large tasks")
+    args = parser.parse_args()
+
+    db = get_dataset(args.dataset, download=True).get_db()
+    task = get_task(args.dataset, args.task, download=True)
+    key, target, entity_table = task.entity_col, task.target_col, task.entity_table
+
+    train = task.get_table("train", mask_input_cols=False).df
+    val = task.get_table("val", mask_input_cols=False).df
+    test = task.get_table("test", mask_input_cols=False).df
+    tcol = next(c for c in train.columns if pd.api.types.is_datetime64_any_dtype(train[c]))
+
+    entity_df = db.table_dict[entity_table].df
+    pkey = db.table_dict[entity_table].pkey_col
+    children = [
+        (name, fk, tbl.time_col, len(tbl.df))
+        for name, tbl in db.table_dict.items()
+        for fk, points_to in (tbl.fkey_col_to_pkey_table or {}).items()
+        if points_to == entity_table and tbl.time_col
+    ]
+    children.sort(key=lambda c: c[3])
+    children = children[: args.children]
+    print(f"{args.dataset}/{args.task}  train={len(train)} val={len(val)} test={len(test)}  "
+          f"children={[c[0] for c in children]}", flush=True)
+
+    def build(frame: pd.DataFrame, spec: Tuple) -> pd.DataFrame:
+        max_cols, top_k, use_mode = spec
+        base = frame.merge(entity_df, left_on=key, right_on=pkey, how="left")
+        drop = {target, key, pkey, tcol}
+        cols = [c for c in base.columns
+                if c not in drop and not pd.api.types.is_datetime64_any_dtype(base[c])]
+        blocks = [base[cols].reset_index(drop=True)]
+        for name, fk, time_col, _ in children:
+            table = Table(
+                db.table_dict[name].df, fk, name, time_column=time_col, windows=WINDOWS,
+                max_columns=max_cols, top_k_categories=top_k, include_mode=use_mode,
+            )
+            blocks.append(
+                asof_statistics(table, frame[key].to_numpy(), frame[tcol].to_numpy())
+                .add_prefix(f"{name}__")
+            )
+        return pd.concat(blocks, axis=1)
+
+    def fit_score(fit_frame, eval_frame, spec, context, n_estimators) -> float:
+        if context is not None:
+            fit_frame = _stratified(fit_frame, target, context)
+        f_fit = build(fit_frame, spec)
+        f_eval = build(eval_frame, spec).reindex(columns=f_fit.columns, fill_value=np.nan)
+        model = TabICLClassifier(
+            n_estimators=n_estimators, device=args.device, random_state=0
+        ).fit(_numeric(f_fit), fit_frame[target].to_numpy())
+        proba = model.predict_proba(_numeric(f_eval))[:, 1]
+        return roc_auc_score(eval_frame[target].to_numpy(), proba) * 100
+
+    def safe(label, fn):
+        """Score a candidate, treating "cannot run" as unselectable rather than fatal.
+
+        rel-avito's full context is 116,598 rows and OOMs at 59 GB on CPU. That is a
+        real property of the configuration, not an accident of the sweep, so the right
+        response is to score it -inf and carry on -- the calibration then selects
+        something that actually runs, which is what a caller wants.
+        """
+        try:
+            return fn()
+        except Exception as exc:                      # noqa: BLE001 - any failure is unselectable
+            print(f"    {label}: unusable ({type(exc).__name__}: {str(exc)[:70]})", flush=True)
+            return float("-inf")
+
+    # ---- selection, on validation only -------------------------------------------
+    t0 = time.perf_counter()
+    # Feature specs are compared at a small, fixed context. Holding context constant is
+    # what makes the comparison about features; letting it float would also make each
+    # candidate cost a full-context fit, which on rel-avito's 116,598 rows is hours.
+    feature_result = sweep_configurations(
+        FEATURE_CANDIDATES,
+        lambda spec: safe(spec, lambda: fit_score(
+            train, val, spec, args.select_context, args.select_estimators)),
+        tolerance=args.tolerance,
+        # Fewer columns is cheaper, and FEATURE_CANDIDATES runs widest-first, so the
+        # cheap end is the tail rather than the head.
+        cheaper_first=False,
+    )
+    print(f"\nfeature spec  chosen={feature_result.chosen}  {feature_result.curve}", flush=True)
+
+    # Candidates at or above the pool size are the same experiment; running each would
+    # refit identical data. rel-f1 has 1,353 training rows, so all four collapse to one.
+    seen, context_candidates = set(), []
+    for candidate in CONTEXT_CANDIDATES:
+        size = len(train) if candidate is None else min(candidate, len(train))
+        if size not in seen:
+            seen.add(size)
+            context_candidates.append(candidate)
+
+    context_result = sweep_configurations(
+        context_candidates,
+        lambda n: safe(f"context={n}", lambda: fit_score(
+            train, val, feature_result.chosen, n, args.select_estimators)),
+        tolerance=args.tolerance,
+        cheaper_first=True,
+    )
+    print(f"context       chosen={context_result.chosen}  {context_result.curve}", flush=True)
+    print(f"selection took {time.perf_counter() - t0:.0f}s", flush=True)
+
+    # ---- the test split, once ------------------------------------------------------
+    fit_frame = pd.concat([train, val], ignore_index=True)
+    auc = fit_score(
+        fit_frame, test, feature_result.chosen, context_result.chosen, args.n_estimators
+    )
+    print(
+        f"\n{args.dataset}/{args.task}  CALIBRATED TEST ROC-AUC x100 = {auc:.2f}"
+        f"   (max_columns={feature_result.chosen[0]}, top_k={feature_result.chosen[1]}, "
+        f"mode={feature_result.chosen[2]}, context={context_result.chosen})",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

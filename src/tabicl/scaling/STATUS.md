@@ -136,6 +136,17 @@ free text and hurts badly. `include_mode` adds the modal value, all-history only
 Fit on `train`+`val`, score the held-out `test` split. Test ROC-AUC x100. Comparison
 columns are published figures from the TabPFN-3 paper's Table 14.
 
+> **Read this table as a per-task maximum, not as a procedure.** Each row is the best of
+> several configurations — `max_columns` on rel-event, join-versus-scan on rel-trial,
+> context size on rel-avito — and those configurations were compared *on the test split*.
+> That is selection on test, and it inflates the column by an unknown amount. The
+> published figures it sits beside are presumably single-configuration results, so the
+> comparison is not like-for-like in our favour.
+>
+> `python -m tabicl.scaling.eval_relbench_calibrated <dataset> <task>` runs the honest
+> version: every setting chosen on a validation split, test touched once. Expect lower
+> numbers.
+
 | task | this branch | TabPFN-REL | RelGNN | RDBLearn+v3 |
 |---|---:|---:|---:|---:|
 | rel-f1 / driver-top3 | **79.77** | 79.98 | 85.69 | 82.72 |
