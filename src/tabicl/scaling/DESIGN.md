@@ -240,7 +240,9 @@ refinement rather than a different feature.
   not the triangle that took three years, and `p0_p0_p1` -- two edges early, one late
   -- is triadic closure caught in the act rather than inferred. Paranjape, Benson &
   Leskovec (WSDM 2017) is the reference; the gains reported for temporal motifs are the
-  ones that most consistently survive a degree baseline.
+  ones that most consistently survive a degree baseline. That is the motivation, and it
+  is worth reading against the measurement below, where the cutoff earns its place and
+  the ordering census does not.
 
 Phases reduce to types -- a phase is an edge type that happens to be a time bucket --
 so the ordering census is `typed_triangle_counts` over phase-partitioned edges and
@@ -265,15 +267,70 @@ The `k**3` and `n_phases**3` growth is real but mild at this scale, because each
 runs over a `1/k` slice of the edges; the fixed cost of symmetrising and deduping the
 edge list is a large share of the untyped 1.48 s baseline.
 
-**Not yet validated on RelBench.** The typed census is verified against brute-force
-enumeration of node triples, and the temporal path against the static features it must
-reduce to; that establishes correctness, not usefulness.
-`eval_relbench_typed_temporal.py` is the experiment that would settle usefulness -- it
-splits rel-event's user-user graph into declared friendship and timestamped
-co-interest, and compares the leaky static features against strictly causal ones -- but
-it has not been run, so nothing here should be read as an AUC claim. Given the
-existing ablation, the prior should be that typed and temporal features have to *earn*
-their place against degree, exactly as untyped triangles largely failed to.
+#### Which of them earns it (RelBench rel-event again)
+
+rel-event has three user-user relations, not the one the earlier run used:
+
+| relation | edges | task users | timestamped |
+|---|---:|---:|---|
+| `friend` (`user_friends`) | 213,703 | 91.8% | **no** |
+| `coinvite` (same event, invited) | 72,383 | 78.0% | yes |
+| `coattend` (same event, yes/maybe) | 16,589 | 44.1% | yes |
+
+Co-occurrence edges are capped at 40 users per event -- a 10,000-invitee event
+contributes 50M pairs and nothing discriminative -- and dated by the event's
+`start_time`. That is deliberately conservative: the invitation was sent *before* the
+event, so the edge is credited later than it truly formed, which under-uses information
+and cannot leak.
+
+`eval_relbench_typed_temporal.py`, same task and split as the table above:
+
+| | features | TabICL AUC | GBDT AUC |
+|---|---:|---:|---:|
+| A relational only | 32 | 0.6032 | 0.6509 |
+| B + static friend motifs | 35 | 0.7332 | 0.7258 |
+| G + static co-occurrence | 35 | 0.8166 | 0.7985 |
+| D + causal motifs | 35 | 0.8056 | 0.7604 |
+| C + typed static motifs | 45 | **0.8591** | 0.8174 |
+| E + causal, windowed, phased | 46 | 0.7921 | 0.7559 |
+| F + static friend AND causal | 49 | 0.8162 | 0.7477 |
+
+B reproduces the 0.7332 recorded above, so this is the same measurement as before.
+
+**Type splitting earns it: +0.126 over untyped (B -> C).** That is comparable to the
+entire original motif gain, obtained by splitting one relation into three, and it is
+the one refinement degree provably cannot supply. TabICL also pulls ahead of GBDT here
+(0.8591 vs 0.8174) where the untyped run had them level.
+
+**Causality is nearly free, and G is what shows it.** D beats B by +0.072, and the
+tempting reading -- that enforcing the cutoff pays -- is wrong. D differs from B in two
+ways, so level G holds the relation fixed and removes only the cutoff:
+
+| comparison | isolates | delta |
+|---|---|---:|
+| B -> G | relation choice | **+0.083** |
+| G -> D | causality | **-0.011** |
+
+Nearly all of D - B is relation choice. Enforcing causality costs about a hundredth of
+AUC, which is the expected direction: removing future information should lose a little.
+The useful conclusion is that the leak recorded against the original result was *not*
+propping it up, so the causal version is worth shipping for correctness at negligible
+cost.
+
+**Windows and phases do not earn it: -0.014 (D -> E).** Eleven extra columns for a loss.
+The recency/ordering half of the temporal machinery is a negative result on this task.
+`p0_p0_p1` is a well-motivated feature and the census is exact, but rel-event's
+prediction window is five months against event timestamps that only reach 13.9% coverage
+by the midpoint cutoff, so most rows see too little history for a phase split to mean
+anything. A denser, longer-running temporal graph is where it would get a fair test.
+
+**Not yet run: typed *and* causal.** `temporal_motif_features` takes a single edge set,
+so there is no typed causal variant -- per-type calls would give within-type triangles
+but not cross-type ones, and `tri__friend_coinvite_coinvite` is exactly the kind of
+column that earned C its +0.126. Since typing is where the signal is and causality is
+nearly free, extending the temporal path to accept `edges_by_type` is the obvious next
+step. F (0.8162) is not that experiment: it bolts untyped causal columns onto untyped
+friendship columns and lands below C.
 
 ### Cyclic patterns: worst-case optimal joins
 

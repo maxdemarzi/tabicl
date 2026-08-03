@@ -1,35 +1,39 @@
 """Does splitting motifs by edge type, or making them causal, beat the static count?
 
 `eval_relbench_motif.py` established +0.135 AUC on rel-event / user-ignore from three
-untyped columns, and the ablation in DESIGN.md then attributed ~85% of that to degree
-alone. Two things follow from the literature, and this script tests both.
+untyped columns, and the ablation in DESIGN.md attributed ~85% of that to degree alone.
+Two refinements are not recoverable from degree, and this script tests both.
 
-**Type splitting.** Most of what an untyped triangle count carries is degree in
-disguise, which is the expected result: motif counts are partly determined by the
-degree sequence. A *typed* count is not recoverable that way, which is the argument
-Lichtenwalter & Chawla make for vertex collocation profiles. rel-event has two
-user-user relations to split on -- declared friendship, and co-interest in the same
-event -- so the split is available without leaving the dataset.
+**Type splitting.** rel-event has three user-user relations, not one:
 
-**Causality.** The recorded +0.135 is an upper bound, because `user_friends` carries
-no timestamp and a friendship formed after a prediction time is still visible to it.
-`event_interest` *is* timestamped, so a co-interest graph can be built strictly before
-each prediction time. Levels D and E use only timestamped edges, which makes them the
-first strictly causal graph features here -- and the honest comparison for B.
+  friend     `user_friends`, 213,703 non-null edges, 90.5% of task users, NO timestamp
+  coinvite   both users invited to the same event, timestamped by the event
+  coattend   both users answered yes/maybe to the same event, timestamped
+
+**Causality.** `user_friends` has no timestamp, so the recorded +0.135 lets a
+friendship formed after a prediction time inform that prediction. The co-occurrence
+relations are timestamped, so they can be cut strictly before each prediction time.
+
+Dating a co-occurrence edge at the event's `start_time` is conservative: the invitation
+was sent before the event, so the edge is credited later than it really formed. That
+under-uses information and cannot leak, which is the right direction to err.
 
 Levels
 ------
   A  relational history only
-  B  + static friendship motifs           (reproduces the recorded result; leaky)
-  C  + typed static motifs                (friend / co-interest, still leaky)
-  D  + causal co-interest motifs          (strictly before the cutoff)
-  E  + causal, windowed, phase-split      (recency and ordering)
+  B  + static friend motifs        reproduces the recorded result
+  C  + typed static motifs         does splitting by relation beat one untyped count
+  D  + causal motifs               strictly before the cutoff -- but drops friendship
+  E  + causal, windowed, phased    recency and ordering
+  F  + static friend AND causal    the combination worth shipping
+
+**B -> D changes two things at once** -- it adds causality and removes the only
+relation covering 90% of task users. F is the controlled version: it holds the
+friendship features fixed and asks what causal temporal features add on top.
 
 Usage
 -----
     python -m tabicl.scaling.eval_relbench_typed_temporal [levels] [--max-event N]
-
-``levels`` is a subset of ``ABCDE``; default is all of them.
 """
 
 import argparse
@@ -57,10 +61,19 @@ from tabicl.scaling import (
 )
 
 TASK = "user-ignore"
-# Co-interest is a clique per event, so one popular event dominates the edge list and
-# contributes nothing discriminative. Events above this many interested users are
-# dropped; the count of what that removed is printed rather than left implicit.
-DEFAULT_MAX_EVENT = 200
+# Co-occurrence is a clique per event, so a 10,000-invitee event alone would contribute
+# 50M pairs and nothing discriminative. The cap is the single most consequential knob
+# here, so what it removes is printed rather than left implicit.
+DEFAULT_MAX_EVENT = 40
+LABELS = {
+    "A": "relational only",
+    "B": "+ static friend motifs",
+    "C": "+ typed static motifs",
+    "D": "+ causal motifs",
+    "E": "+ causal, windowed, phased",
+    "F": "+ static friend AND causal",
+    "G": "+ static co-occurrence",
+}
 
 
 def numeric(df: pd.DataFrame) -> np.ndarray:
@@ -71,98 +84,114 @@ def numeric(df: pd.DataFrame) -> np.ndarray:
     return np.nan_to_num(out.to_numpy(dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
 
 
-def event_column(db, table: str) -> str:
-    """Find the column of ``table`` that points at the events table.
+def cooccurrence_edges(attendees: pd.DataFrame, statuses, max_event: int):
+    """Users who answered the same event alike, timestamped when that event ran.
 
-    Read from the schema rather than assumed, because guessing a foreign key name is
-    exactly the kind of thing that silently produces a wrong graph instead of an error.
+    A pair that co-occurs on several events is dated by the *earliest* of them: that is
+    when the relationship first existed, and any later date would hide it from cutoffs
+    that should see it.
     """
-    fkeys = getattr(db.table_dict[table], "fkey_col_to_pkey_table", {}) or {}
-    targets = [col for col, points_to in fkeys.items() if points_to != "users"]
-    if len(targets) != 1:
-        raise RuntimeError(
-            f"cannot identify the event column of {table!r}: foreign keys are {fkeys}"
-        )
-    return targets[0]
+    df = attendees[attendees["status"].isin(statuses)]
+    df = df[["event", "user_id", "start_time"]].dropna()
+    sizes = df.groupby("event")["user_id"].transform("size")
+    over = sizes > max_event
+    dropped = int(df.loc[over, "event"].nunique())
+    df = df[~over]
+    if df.empty:
+        return np.empty((0, 2)), np.empty(0), dropped
 
-
-def cointerest_edges(interest: pd.DataFrame, user_col: str, event_col: str, time_col: str,
-                     max_event: int):
-    """Users who expressed interest in the same event, timestamped when the pair closed.
-
-    An edge exists from the moment *both* endpoints have shown interest, so the pair
-    carries the later of the two timestamps. Dating it any earlier would leak.
-    """
-    df = interest[[user_col, event_col, time_col]].dropna()
-    sizes = df.groupby(event_col)[user_col].transform("size")
-    dropped = int((sizes > max_event).groupby(df[event_col]).first().sum())
-    df = df[sizes <= max_event]
-
-    left = df.rename(columns={user_col: "u", time_col: "tu"})
-    right = df.rename(columns={user_col: "v", time_col: "tv"})
-    pairs = left.merge(right, on=event_col)
+    left = df.rename(columns={"user_id": "u"})
+    right = df.rename(columns={"user_id": "v"})[["event", "v"]]
+    pairs = left.merge(right, on="event")
     pairs = pairs[pairs["u"] < pairs["v"]]
     if pairs.empty:
-        return np.empty((0, 2), dtype=object), np.empty(0), dropped
+        return np.empty((0, 2)), np.empty(0), dropped
 
-    # Same pair can co-occur on several events; keep the earliest such moment.
-    when = pairs[["tu", "tv"]].max(axis=1)
-    pairs = pairs.assign(when=when).groupby(["u", "v"], as_index=False)["when"].min()
-    return pairs[["u", "v"]].to_numpy(), pairs["when"].to_numpy(), dropped
+    first = pairs.groupby(["u", "v"], as_index=False)["start_time"].min()
+    return first[["u", "v"]].to_numpy(), first["start_time"].to_numpy(), dropped
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("levels", nargs="?", default="ABCDE")
+    ap.add_argument("levels", nargs="?", default="ABCDEF")
     ap.add_argument("--max-event", type=int, default=DEFAULT_MAX_EVENT)
+    ap.add_argument("--n-estimators", type=int, default=4)
     args = ap.parse_args()
-    levels = set(args.levels.upper())
+    levels = [lv for lv in "ABCDEFG" if lv in set(args.levels.upper())]
 
-    db = get_dataset("rel-event", download=True).get_db()
-    task = get_task("rel-event", TASK, download=True)
+    db = get_dataset("rel-event").get_db()
+    task = get_task("rel-event", TASK)
     key, target = task.entity_col, task.target_col
     train, val = task.get_table("train").df, task.get_table("val").df
     print(f"task={TASK} entity_col={key!r} target={target!r} "
           f"train={len(train)} val={len(val)} pos={train[target].mean():.3f}")
+    print(f"cutoffs: {train['timestamp'].nunique()} train + {val['timestamp'].nunique()} val "
+          f"distinct, {str(train['timestamp'].min())[:10]} -> {str(val['timestamp'].max())[:10]}")
     print(f"compiled WCOJ backend: {native_available()}")
 
     users_tbl = db.table_dict["users"].df
     interest = db.table_dict["event_interest"].df
-    ev_col = event_column(db, "event_interest")
+    attendees = db.table_dict["event_attendees"].df
 
-    # --- one node id space shared by every relation --------------------------------
-    friends = db.table_dict["user_friends"].df[["user", "friend"]].dropna()
     t0 = time.perf_counter()
-    co_pairs, co_times, dropped = cointerest_edges(
-        interest, "user", ev_col, "timestamp", args.max_event
+    friends = db.table_dict["user_friends"].df[["user", "friend"]].dropna()
+    invite_pairs, invite_times, inv_dropped = cooccurrence_edges(
+        attendees, ["invited"], args.max_event
     )
-    print(f"co-interest: {len(co_pairs):,} edges in {time.perf_counter()-t0:.1f}s "
-          f"({dropped:,} events over {args.max_event} interested users dropped)")
+    attend_pairs, attend_times, att_dropped = cooccurrence_edges(
+        attendees, ["yes", "maybe"], args.max_event
+    )
+    print(f"edges built in {time.perf_counter()-t0:.0f}s: "
+          f"friend={len(friends):,}  coinvite={len(invite_pairs):,} ({inv_dropped:,} events "
+          f"over {args.max_event} dropped)  coattend={len(attend_pairs):,} ({att_dropped:,} dropped)")
 
-    universe = np.concatenate([
+    # --- one node id space shared by every relation ---------------------------------
+    blocks = [
         friends["user"].to_numpy(), friends["friend"].to_numpy(),
-        co_pairs[:, 0] if len(co_pairs) else np.empty(0),
-        co_pairs[:, 1] if len(co_pairs) else np.empty(0),
+        invite_pairs[:, 0], invite_pairs[:, 1],
+        attend_pairs[:, 0], attend_pairs[:, 1],
         train[key].to_numpy(), val[key].to_numpy(),
-    ])
-    codes, uniques = pd.factorize(universe)
+    ]
+    codes, uniques = pd.factorize(np.concatenate(blocks))
     lookup = pd.Series(np.arange(len(uniques)), index=uniques)
 
-    n_fr = len(friends)
-    friend_edges = np.column_stack([codes[:n_fr], codes[n_fr:2 * n_fr]]).astype(np.int64)
-    start = 2 * n_fr
-    co_edges = np.column_stack(
-        [codes[start:start + len(co_pairs)], codes[start + len(co_pairs):start + 2 * len(co_pairs)]]
-    ).astype(np.int64)
-    print(f"graph: {len(friend_edges):,} friendship + {len(co_edges):,} co-interest edges "
-          f"over {len(uniques):,} users")
+    cut, sliced = 0, []
+    for block in blocks:
+        sliced.append(codes[cut:cut + len(block)])
+        cut += len(block)
+    friend_edges = np.column_stack(sliced[0:2]).astype(np.int64)
+    invite_edges = np.column_stack(sliced[2:4]).astype(np.int64)
+    attend_edges = np.column_stack(sliced[4:6]).astype(np.int64)
 
-    # --- feature blocks -------------------------------------------------------------
+    # Every timestamped edge, as one relation, for the untyped causal levels.
+    causal_edges = np.vstack([invite_edges, attend_edges])
+    causal_times = np.concatenate([invite_times, attend_times])
+
+    by_type = {"friend": friend_edges, "coinvite": invite_edges, "coattend": attend_edges}
+    for name, e in by_type.items():
+        reach = np.unique(e) if e.size else np.empty(0, dtype=np.int64)
+        seen = lookup.reindex(train[key].to_numpy()).to_numpy()
+        print(f"  {name:<9} {len(e):>8,} edges   {np.isin(seen, reach).mean():>6.1%} of task users")
+
     static_friend = motif_features(friend_edges)
-    typed_static = typed_motif_features({"friend": friend_edges, "cointerest": co_edges})
+    typed_static = typed_motif_features(by_type)
+    # Level G's control: the same edges D sees, with the cutoff removed. G vs D is
+    # causality alone; B vs G is relation choice alone. Without it, D - B credits
+    # causality for a change that also swapped which relation is being measured.
+    static_causal = motif_features(causal_edges)
 
     def node_ids(entity_df):
-        return lookup.reindex(entity_df[key].to_numpy()).to_numpy()
+        return lookup.reindex(entity_df[key].to_numpy()).to_numpy().astype(np.int64)
+
+    def causal_block(entity_df, windows, n_phases):
+        return temporal_motif_features(
+            causal_edges,
+            causal_times,
+            nodes=node_ids(entity_df),
+            cutoffs=entity_df["timestamp"].to_numpy(),
+            windows=windows,
+            n_phases=n_phases,
+        )
 
     def build(entity_df, level):
         base = entity_df.merge(users_tbl, left_on=key, right_on="user_id", how="left")
@@ -177,54 +206,44 @@ def main() -> None:
             return feats
 
         ids = node_ids(entity_df)
-        if level == "B":
+        if level in ("B", "F"):
             joined = static_friend.reindex(ids)
             for col in static_friend.columns:
                 feats[f"friend__{col}"] = joined[col].to_numpy()
-        elif level == "C":
+        if level == "C":
             joined = typed_static.reindex(ids)
             for col in typed_static.columns:
                 feats[col] = joined[col].to_numpy()
-        else:
-            windows = {"all": None} if level == "D" else {"all": None, "d30": pd.Timedelta("30D")}
-            causal = temporal_motif_features(
-                co_edges,
-                co_times,
-                nodes=np.nan_to_num(ids, nan=-1).astype(np.int64),
-                cutoffs=entity_df["timestamp"].to_numpy(),
-                windows=windows,
-                n_phases=1 if level == "D" else 2,
-            )
+        if level == "G":
+            joined = static_causal.reindex(ids)
+            for col in static_causal.columns:
+                feats[f"cooc__{col}"] = joined[col].to_numpy()
+        if level in ("D", "E", "F"):
+            if level == "D":
+                windows, phases = {"all": None}, 1
+            else:
+                windows, phases = {"all": None, "d30": pd.Timedelta("30D")}, 2
+            causal = causal_block(entity_df, windows, phases)
             for col in causal.columns:
-                feats[f"co__{col}"] = causal[col].to_numpy()
+                feats[f"causal__{col}"] = causal[col].to_numpy()
         return feats
 
     y_tr, y_va = train[target].to_numpy(), val[target].to_numpy()
-    labels = {
-        "A": "relational only",
-        "B": "+ static friend motifs",
-        "C": "+ typed static motifs",
-        "D": "+ causal co-interest",
-        "E": "+ causal, windowed, phased",
-    }
-    for level in "ABCDE":
-        if level not in levels:
-            continue
+    print()
+    for level in levels:
         t0 = time.perf_counter()
         f_tr, f_va = build(train, level), build(val, level)
         f_va = f_va.reindex(columns=f_tr.columns, fill_value=np.nan)
         X_tr, X_va = numeric(f_tr), numeric(f_va)
 
-        clf = TabICLClassifier(n_estimators=4, device="cpu", random_state=0).fit(X_tr, y_tr)
+        clf = TabICLClassifier(
+            n_estimators=args.n_estimators, device="cpu", random_state=0
+        ).fit(X_tr, y_tr)
         auc = roc_auc_score(y_va, clf.predict_proba(X_va)[:, 1])
         gbdt = HistGradientBoostingClassifier(random_state=0).fit(X_tr, y_tr)
         auc_g = roc_auc_score(y_va, gbdt.predict_proba(X_va)[:, 1])
-        print(f"  {level} {labels[level]:<28} features={X_tr.shape[1]:>4}  "
+        print(f"  {level} {LABELS[level]:<28} features={X_tr.shape[1]:>4}  "
               f"TabICL AUC={auc:.4f}   GBDT AUC={auc_g:.4f}   ({time.perf_counter()-t0:.0f}s)")
-
-    ids = node_ids(train)
-    in_friend = static_friend.reindex(ids)["degree"].notna().mean()
-    print(f"\ntask users in the friendship graph: {in_friend:.1%}")
 
 
 if __name__ == "__main__":
