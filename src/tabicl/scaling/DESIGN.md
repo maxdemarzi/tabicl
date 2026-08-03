@@ -795,16 +795,42 @@ Sweeping the cap on rel-event / user-ignore (official test split):
 | 4 | 200 | 77.85 |
 | unbounded | 1,670 | *OOM at 35.7 GB* |
 
-Monotone, and in the direction that says the budget is not merely damage control:
-**the tightest cap scored highest**. Going from 1,670 features to 74 did not cost
-accuracy, it bought 3 points of it, which is the usual sign that the marginal columns
-were noise the model then had to spend context on. "As many features as fit" is the
-wrong default.
+Monotone on this task, and the tightest cap scored highest: 1,670 features down to 74
+bought three points rather than costing them.
 
 The sweep stops at 1, 2 and 4 deliberately. `max_columns=8` drove free RAM to 235 MB of
 64 GB and began paging -- the same thrash that repeatedly killed this task before -- so
 it was stopped rather than left to produce a number that would really be measuring the
-page file. The useful direction was downward anyway.
+page file.
+
+#### The generalisation, which does not hold
+
+An earlier version of this section read "the tightest cap wins" and "as many features as
+fit is the wrong default". **That was one task generalised into a recommendation, and it
+is wrong.** Running the same cap across the other tasks:
+
+| task | uncapped | `max_columns=2` | effect |
+|---|---:|---:|---:|
+| rel-event / user-ignore | *OOM* | 79.85 | **enables the task at all** |
+| rel-trial / study-outcome | 65.40 | 65.40 | 0.0 |
+| rel-f1 / driver-top3 | 79.77 | 60.31 | **-19.5** |
+
+A 22-point spread in the effect of one setting. rel-f1's three children are small and
+entirely numeric -- 359 features over 1,941 rows, none of them redundant -- so capping
+at two columns per table deletes most of the signal. rel-event's 1,670 features over a
+2.5M-row table are mostly noise. The cap does not know the difference, because coverage
+cannot.
+
+The corrected reading: **`max_columns` is a rescue, not a default.** Reach for it when a
+schema cannot otherwise run, and do not tighten it on a schema that already fits. The
+right value is task-dependent by a margin far larger than any effect measured elsewhere
+in this file, so it should be chosen on a validation split rather than assumed -- the
+same anchor-style calibration that the sampling literature recommends for context size.
+
+This is the third time in this project that a single-task result did not survive a
+second dataset (windows: +0.089 on rel-f1, median +0.001 elsewhere; the "2.5-point
+categorical gap" that turned out to be a three-variable comparison). The pattern is
+consistent enough to be a rule: **no lever goes in as a recommendation on one task.**
 
 ### Where this lands against published RelBench numbers
 

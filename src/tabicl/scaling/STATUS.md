@@ -65,12 +65,15 @@ table = Table(
     child_df, foreign_key="user_id", name="visits",
     time_column="ts",                     # enables per-row cutoffs and windows
     windows=[pd.Timedelta(days=30)],      # look-back windows
-    max_columns=2,                        # cap source columns by non-null coverage
+    max_columns=2,                        # rescue for schemas that cannot fit; see below
+    top_k_categories=4,                   # per-category proportions (opt-in)
+    min_category_share=0.5,               # skip columns a codebook cannot describe
+    include_mode=True,                    # modal value, all-history only
     primary_key="id", children=[...],     # depth-2; requires unique entity keys
 )
 
 features = flatten_relational(entity_df, "user_id", [table], cutoff_column="ts")
-features = asof_statistics(table, keys, cutoffs)   # O(n log n) scan, numeric only
+features = asof_statistics(table, keys, cutoffs)   # O(n log n) scan
 ```
 
 Two aggregation paths, same `Table` spec:
@@ -78,7 +81,7 @@ Two aggregation paths, same `Table` spec:
 | | `flatten_relational` | `asof_statistics` |
 |---|---|---|
 | cost | `|child| x rows sharing a key` | `O(n log n)` |
-| types | numeric + categorical (nunique, mode) | numeric only |
+| types | numeric + categorical (nunique, mode) | numeric; categorical when opted in |
 | windows | supported | supported, nearly free (prefix differences) |
 | depth-2 | yes, unique entity keys only | no |
 | guard | `MAX_JOIN_PAIRS = 50M` | n/a |
@@ -88,7 +91,19 @@ derives `mean`/`std` at the root, so nested levels compose correctly. Variance
 accumulates around a per-column pivot, which holds precision at large offsets.
 
 `max_columns` selects by non-null coverage — target-free, so it cannot leak, and
-deterministic on ties. On wide schemas it is worth setting low.
+deterministic on ties.
+
+**It is a rescue, not a default.** The same setting is worth +3.0 on one task, 0.0 on
+another, and −19.5 on a third (table below). Reach for it when a schema cannot otherwise
+run; do not tighten it on one that already fits, and choose the value on a validation
+split rather than assuming one.
+
+Categorical statistics on the as-of path are opt-in via `top_k_categories`. Each
+categorical column becomes per-category proportions over a globally fixed codebook, plus
+an `other` bucket — exact, no sketches, and valid over windows because counts are
+invertible. `min_category_share` skips columns whose codebook would capture too little
+mass; without that gate the block emits near-constant columns for free text and
+*hurts*. `include_mode` adds the modal value, all-history only.
 
 ## Measured results
 
@@ -116,7 +131,8 @@ Ranked by measured AUC contribution, largest first:
 |---|---|
 | which relations you traverse | +0.083 |
 | look-back windows | +0.089 on rel-f1; median +0.001 elsewhere |
-| column budget | +3.0 on rel-event (74 features beat 1,670) |
+| column budget | +3.0 rel-event, 0.0 rel-trial, **−19.5 rel-f1** — task-dependent |
+| categorical blocks (as-of) | +1.25 on rel-trial; no-op where children are numeric |
 | type-aware motifs | +0.021 |
 | the whole WCOJ/FAQ engine | +0.016 |
 
@@ -158,8 +174,10 @@ Build Tools — clang alone cannot link a CPython extension.
   problems are what chunking is for.
 - **Depth-2 requires unique entity keys.** Available on rel-trial; not on rel-f1 or
   rel-event, whose task tables repeat keys.
-- **`asof_statistics` is numeric-only.** No `nunique`/`mode`, no depth-2. Sketches
-  (HLL, Space-Saving) would lift the first restriction.
+- **`asof_statistics` covers categoricals only partly.** `nunique` and `mode` are
+  all-history only; over a *window* `nunique` needs an offline dominance count and
+  `mode` has no range algorithm. Per-category proportions do work over windows. No
+  depth-2 on this path.
 - **MQA cannot be applied post hoc.** Collapsing a trained model's heads destroys
   accuracy; the 8x size win requires pretraining with MQA.
 - **ICL-stage chunking is off by default.** `InferenceManager` already batches that
