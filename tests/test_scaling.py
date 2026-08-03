@@ -1492,3 +1492,31 @@ def test_asof_does_not_claim_to_provide_mode():
     )
     assert not [c for c in scanned.columns if c.endswith("__mode")]
     assert "ev__cat__nunique" in scanned.columns
+
+
+def test_prune_drops_only_the_genuinely_empty_by_default():
+    """Defaults are conservative: aggressive pruning measured -0.095 AUC on rel-event."""
+    from tabicl.scaling import prune_features
+
+    df = pd.DataFrame({
+        "good": np.arange(100.0),
+        "constant": np.ones(100),
+        "half_missing": [1.0, 2.0] * 25 + [np.nan] * 50,
+        "all_missing": [np.nan] * 100,
+    })
+    kept, (val,), dropped = prune_features(df, [df.copy()])
+    assert "good" in kept.columns
+    # half-missing survives: sparse aggregates are weak, not worthless
+    assert "half_missing" in kept.columns
+    assert "constant" in dropped and "all_missing" in dropped
+    assert list(val.columns) == list(kept.columns)
+
+
+def test_prune_validates_thresholds():
+    from tabicl.scaling import prune_features
+
+    df = pd.DataFrame({"a": [1.0, 2.0]})
+    with pytest.raises(ValueError, match="max_missing"):
+        prune_features(df, max_missing=1.5)
+    with pytest.raises(ValueError, match="max_dominant"):
+        prune_features(df, max_dominant=0.0)
