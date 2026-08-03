@@ -16,7 +16,7 @@ recorded after the cutoff leaks the future. ``cutoff_column`` enforces that.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Sequence, Set, Tuple
+from typing import List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -68,6 +68,15 @@ class Table:
         This table's own identifier. Required only when it has ``children``, since
         that is what the grandchildren's foreign keys point at.
 
+    max_columns : Optional[int], default=None
+        Cap on source columns aggregated from this table, chosen by non-null coverage
+        (most-populated first, ties broken by column order so the choice is
+        deterministic). Every source column becomes several statistics and every
+        window multiplies the set again, so an unbounded wide table is what took
+        rel-event to 1,670 features and 35.7 GB before the model could embed anything.
+        A cap is a blunt instrument -- it does not know which columns matter -- but it
+        converts "cannot run at all" into "runs, possibly missing something".
+
     windows : Sequence, default=()
         Look-back windows, e.g. ``[pd.Timedelta(days=30), pd.Timedelta(days=90)]``.
         Each emits its own block of statistics over child rows falling in
@@ -88,9 +97,25 @@ class Table:
     name: str
     time_column: Optional[str] = None
     columns: Optional[Sequence[str]] = field(default=None)
+    max_columns: Optional[int] = None
     primary_key: Optional[str] = None
     windows: Sequence = field(default=())
     children: Sequence["Table"] = field(default=())
+
+
+def _budgeted_columns(child: Table, df: pd.DataFrame, candidates: Sequence[str]) -> List[str]:
+    """Apply ``max_columns``, keeping the best-populated columns.
+
+    Coverage is a weak proxy for usefulness, but it is target-free -- so it cannot leak
+    -- and it directly targets the failure mode, which is a wide table contributing
+    mostly-empty aggregates that still cost a column each.
+    """
+    candidates = list(candidates)
+    if child.max_columns is None or len(candidates) <= child.max_columns:
+        return candidates
+    coverage = {c: float(df[c].notna().mean()) for c in candidates}
+    ranked = sorted(candidates, key=lambda c: (-coverage[c], candidates.index(c)))
+    return sorted(ranked[: child.max_columns], key=candidates.index)
 
 
 def _resolve(child: Table, cutoff_by_key: Optional[pd.Series]) -> Tuple[pd.DataFrame, Set[str]]:
@@ -129,7 +154,9 @@ def _stat_columns(
     use_cols = child.columns
     if use_cols is None:
         excluded = {child.foreign_key, child.time_column, child.primary_key}
-        use_cols = [c for c in df.columns if c not in excluded and not c.startswith("__")]
+        use_cols = _budgeted_columns(
+            child, df, [c for c in df.columns if c not in excluded and not c.startswith("__")]
+        )
 
     stem = child.name
     out = pd.DataFrame(index=index)
@@ -534,12 +561,12 @@ def asof_statistics(
     df = child.df
     if columns is None:
         excluded = {child.foreign_key, child.time_column, child.primary_key}
-        columns = [
+        columns = _budgeted_columns(child, df, [
             c for c in df.columns
             if c not in excluded
             and pd.api.types.is_numeric_dtype(df[c])
             and not pd.api.types.is_bool_dtype(df[c])
-        ]
+        ])
 
     # One shared factorisation so child rows and entity rows agree on key identity.
     codes, _ = pd.factorize(np.concatenate([df[child.foreign_key].to_numpy(), keys]))

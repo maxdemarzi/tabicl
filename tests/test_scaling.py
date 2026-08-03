@@ -1568,3 +1568,66 @@ def test_asof_handles_pandas_nullable_dtypes():
     assert out["ev__v__count"].iloc[0] == 1.0
     assert out["ev__v__mean"].iloc[0] == pytest.approx(1.0)
     assert np.isnan(out["ev__w__mean"].iloc[0])      # all-null stays unknown
+
+
+def test_max_columns_keeps_the_best_populated_sources():
+    """The budget must cut by coverage, not by column order.
+
+    rel-event needed 35.7 GB because every column of a 2.5M-row table became several
+    statistics. A cap that just took the first N would as happily keep an all-null
+    column and drop a full one.
+    """
+    entity = pd.DataFrame({"uid": [0, 1], "cut": pd.to_datetime(["2026-02-01"] * 2)})
+    child = pd.DataFrame(
+        {
+            "uid": [0, 0, 1],
+            "ts": pd.to_datetime(["2026-01-01"] * 3),
+            "sparse": [1.0, np.nan, np.nan],   # first in order, worst coverage
+            "full": [1.0, 2.0, 3.0],
+            "half": [1.0, np.nan, 3.0],
+        }
+    )
+    table = Table(child, "uid", "ev", time_column="ts", max_columns=2)
+    out = flatten_relational(entity, "uid", [table], cutoff_column="cut")
+
+    sources = {c.split("__")[1] for c in out.columns if c.startswith("ev__") and c != "ev__count"}
+    assert sources == {"full", "half"}, sources
+
+    # Values must be untouched by the presence of a budget.
+    assert out.loc[out.index[0], "ev__full__mean"] == pytest.approx(1.5)
+
+
+def test_max_columns_applies_to_the_asof_path_too():
+    """Both aggregation paths share one budget decision, or the arms stop matching."""
+    from tabicl.scaling import asof_statistics
+
+    child = pd.DataFrame(
+        {
+            "uid": [0, 0, 1],
+            "ts": pd.to_datetime(["2026-01-01"] * 3),
+            "sparse": [np.nan, np.nan, 5.0],
+            "full": [1.0, 2.0, 3.0],
+        }
+    )
+    keys = np.array([0, 1])
+    cutoffs = np.array(pd.to_datetime(["2026-02-01"] * 2))
+
+    capped = asof_statistics(Table(child, "uid", "ev", time_column="ts", max_columns=1), keys, cutoffs)
+    uncapped = asof_statistics(Table(child, "uid", "ev", time_column="ts"), keys, cutoffs)
+
+    assert [c for c in capped.columns if c.endswith("__mean")] == ["ev__full__mean"]
+    assert any("sparse" in c for c in uncapped.columns)
+    # The kept column's statistics are identical either way.
+    pd.testing.assert_series_equal(capped["ev__full__mean"], uncapped["ev__full__mean"])
+
+
+def test_max_columns_above_the_column_count_is_a_no_op():
+    from tabicl.scaling import asof_statistics
+
+    child = pd.DataFrame(
+        {"uid": [0, 1], "ts": pd.to_datetime(["2026-01-01"] * 2), "a": [1.0, 2.0]}
+    )
+    keys, cutoffs = np.array([0, 1]), np.array(pd.to_datetime(["2026-02-01"] * 2))
+    wide = asof_statistics(Table(child, "uid", "ev", time_column="ts", max_columns=99), keys, cutoffs)
+    plain = asof_statistics(Table(child, "uid", "ev", time_column="ts"), keys, cutoffs)
+    pd.testing.assert_frame_equal(wide, plain)

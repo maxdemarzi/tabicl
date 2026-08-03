@@ -751,6 +751,78 @@ It stays **off by default**, and the isolated 3.6x should not be quoted as a win
 only below ~300k rows, above which the peak has moved elsewhere again. Combine with
 `offload="cpu"` at scale. Leave `ICL_CONFIG`'s `row_chunk` off.
 
+### The limit of row chunking: wide tables OOM before it is reached
+
+Row chunking cannot rescue a *feature-count* explosion, and RelBench rel-event is the
+case that showed it. 1,670 features over 21k rows wanted 35.7 GB and died with
+`row_chunk` enabled — because the allocation happens **before** `tf_col` is ever
+called, at `embedding.py:444`:
+
+```python
+src[..., :train_size, :] = src[..., :train_size, :] + y_emb
+```
+
+`src` is the full `(B, C, N, d)` activation, materialised by `_compute_embeddings`
+and handed to the set transformer only afterwards. `row_chunked` swaps out `tf_col`,
+so everything upstream of that swap runs unchanged. Wrapping a callee cannot bound a
+tensor its caller already allocated.
+
+This is a real boundary, not a tuning problem, and it splits the two failure modes:
+
+| symptom | axis | fix |
+|---|---|---|
+| rel-event: 1,670 features, 21k rows | columns | `Table(max_columns=...)` — cut features *before* the model |
+| rel-avito: 149 features, 152k rows | rows | `row_chunk` + `offload` — what they were built for |
+
+`max_columns` caps source columns per table by non-null coverage. On rel-event it took
+1,670 features to 200, feature time to ~5s, and turned "cannot run" into a real score.
+It is deliberately blunt: coverage is a target-free proxy, so it cannot leak, but it
+does not know which columns matter. Chunking the pre-`tf_col` path properly would mean
+pushing the split into `_compute_embeddings` itself — tractable, since columns are
+independent there too, but a change to the model rather than a wrapper around it.
+
+Sweeping the cap on rel-event / user-ignore (official test split):
+
+| `max_columns` | features | test ROC-AUC x100 |
+|---:|---:|---:|
+| 2 | 110 | **79.85** |
+| 4 | 200 | 77.85 |
+| unbounded | 1,670 | *OOM at 35.7 GB* |
+
+The tighter cap scored *higher*. Two features per table beat four, which is the usual
+warning that the marginal columns were noise the model then had to spend context on --
+so the budget is not purely damage control, and "as many features as fit" is the wrong
+default.
+
+### Does schema depth help? A negative result on rel-trial
+
+rel-trial / study-outcome is the one RelBench task where depth-2 is available today:
+`flatten_relational` folds grandchildren only when entity keys are unique, and
+rel-trial's are (11,994 rows, 11,994 distinct — rel-f1 and rel-event both repeat). It
+also has a real two-level chain, `outcomes` (pk=`id`) <- `outcome_analyses`.
+
+It is a favourable case on paper, because `outcomes` carries **no numeric columns at
+all** — only `id` and `nct_id`, both keys. Every numeric quantity in that subtree
+(`param_value`, `p_value`, `ci_*`) sits one level further down, so depth-2 is the only
+way the schema reaches it.
+
+| arm | features | test ROC-AUC x100 |
+|---|---:|---:|
+| depth-1 (`outcomes` only) | 21 | 49.12 |
+| depth-2 (+ `outcome_analyses` folded per outcome) | 63 | 49.37 |
+
+The folding is mechanically correct — 42 extra grandchild statistics materialise, and
+this is the path where the mean-of-means bug lived, so it is also a check on the
+factorized sufficient statistics against real data rather than a fixture. But both arms
+sit at chance, and the extra depth moves nothing. Only 22.5% of outcomes have any
+analysis, so most of those 42 columns are empty for most trials.
+
+Read it narrowly: this says the `outcomes` subtree is uninformative for study-outcome,
+not that depth never pays. It is one task, and it is the only one where the machinery
+could be exercised at all. The result that *does* generalise is the one already recorded
+here — which relations you pick has consistently mattered more than what is computed
+over them.
+
 ### 2. Multi-query KV cache — size confirmed, accuracy says pretrain
 
 `n_train=6000`, `n_features=20`, `nhead=8`:
