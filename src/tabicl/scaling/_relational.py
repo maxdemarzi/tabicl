@@ -475,9 +475,11 @@ def asof_statistics(
     a window is a range, which is done with a monotonic deque over queries sorted by
     cutoff, since both window edges then advance in one direction. Still O(n).
 
-    ``mode`` and ``nunique`` remain absent. Range-mode has no linear algorithm, and
-    range-distinct needs an offline sweep that is not worth it here; use
-    :func:`flatten_relational` when those are wanted.
+    ``nunique`` is covered for the all-history block only. Distinct-count over
+    ``[key_start, t)`` is the number of rows that are the first occurrence of their
+    value within that key, which is a prefix sum of a boolean. Over a *window* the
+    same quantity needs an offline dominance count, and ``mode`` has no linear range
+    algorithm at all -- both stay on :func:`flatten_relational`.
 
     Parameters
     ----------
@@ -576,6 +578,7 @@ def asof_statistics(
     hi = upto(cutoffs)
     block(child.name, hi, starts[entity_key])
     _extremes(out, child.name, columns, df, order, hi, starts[entity_key])
+    _prefix_nunique(out, child.name, child, df, order, sorted_key, hi, starts[entity_key])
     for window in child.windows:
         lo = upto(cutoffs - window)
         label = f"{child.name}_{_window_label(window)}"
@@ -583,6 +586,33 @@ def asof_statistics(
         _extremes(out, label, columns, df, order, hi, lo)
 
     return pd.DataFrame(out)
+
+
+def _prefix_nunique(out, label, child, df, order, sorted_key, hi_idx, lo_idx) -> None:
+    """Distinct-count over each key's prefix, vectorised.
+
+    A row contributes to the distinct count exactly when it is the first occurrence of
+    its value *within its key*. Marking those and taking a running total turns the
+    whole column into one cumulative sum, so a query is a subtraction rather than a
+    set build. This only works because the range starts at the key's own beginning;
+    a window would need an offline dominance count instead.
+    """
+    excluded = {child.foreign_key, child.time_column, child.primary_key}
+    cats = [
+        c for c in df.columns
+        if c not in excluded
+        and not (pd.api.types.is_numeric_dtype(df[c]) and not pd.api.types.is_bool_dtype(df[c]))
+    ]
+    if not cats:
+        return
+
+    for col in cats:
+        values = df[col].to_numpy(object)[order]
+        frame = pd.DataFrame({"k": sorted_key, "v": values})
+        first = ~frame.duplicated(subset=["k", "v"], keep="first")
+        running = np.concatenate([[0], np.cumsum(first.to_numpy())])
+        counts = running[np.asarray(hi_idx)] - running[np.asarray(lo_idx)]
+        out[f"{label}__{col}__nunique"] = counts.astype(np.float64)
 
 
 def _extremes(out, label, columns, df, order, hi_idx, lo_idx) -> None:

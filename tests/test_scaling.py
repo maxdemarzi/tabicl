@@ -1454,3 +1454,41 @@ def test_asof_min_max_match_the_join_path():
         b = scanned[col].to_numpy(dtype=float)
         both_nan = np.isnan(a) & np.isnan(b)
         np.testing.assert_allclose(a[~both_nan], b[~both_nan], rtol=1e-9, atol=1e-9)
+
+
+def test_asof_prefix_nunique_matches_join_path():
+    """Distinct-count over a key's prefix is a cumulative sum of first occurrences."""
+    from tabicl.scaling import asof_statistics
+
+    rng = np.random.default_rng(5)
+    ent = pd.DataFrame({
+        "uid": rng.integers(0, 20, 120),
+        "cut": pd.Timestamp("2026-01-01") + pd.to_timedelta(rng.integers(0, 200, 120), unit="D"),
+    })
+    ch = pd.DataFrame({
+        "uid": rng.integers(0, 20, 3000),
+        "ts": pd.Timestamp("2026-01-01") + pd.to_timedelta(rng.integers(0, 200, 3000), unit="D"),
+        "cat": rng.integers(0, 9, 3000).astype(str),
+    })
+    tbl = Table(ch, "uid", "ev", time_column="ts")
+    joined = flatten_relational(ent, "uid", [tbl], cutoff_column="cut")
+    scanned = asof_statistics(tbl, ent["uid"].to_numpy(), ent["cut"].to_numpy())
+
+    a = np.nan_to_num(joined["ev__cat__nunique"].to_numpy(dtype=float))
+    b = scanned["ev__cat__nunique"].to_numpy(dtype=float)
+    np.testing.assert_allclose(a, b)
+
+
+def test_asof_does_not_claim_to_provide_mode():
+    """mode has no linear range algorithm; it must stay on the join path."""
+    from tabicl.scaling import asof_statistics
+
+    ch = pd.DataFrame({
+        "uid": [0, 0], "ts": pd.to_datetime(["2026-01-01", "2026-01-02"]), "cat": ["a", "b"],
+    })
+    scanned = asof_statistics(
+        Table(ch, "uid", "ev", time_column="ts"),
+        np.array([0]), np.array([np.datetime64("2026-02-01")]),
+    )
+    assert not [c for c in scanned.columns if c.endswith("__mode")]
+    assert "ev__cat__nunique" in scanned.columns
