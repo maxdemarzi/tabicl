@@ -1547,3 +1547,24 @@ def test_estimate_matches_the_actual_join_size():
     assert _estimate_pairs(Table(child, "uid", "ev"), anchor) == 7
     actual = len(child.merge(anchor, left_on="uid", right_on="__key"))
     assert actual == 7
+
+
+def test_asof_handles_pandas_nullable_dtypes():
+    """Int64/Float64 masked arrays refuse a plain float64 conversion when null."""
+    from tabicl.scaling import asof_statistics
+
+    ent = pd.DataFrame({"uid": [0, 1], "cut": pd.to_datetime(["2026-02-01"] * 2)})
+    ch = pd.DataFrame({
+        "uid": [0, 0, 1],
+        "ts": pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-03"]),
+        "v": pd.array([1, None, 3], dtype="Int64"),
+        "w": pd.array([None, None, None], dtype="Float64"),
+    })
+    out = asof_statistics(Table(ch, "uid", "ev", time_column="ts"),
+                          ent["uid"].to_numpy(), ent["cut"].to_numpy())
+    assert out["ev__count"].tolist() == [2.0, 1.0]
+    # One null used to poison every prefix after it via cumsum, silently returning
+    # all-NaN for the column. Nulls now contribute zero and leave the denominator.
+    assert out["ev__v__count"].iloc[0] == 1.0
+    assert out["ev__v__mean"].iloc[0] == pytest.approx(1.0)
+    assert np.isnan(out["ev__w__mean"].iloc[0])      # all-null stays unknown

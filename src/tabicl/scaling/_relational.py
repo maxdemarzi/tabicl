@@ -563,12 +563,18 @@ def asof_statistics(
     # where double precision has digits to spare.
     shifts = {}
     for col in columns:
-        values = df[col].to_numpy(dtype=np.float64)[order]
-        shift = float(np.nanmean(values)) if len(values) else 0.0
+        values = df[col].to_numpy(dtype=np.float64, na_value=np.nan)[order]
+        finite = np.isfinite(values)
+        shift = float(values[finite].mean()) if finite.any() else 0.0
         shifts[col] = shift
-        centred = values - shift
+        # A cumulative sum propagates NaN, so one null would poison every prefix after
+        # it and the column would silently return all-NaN statistics. Nulls contribute
+        # zero to the sums and are excluded from the denominator instead, which is what
+        # the join path's non-null count does.
+        centred = np.where(finite, values - shift, 0.0)
         prefixes[f"{col}__sum"] = np.cumsum(centred)
         prefixes[f"{col}__sumsq"] = np.cumsum(centred**2)
+        prefixes[f"{col}__n"] = np.cumsum(finite.astype(np.float64))
     # Cumulative sums run across key boundaries, so every lookup is expressed as a
     # difference against the value at the key's own start -- which removes the offset.
     for name, arr in prefixes.items():
@@ -592,6 +598,9 @@ def asof_statistics(
         for col in columns:
             d_sum = prefixes[f"{col}__sum"][hi_idx] - prefixes[f"{col}__sum"][lo_idx]
             d_sq = prefixes[f"{col}__sumsq"][hi_idx] - prefixes[f"{col}__sumsq"][lo_idx]
+            # Denominator is this column's non-null count, not the row count.
+            n = prefixes[f"{col}__n"][hi_idx] - prefixes[f"{col}__n"][lo_idx]
+            out[f"{label}__{col}__count"] = n
             with np.errstate(invalid="ignore", divide="ignore"):
                 safe = np.maximum(n, 1)
                 centred_mean = d_sum / safe
@@ -653,7 +662,7 @@ def _extremes(out, label, columns, df, order, hi_idx, lo_idx) -> None:
     entity accumulated, so they are short in practice.
     """
     for col in columns:
-        values = df[col].to_numpy(dtype=np.float64)[order]
+        values = df[col].to_numpy(dtype=np.float64, na_value=np.nan)[order]
         lo_arr = np.asarray(lo_idx, dtype=np.int64)
         hi_arr = np.asarray(hi_idx, dtype=np.int64)
         mins = np.full(len(hi_arr), np.nan)
