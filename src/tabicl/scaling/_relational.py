@@ -220,6 +220,26 @@ def _window_label(window) -> str:
         return str(window).replace(" ", "")
 
 
+# A join this size has, three times, consumed tens of GB and been killed rather than
+# finishing. The cost is |child| x (rows sharing a key), which is invisible in the
+# inputs -- both sides can look small while the product does not.
+MAX_JOIN_PAIRS = 50_000_000
+
+
+def _estimate_pairs(child: Table, anchor: pd.DataFrame) -> int:
+    """Rows the join will materialise, without materialising them.
+
+    sum over keys of (child rows with that key) x (entity rows with that key), which is
+    exactly the size of the merge and is computable from two value_counts.
+    """
+    child_counts = child.df[child.foreign_key].value_counts()
+    anchor_counts = anchor["__key"].value_counts()
+    shared = child_counts.index.intersection(anchor_counts.index)
+    if not len(shared):
+        return 0
+    return int((child_counts.reindex(shared) * anchor_counts.reindex(shared)).sum())
+
+
 def _aggregate_by_row(child: Table, anchor: pd.DataFrame, n_rows: int) -> pd.DataFrame:
     """Aggregate to one row per *entity row*, not per key.
 
@@ -234,6 +254,15 @@ def _aggregate_by_row(child: Table, anchor: pd.DataFrame, n_rows: int) -> pd.Dat
     per-row-correct features.
     """
     df, nested_stats = _resolve(child, None)
+
+    estimated = _estimate_pairs(child, anchor)
+    if estimated > MAX_JOIN_PAIRS:
+        raise MemoryError(
+            f"table {child.name!r} would materialise ~{estimated:,} join rows "
+            f"({len(child.df):,} child rows x entity rows sharing a key), above the "
+            f"{MAX_JOIN_PAIRS:,} guard. Use asof_statistics for an O(n log n) scan, or "
+            f"raise tabicl.scaling._relational.MAX_JOIN_PAIRS if you have the memory."
+        )
 
     pairs = df.merge(anchor, left_on=child.foreign_key, right_on="__key", how="inner")
     if "__cutoff" in anchor.columns:

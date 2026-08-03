@@ -1520,3 +1520,30 @@ def test_prune_validates_thresholds():
         prune_features(df, max_missing=1.5)
     with pytest.raises(ValueError, match="max_dominant"):
         prune_features(df, max_dominant=0.0)
+
+
+def test_oversized_join_fails_fast_instead_of_exhausting_memory():
+    """|child| x rows-sharing-a-key is invisible in the inputs; three runs died on it."""
+    from tabicl.scaling import _relational
+
+    entity = pd.DataFrame({"uid": [0] * 400})
+    child = pd.DataFrame({"uid": [0] * 400, "v": np.arange(400.0)})
+    original = _relational.MAX_JOIN_PAIRS
+    _relational.MAX_JOIN_PAIRS = 1000  # 400 x 400 = 160,000 pairs
+    try:
+        with pytest.raises(MemoryError, match="asof_statistics"):
+            flatten_relational(entity, "uid", [Table(child, "uid", "ev")])
+    finally:
+        _relational.MAX_JOIN_PAIRS = original
+
+
+def test_estimate_matches_the_actual_join_size():
+    from tabicl.scaling._relational import _estimate_pairs
+
+    entity = pd.DataFrame({"uid": [0, 0, 1, 2]})
+    child = pd.DataFrame({"uid": [0, 0, 0, 1], "v": [1.0, 2.0, 3.0, 4.0]})
+    anchor = pd.DataFrame({"__key": entity["uid"].values, "__row": np.arange(4)})
+    # key 0: 3 child x 2 entity = 6; key 1: 1 x 1 = 1; key 2: none
+    assert _estimate_pairs(Table(child, "uid", "ev"), anchor) == 7
+    actual = len(child.merge(anchor, left_on="uid", right_on="__key"))
+    assert actual == 7
