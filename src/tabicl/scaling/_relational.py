@@ -77,6 +77,28 @@ class Table:
         A cap is a blunt instrument -- it does not know which columns matter -- but it
         converts "cannot run at all" into "runs, possibly missing something".
 
+    top_k_categories : Optional[int], default=None
+        When set, :func:`asof_statistics` emits a per-category proportion block for each
+        categorical column: the ``top_k_categories`` most frequent values plus an
+        ``other`` bucket. Off by default, since every category costs a column.
+
+        This is what lets the as-of scan carry categorical signal at all. Indicators
+        prefix-sum like any other counter, so the block is exact, needs no sketch, and
+        works over windows -- which ``mode`` cannot do. Keep it small; the column-budget
+        measurements say narrow feature sets win.
+
+    min_category_share : float, default=0.5
+        Minimum fraction of non-null rows the codebook must capture before a column
+        gets a histogram. Columns below it are free text in disguise -- a 247k-value
+        column yields K+1 constant columns and hurts -- so they are skipped rather than
+        emitted. Set to 0.0 to build a histogram for every categorical column.
+
+    include_mode : bool, default=False
+        Emit the modal value of each categorical column over the all-history block of
+        :func:`asof_statistics`. Off by default because it costs one linear scan per
+        column. Windows are not covered -- a prefix has a running argmax, a range does
+        not.
+
     windows : Sequence, default=()
         Look-back windows, e.g. ``[pd.Timedelta(days=30), pd.Timedelta(days=90)]``.
         Each emits its own block of statistics over child rows falling in
@@ -98,6 +120,9 @@ class Table:
     time_column: Optional[str] = None
     columns: Optional[Sequence[str]] = field(default=None)
     max_columns: Optional[int] = None
+    top_k_categories: Optional[int] = None
+    min_category_share: float = 0.5
+    include_mode: bool = False
     primary_key: Optional[str] = None
     windows: Sequence = field(default=())
     children: Sequence["Table"] = field(default=())
@@ -640,15 +665,37 @@ def asof_statistics(
             out[f"{label}__{col}__std"] = np.sqrt(np.clip(var, 0, None))
         del base
 
+    # One codebook per categorical column, fitted once over the whole child table and
+    # shared by every block. Refitting per window would make column j mean different
+    # things in different blocks, which is exactly what must not happen.
+    codebooks = {}
+    if child.top_k_categories:
+        k = child.top_k_categories
+        # Rank by how much mass the codebook would actually capture, and drop the
+        # columns it cannot describe, rather than inheriting the numeric path's
+        # coverage ranking -- which prefers free text, the one thing this cannot model.
+        shares = {c: _category_share(df, c, k) for c in _category_columns(df=df, child=child)}
+        eligible = [c for c, s in shares.items() if s >= child.min_category_share]
+        eligible.sort(key=lambda c: (-shares[c], list(df.columns).index(c)))
+        if child.max_columns is not None:
+            eligible = eligible[: child.max_columns]
+        codebooks = {c: _category_codebook(df, c, k) for c in sorted(eligible, key=list(df.columns).index)}
+
     hi = upto(cutoffs)
     block(child.name, hi, starts[entity_key])
     _extremes(out, child.name, columns, df, order, hi, starts[entity_key])
     _prefix_nunique(out, child.name, child, df, order, sorted_key, hi, starts[entity_key])
+    if child.include_mode:
+        _prefix_mode(out, child.name, child, df, order, sorted_key, hi, starts[entity_key])
+    _category_histogram(out, child.name, child, df, order, hi, starts[entity_key], codebooks)
     for window in child.windows:
         lo = upto(cutoffs - window)
         label = f"{child.name}_{_window_label(window)}"
         block(label, hi, lo)
         _extremes(out, label, columns, df, order, hi, lo)
+        # Windows are the case mode cannot serve at all, so the histogram earns most of
+        # its keep here rather than on the all-history block.
+        _category_histogram(out, label, child, df, order, hi, lo, codebooks)
 
     return pd.DataFrame(out)
 
@@ -678,6 +725,166 @@ def _prefix_nunique(out, label, child, df, order, sorted_key, hi_idx, lo_idx) ->
         running = np.concatenate([[0], np.cumsum(first.to_numpy())])
         counts = running[np.asarray(hi_idx)] - running[np.asarray(lo_idx)]
         out[f"{label}__{col}__nunique"] = counts.astype(np.float64)
+
+
+def _category_columns(child: Table, df: pd.DataFrame) -> List[str]:
+    """Non-numeric columns of a child table, excluding its keys and timestamp."""
+    excluded = {child.foreign_key, child.time_column, child.primary_key}
+    return [
+        c for c in df.columns
+        if c not in excluded
+        and not (pd.api.types.is_numeric_dtype(df[c]) and not pd.api.types.is_bool_dtype(df[c]))
+    ]
+
+
+def _category_share(df: pd.DataFrame, col: str, top_k: int) -> float:
+    """Fraction of non-null rows the ``top_k`` most frequent values account for.
+
+    This is the histogram's own suitability test, and it has to exist because
+    "categorical" covers two very different things. On rel-trial, ``designs.allocation``
+    has 2 distinct values and its top 4 cover 100%; ``eligibilities.criteria`` has
+    247,382 and its top 4 cover 0.1%. Building a codebook over the second emits K+1
+    columns that are all approximately zero with ``other`` approximately one -- constant
+    noise, and measurably harmful.
+
+    Selecting on this rather than on non-null coverage matters more than it looks:
+    free-text columns tend to be *well populated*, so a coverage-ranked budget actively
+    prefers exactly the columns this block cannot describe.
+    """
+    counts = df[col].value_counts(dropna=True)
+    total = float(counts.sum())
+    if total <= 0:
+        return 0.0
+    return float(counts.head(top_k).sum()) / total
+
+
+def _category_codebook(df: pd.DataFrame, col: str, top_k: int) -> List:
+    """The ``top_k`` most frequent values of ``col``, deterministically ordered.
+
+    ``value_counts`` breaks ties arbitrarily, which would make the feature *meaning* of
+    a given column depend on row order. Sorting ties by string form fixes the codebook,
+    which is the non-negotiable property here: column ``j`` must denote the same
+    category for every entity row, or the block is not comparable across rows.
+    """
+    counts = df[col].value_counts(dropna=True)
+    ranked = sorted(counts.index, key=lambda v: (-counts[v], str(v)))
+    return ranked[:top_k]
+
+
+def _category_histogram(out, label, child, df, order, hi_idx, lo_idx, codebooks) -> None:
+    """Per-category proportions over each range, as prefix differences.
+
+    The as-of scan was numeric-only because the interesting categorical statistics
+    looked un-scannable: ``mode`` has no linear range algorithm, and ``nunique`` over a
+    *window* needs an offline dominance count. Both are true, and both are beside the
+    point -- the distribution itself is scannable.
+
+    Fix a global codebook of the ``top_k`` most frequent values. Each category becomes
+    an indicator column, and **an indicator is a counter**: it prefix-sums like every
+    other statistic here, so a range count is one subtraction. That makes this exact
+    rather than approximate, removes any need for a sketch, and -- because counts are
+    invertible -- extends to windows for free, which is precisely what ``mode`` cannot
+    do. ``mode`` is recoverable anyway, as the argmax of this block whenever the modal
+    value is in the codebook.
+
+    An ``other`` bucket absorbs non-null values outside the codebook, so the tail stays
+    visible as mass rather than vanishing. Proportions divide by the *row* count of the
+    range, so they sum to the non-null fraction rather than to 1; the shortfall is the
+    missing rate, which is information rather than an error. Magnitude is not lost
+    either -- ``{label}__count`` already carries it, so 3-of-5 stays distinguishable
+    from 600-of-1000.
+    """
+    hi_arr = np.asarray(hi_idx, dtype=np.int64)
+    lo_arr = np.asarray(lo_idx, dtype=np.int64)
+    total = (
+        np.asarray(out[f"{label}__count"], dtype=np.float64)
+        if f"{label}__count" in out
+        else (hi_arr - lo_arr).astype(np.float64)
+    )
+    with np.errstate(invalid="ignore", divide="ignore"):
+        denom = np.maximum(total, 1.0)
+
+    for col, codebook in codebooks.items():
+        values = df[col].to_numpy(object)[order]
+        notna = pd.notna(values)
+        assigned = np.zeros(len(values), dtype=bool)
+
+        for j, category in enumerate(codebook):
+            indicator = (values == category) & notna
+            assigned |= indicator
+            running = np.concatenate([[0.0], np.cumsum(indicator.astype(np.float64))])
+            counts = running[hi_arr] - running[lo_arr]
+            out[f"{label}__{col}__cat{j}"] = np.where(total > 0, counts / denom, np.nan)
+
+        # Everything present but outside the codebook. Kept so a long tail reads as
+        # tail mass instead of silently deflating the other proportions.
+        other = notna & ~assigned
+        running = np.concatenate([[0.0], np.cumsum(other.astype(np.float64))])
+        counts = running[hi_arr] - running[lo_arr]
+        out[f"{label}__{col}__catother"] = np.where(total > 0, counts / denom, np.nan)
+
+
+def _prefix_mode(out, label, child, df, order, sorted_key, hi_idx, lo_idx) -> None:
+    """Modal value over each key's prefix.
+
+    The docstring of :func:`asof_statistics` said ``mode`` "has no linear range
+    algorithm at all", which is true for a *range* and false for a *prefix*. Scanning a
+    key's rows in time order while maintaining running counts and the current argmax
+    records the modal value at every position in one pass, so a prefix query is a
+    lookup. Only the all-history block qualifies; a window is a range, and there the
+    original statement stands.
+
+    This is not what the category histogram provides, and the two are complementary
+    rather than alternatives. The histogram is *corpus*-relative -- it describes an
+    entity by its mix over globally frequent values, and is meaningless when the column
+    has 247k of them. ``mode`` is *entity*-relative: the value this entity used most,
+    which stays meaningful at any cardinality. Measurement said the join path's edge
+    was ``mode`` plus windowed ``nunique``, and the histogram closed neither.
+
+    Emits the global factorisation code rather than the value. That is what a model can
+    consume, and unlike factorising per split it guarantees a code means the same value
+    in train and test.
+
+    Ties go to the value that reached the leading count first, which is deterministic
+    given the ``(key, time)`` sort.
+    """
+    cats = _budgeted_columns(child, df, _category_columns(child, df))
+    if not cats:
+        return
+
+    hi_arr = np.asarray(hi_idx, dtype=np.int64)
+    lo_arr = np.asarray(lo_idx, dtype=np.int64)
+    n_rows = len(df)
+    # Key boundaries in sorted order, so the counter resets exactly where a key starts.
+    new_key = np.empty(n_rows, dtype=bool)
+    if n_rows:
+        new_key[0] = True
+        new_key[1:] = sorted_key[1:] != sorted_key[:-1]
+
+    for col in cats:
+        codes, _ = pd.factorize(df[col], use_na_sentinel=True)
+        codes = codes[order]
+        counts = np.zeros(int(codes.max()) + 2 if len(codes) else 1, dtype=np.int64)
+        running = np.full(n_rows + 1, np.nan)
+        touched: List[int] = []
+        best_code, best_count = -1, 0
+        for i in range(n_rows):
+            if new_key[i]:
+                for c in touched:
+                    counts[c] = 0
+                touched.clear()
+                best_code, best_count = -1, 0
+            code = codes[i]
+            if code >= 0:            # -1 is the null sentinel; nulls have no mode
+                counts[code] += 1
+                touched.append(code)
+                if counts[code] > best_count:
+                    best_code, best_count = code, counts[code]
+            running[i + 1] = best_code if best_code >= 0 else np.nan
+        # running[j] is the mode of the key's rows up to sorted position j, so a prefix
+        # ending at hi is read directly; an empty range has no mode.
+        values = np.where(hi_arr > lo_arr, running[hi_arr], np.nan)
+        out[f"{label}__{col}__mode"] = values
 
 
 def _extremes(out, label, columns, df, order, hi_idx, lo_idx) -> None:

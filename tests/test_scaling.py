@@ -1631,3 +1631,145 @@ def test_max_columns_above_the_column_count_is_a_no_op():
     wide = asof_statistics(Table(child, "uid", "ev", time_column="ts", max_columns=99), keys, cutoffs)
     plain = asof_statistics(Table(child, "uid", "ev", time_column="ts"), keys, cutoffs)
     pd.testing.assert_frame_equal(wide, plain)
+
+
+def test_category_histogram_keeps_the_distribution_not_the_centroid():
+    """Two entities with identical child counts but different category mixes.
+
+    The point of the block is that these must not look alike. A mean over any encoding
+    of the category would put both near the global centre; proportions separate them.
+    """
+    from tabicl.scaling import asof_statistics
+
+    child = pd.DataFrame(
+        {
+            "uid": [0] * 5 + [1] * 4,
+            "ts": pd.to_datetime(["2026-01-01"] * 9),
+            "kind": ["elec", "elec", "elec", "fit", "fit", "book", "book", "kitch", "kitch"],
+        }
+    )
+    keys = np.array([0, 1])
+    cutoffs = np.array(pd.to_datetime(["2026-02-01"] * 2))
+    out = asof_statistics(Table(child, "uid", "ev", time_column="ts", top_k_categories=4), keys, cutoffs)
+
+    from tabicl.scaling._relational import _category_codebook
+
+    codebook = _category_codebook(child, "kind", 4)
+    prop = {v: out[f"ev__kind__cat{j}"].to_numpy() for j, v in enumerate(codebook)}
+
+    assert prop["elec"][0] == pytest.approx(0.6)
+    assert prop["fit"][0] == pytest.approx(0.4)
+    assert prop["book"][1] == pytest.approx(0.5)
+    assert prop["kitch"][1] == pytest.approx(0.5)
+    # Nothing outside the codebook, so proportions account for every row.
+    cats = [c for c in out.columns if "__cat" in c]
+    assert out[cats].sum(axis=1).to_numpy() == pytest.approx([1.0, 1.0])
+
+
+def test_category_histogram_respects_the_cutoff():
+    """A category appearing only after the cutoff must not reach the features."""
+    from tabicl.scaling import asof_statistics
+
+    child = pd.DataFrame(
+        {
+            "uid": [0, 0],
+            "ts": pd.to_datetime(["2026-01-01", "2026-03-01"]),
+            "kind": ["before", "after"],
+        }
+    )
+    out = asof_statistics(
+        Table(child, "uid", "ev", time_column="ts", top_k_categories=2),
+        np.array([0]),
+        np.array(pd.to_datetime(["2026-02-01"])),
+    )
+    from tabicl.scaling._relational import _category_codebook
+
+    codebook = _category_codebook(child, "kind", 2)
+    prop = {v: out[f"ev__kind__cat{j}"].to_numpy()[0] for j, v in enumerate(codebook)}
+    assert prop["before"] == pytest.approx(1.0)
+    assert prop["after"] == pytest.approx(0.0)
+
+
+def test_category_histogram_works_over_windows():
+    """The property mode cannot have.
+
+    ``mode`` has no linear range algorithm, so the join path can only offer it over all
+    history. Counts are invertible, so this block is a prefix difference and a window
+    costs one extra lookup.
+    """
+    from tabicl.scaling import asof_statistics
+
+    child = pd.DataFrame(
+        {
+            "uid": [0] * 4,
+            # two old "cold" rows, two recent "hot" rows
+            "ts": pd.to_datetime(["2025-01-01", "2025-01-02", "2026-01-20", "2026-01-25"]),
+            "kind": ["cold", "cold", "hot", "hot"],
+        }
+    )
+    table = Table(
+        child, "uid", "ev", time_column="ts",
+        windows=[pd.Timedelta(days=30)], top_k_categories=2,
+    )
+    out = asof_statistics(table, np.array([0]), np.array(pd.to_datetime(["2026-02-01"])))
+
+    from tabicl.scaling._relational import _category_codebook
+
+    codebook = _category_codebook(child, "kind", 2)
+    idx = {v: j for j, v in enumerate(codebook)}
+    stems = {c.rsplit("__kind__", 1)[0] for c in out.columns if "__kind__cat" in c}
+    stem = next(s for s in stems if s != "ev")   # the window block, not all-history
+    assert stem == "ev_30d", stem
+
+    # All history: half cold, half hot. Last 30 days: entirely hot.
+    assert out[f"ev__kind__cat{idx['cold']}"].to_numpy()[0] == pytest.approx(0.5)
+    assert out[f"{stem}__kind__cat{idx['hot']}"].to_numpy()[0] == pytest.approx(1.0)
+    assert out[f"{stem}__kind__cat{idx['cold']}"].to_numpy()[0] == pytest.approx(0.0)
+
+
+def test_category_histogram_buckets_the_tail_and_exposes_missingness():
+    """Values outside the codebook become tail mass; nulls show up as a shortfall."""
+    from tabicl.scaling import asof_statistics
+
+    child = pd.DataFrame(
+        {
+            "uid": [0] * 4,
+            "ts": pd.to_datetime(["2026-01-01"] * 4),
+            "kind": ["top", "top", "rare", None],
+        }
+    )
+    out = asof_statistics(
+        Table(child, "uid", "ev", time_column="ts", top_k_categories=1),
+        np.array([0]),
+        np.array(pd.to_datetime(["2026-02-01"])),
+    )
+    assert out["ev__kind__cat0"].to_numpy()[0] == pytest.approx(0.5)      # 2 of 4
+    assert out["ev__kind__catother"].to_numpy()[0] == pytest.approx(0.25)  # "rare"
+    # The missing row is in the denominator but no bucket, so the shortfall is the
+    # missing rate rather than silently inflating the categories that are present.
+    cats = [c for c in out.columns if "__cat" in c]
+    assert out[cats].sum(axis=1).to_numpy()[0] == pytest.approx(0.75)
+
+
+def test_category_histogram_is_off_by_default():
+    """Every category costs a column, so it must be opt-in."""
+    from tabicl.scaling import asof_statistics
+
+    child = pd.DataFrame(
+        {"uid": [0, 1], "ts": pd.to_datetime(["2026-01-01"] * 2), "kind": ["a", "b"]}
+    )
+    out = asof_statistics(
+        Table(child, "uid", "ev", time_column="ts"),
+        np.array([0, 1]),
+        np.array(pd.to_datetime(["2026-02-01"] * 2)),
+    )
+    assert not [c for c in out.columns if "__cat" in c]
+
+
+def test_category_codebook_is_deterministic_under_ties():
+    """Column j must denote the same category on every run, or blocks aren't comparable."""
+    from tabicl.scaling._relational import _category_codebook
+
+    df = pd.DataFrame({"v": ["b", "b", "a", "a", "c", "c"]})   # a three-way tie
+    shuffled = df.iloc[::-1].reset_index(drop=True)
+    assert _category_codebook(df, "v", 3) == _category_codebook(shuffled, "v", 3)
