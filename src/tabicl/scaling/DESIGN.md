@@ -785,14 +785,42 @@ Sweeping the cap on rel-event / user-ignore (official test split):
 
 | `max_columns` | features | test ROC-AUC x100 |
 |---:|---:|---:|
-| 2 | 110 | **79.85** |
+| 1 | 74 | **80.81** |
+| 2 | 110 | 79.85 |
 | 4 | 200 | 77.85 |
 | unbounded | 1,670 | *OOM at 35.7 GB* |
 
-The tighter cap scored *higher*. Two features per table beat four, which is the usual
-warning that the marginal columns were noise the model then had to spend context on --
-so the budget is not purely damage control, and "as many features as fit" is the wrong
-default.
+Monotone, and in the direction that says the budget is not merely damage control:
+**the tightest cap scored highest**. Going from 1,670 features to 74 did not cost
+accuracy, it bought 3 points of it, which is the usual sign that the marginal columns
+were noise the model then had to spend context on. "As many features as fit" is the
+wrong default.
+
+The sweep stops at 1, 2 and 4 deliberately. `max_columns=8` drove free RAM to 235 MB of
+64 GB and began paging -- the same thrash that repeatedly killed this task before -- so
+it was stopped rather than left to produce a number that would really be measuring the
+page file. The useful direction was downward anyway.
+
+### Where this lands against published RelBench numbers
+
+Official protocol throughout: fit on `train`, score the held-out `test` split, whose
+labels require `mask_input_cols=False` to reveal. Test ROC-AUC x100. Comparison columns
+are the published figures from the TabPFN-3 paper's Table 14.
+
+| task | this branch | TabPFN-REL | RelGNN | RDBLearn+v3 |
+|---|---:|---:|---:|---:|
+| rel-f1 / driver-top3 | **79.77** | 79.98 | 85.69 | 82.72 |
+| rel-event / user-ignore | 80.81 | 85.38 | 86.18 | 73.70 |
+| rel-trial / study-outcome | 67.61 | 76.43 | 71.24 | 72.89 |
+| rel-avito / user-visits | *not run* | 66.68 | 66.18 | 66.76 |
+
+Level with TabPFN-REL on rel-f1, ~4.6 behind on rel-event, ~8.8 behind on rel-trial.
+Worth stating plainly: these are a generic flattening pipeline in front of a stock
+TabICL, against systems built for relational data, and rel-event's figure only exists
+because of the column budget above. rel-avito is unrun rather than failed -- 149
+features but 152,727 context rows, which OOMs at 59 GB in attention on CPU. That is a
+row-axis problem, so it is the case `row_chunk` and `offload` were actually built for,
+and it needs a GPU large enough to hold the context.
 
 ### Does schema depth help? A negative result on rel-trial
 
