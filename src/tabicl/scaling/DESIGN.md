@@ -910,8 +910,14 @@ That does not hold here. Two tasks, official test split:
 | full | 64.46 | 65.40 |
 
 **rel-avito's curve is flat and rel-trial's is not.** 10,000 rows -- 8.6% of rel-avito's
-context -- *beat* the full set, while rel-trial gives up 2.74 at 23% of its context. Same
-lever, opposite verdicts, which is the third setting in this file to behave that way.
+context -- *matched* the full set, while rel-trial gives up 2.74 at 23% of its context.
+Same lever, opposite verdicts, which is the third setting in this file to behave that way.
+
+The +0.39 by which 10,000 rows exceeded the full context is inside the measured noise
+band (paired-gap sd 0.29, so +-0.58), so it is a tie rather than a win. That does not
+weaken the practical point -- matching full context on 8.6% of the rows is the same
+result for cost purposes -- but "beat" was an overstatement of a difference the
+measurement cannot resolve.
 
 Two things follow. First, rel-avito never needed a GPU: 10k context on CPU scores better
 than 116,598 rows on an L40S, so `row_chunk` and `offload` are one cost lever and "use
@@ -930,6 +936,28 @@ curve whose shape was already clear. Running it concurrently with the rel-trial 
 also drove committed memory to 99 GB against 64 GB physical and began paging -- the same
 thrash recorded elsewhere in this file, caused the same way, by running two heavy jobs
 at once. rel-trial's 6,000 arm was lost to it.
+
+### How much difference is real? A noise floor
+
+Every comparison in this file is *paired*: same seed, same data, one setting changed.
+That matters more than it sounds. Measured on rel-event across five seeds:
+
+| quantity | mean | sd | range |
+|---|---:|---:|---:|
+| absolute score | 82.50 | 2.28 | 5.45 |
+| paired gap (one setting changed) | +0.39 | 0.29 | 0.71 |
+
+Pairing tightens the estimate **7.9x**. An unpaired comparison on this task could not
+resolve anything below about five points; a paired one resolves about half a point.
+
+Taking two paired standard deviations as a floor, **differences under about +-0.6 are not
+measurable here**. Applied to the claims in this file: the `max_columns` effects
+(-19.5, +3.0), the categorical blocks (+1.25, -3.21) and rel-avito's 5,000-row context
+(-1.16) clear it; relation breadth (+0.35) and rel-avito's 10,000-row context (+0.39) do
+not, and are recorded above as ties.
+
+The floor is itself one measurement on one task, so it is an order-of-magnitude guide
+rather than a threshold to apply mechanically.
 
 ### Calibrating per dataset -- better protocol, and not a cure
 
@@ -1159,9 +1187,13 @@ At `max_columns=2`, official test split:
 | 3 (smallest) | 151 | 65.05 |
 | 10 (all) | 414 | 65.40 |
 
-**+0.35 for more than tripling the feature count.** Relation breadth is not what
-rel-trial is missing, and the arbitrary "smallest first" rule was costing far less than
-it appeared to. Greedy block-level selection over these 10 blocks was written and ready
+**+0.35 for more than tripling the feature count -- which is inside the noise band.**
+A five-seed paired comparison on rel-event puts the sd of a paired gap at 0.29, so
+anything under about +-0.58 is indistinguishable from zero. The honest statement is that
+seven extra relations bought *nothing measurable*, not that they bought a third of a
+point. The conclusion is unchanged and if anything stronger: relation breadth is not what
+rel-trial is missing, and the arbitrary "smallest first" rule was costing nothing
+detectable. Greedy block-level selection over these 10 blocks was written and ready
 to run; on this evidence it would be optimising a lever worth a third of a point, so it
 is parked rather than run.
 
