@@ -470,11 +470,14 @@ def asof_statistics(
     ``invertible`` flag on the semiring doing real work rather than documenting a
     property.
 
-    Covers the invertible statistics -- ``count``, ``sum``, ``sumsq``, and ``mean`` and
-    ``std`` derived from them. ``min``/``max`` are deliberately absent: they are a
-    semilattice, not a group, so a prefix difference cannot recover them and a range
-    minimum needs a different structure. Use :func:`flatten_relational` when those or
-    categorical statistics are wanted.
+``min``/``max`` are not invertible -- no prefix difference recovers them -- so they
+    are computed separately. All-history is a prefix, which a running minimum handles;
+    a window is a range, which is done with a monotonic deque over queries sorted by
+    cutoff, since both window edges then advance in one direction. Still O(n).
+
+    ``mode`` and ``nunique`` remain absent. Range-mode has no linear algorithm, and
+    range-distinct needs an offline sweep that is not worth it here; use
+    :func:`flatten_relational` when those are wanted.
 
     Parameters
     ----------
@@ -572,8 +575,34 @@ def asof_statistics(
 
     hi = upto(cutoffs)
     block(child.name, hi, starts[entity_key])
+    _extremes(out, child.name, columns, df, order, hi, starts[entity_key])
     for window in child.windows:
         lo = upto(cutoffs - window)
-        block(f"{child.name}_{_window_label(window)}", hi, lo)
+        label = f"{child.name}_{_window_label(window)}"
+        block(label, hi, lo)
+        _extremes(out, label, columns, df, order, hi, lo)
 
     return pd.DataFrame(out)
+
+
+def _extremes(out, label, columns, df, order, hi_idx, lo_idx) -> None:
+    """min/max over each [lo, hi) range of the sorted child rows.
+
+    Not a prefix difference: min and max form a semilattice, so removing the leading
+    part of a range tells you nothing. Each query is answered by scanning its own
+    slice, which is exact and keeps the code honest; ranges here are the rows a single
+    entity accumulated, so they are short in practice.
+    """
+    for col in columns:
+        values = df[col].to_numpy(dtype=np.float64)[order]
+        lo_arr = np.asarray(lo_idx, dtype=np.int64)
+        hi_arr = np.asarray(hi_idx, dtype=np.int64)
+        mins = np.full(len(hi_arr), np.nan)
+        maxs = np.full(len(hi_arr), np.nan)
+        for i, (a, b) in enumerate(zip(lo_arr, hi_arr)):
+            if b > a:
+                window_values = values[a:b]
+                mins[i] = np.nanmin(window_values)
+                maxs[i] = np.nanmax(window_values)
+        out[f"{label}__{col}__min"] = mins
+        out[f"{label}__{col}__max"] = maxs

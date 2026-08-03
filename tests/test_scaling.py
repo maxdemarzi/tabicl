@@ -1429,3 +1429,28 @@ def test_pivot_carriers_do_not_leak_into_features():
     )
     assert not [c for c in out.columns if c.endswith("__sumsq") or c.endswith("__shift")]
     assert out["ev__v__std"].iloc[0] == pytest.approx(1.0)
+
+
+def test_asof_min_max_match_the_join_path():
+    """min/max are not invertible, so they are computed per range, not by difference."""
+    from tabicl.scaling import asof_statistics
+
+    rng = np.random.default_rng(2)
+    ent = pd.DataFrame({
+        "uid": rng.integers(0, 30, 150),
+        "cut": pd.Timestamp("2026-01-01") + pd.to_timedelta(rng.integers(0, 300, 150), unit="D"),
+    })
+    ch = pd.DataFrame({
+        "uid": rng.integers(0, 30, 4000),
+        "ts": pd.Timestamp("2026-01-01") + pd.to_timedelta(rng.integers(0, 300, 4000), unit="D"),
+        "amt": rng.normal(size=4000),
+    })
+    tbl = Table(ch, "uid", "ev", time_column="ts", windows=[pd.Timedelta(days=30)])
+    joined = flatten_relational(ent, "uid", [tbl], cutoff_column="cut")
+    scanned = asof_statistics(tbl, ent["uid"].to_numpy(), ent["cut"].to_numpy())
+
+    for col in ("ev__amt__min", "ev__amt__max", "ev_30d__amt__min", "ev_30d__amt__max"):
+        a = joined[col].to_numpy(dtype=float)
+        b = scanned[col].to_numpy(dtype=float)
+        both_nan = np.isnan(a) & np.isnan(b)
+        np.testing.assert_allclose(a[~both_nan], b[~both_nan], rtol=1e-9, atol=1e-9)
