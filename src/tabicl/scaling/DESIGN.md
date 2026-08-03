@@ -974,6 +974,104 @@ Consequences:
   ~250 GB host RAM or ~4x slowdown, and chunking is only clearly better if it beats
   offload, not merely the naive path.
 
+### Relation breadth on rel-trial -- nearly a null result
+
+rel-trial has 10 timestamped children and the runner had been using 3, selected by
+*row count ascending* -- i.e. cheapest to compute, which has nothing to do with
+usefulness. Since "which relations you traverse" had been the largest measured lever
+(+0.083), the unused 7 looked like the obvious place to find rel-trial's -8.8 gap,
+especially as they include `eligibilities`, `conditions_studies`, `sponsors_studies`
+and `facilities_studies` -- plausible predictors of whether a trial succeeds.
+
+At `max_columns=2`, official test split:
+
+| children | features | test ROC-AUC x100 |
+|---:|---:|---:|
+| 3 (smallest) | 151 | 65.05 |
+| 10 (all) | 414 | 65.40 |
+
+**+0.35 for more than tripling the feature count.** Relation breadth is not what
+rel-trial is missing, and the arbitrary "smallest first" rule was costing far less than
+it appeared to. Greedy block-level selection over these 10 blocks was written and ready
+to run; on this evidence it would be optimising a lever worth a third of a point, so it
+is parked rather than run.
+
+The contrast that matters is with categoricals on the same task: the numeric-only as-of
+path scores 65.05 where the join path *with mode* scores 67.61. **~2.5 points sit behind
+the categorical restriction, against ~0.35 behind relation breadth.** That reorders the
+queue below.
+
+## What to try next
+
+Leads worth keeping, roughly in expected-value order. The first three come from reading
+a TabICL integration review alongside our own measurements; several of its findings
+corroborate results already in this file, and two of them redirect work we had planned.
+
+### 1. Top-K category histograms in `asof_statistics` (replaces the sketch plan)
+
+The open restriction is that the as-of path is numeric-only: no `nunique`, no `mode`.
+The plan had been HLL / Space-Saving sketches. There is a better answer.
+
+That review describes a *cluster histogram* for text in child tables: embed the child
+text, fit one global k-means codebook, then describe each parent by which clusters its
+children fall into and in what proportions -- keeping the distribution over concepts
+rather than mean-pooling embeddings into a centroid that corresponds to nothing.
+
+Strip the embedding out and the same construction handles plain categoricals. Choose
+the K most frequent categories once, globally; emit K indicator columns; prefix-sum
+each one. That is all it takes, because **an indicator is a counter**, and counters are
+exactly what the scan already carries. Consequences:
+
+* it needs no new data structure -- no HLL, no Space-Saving, no sketch of any kind
+* it is **exact**, not approximate
+* counts are invertible, so windows remain prefix differences and stay nearly free
+* it strictly dominates `mode`, which is just the argmax of this histogram
+* an "other" bucket absorbs the tail, and a raw child count distinguishes 3-of-5 from
+  600-of-1000 (proportions alone throw magnitude away)
+
+Cost is K columns per categorical column, and the column-budget result says to keep K
+small -- 4 to 8. True `nunique` would still want a sketch, but it is one approximate
+scalar against a whole exact distribution, so it is the weakest of the three and can
+wait. Target: rel-trial's ~2.5-point categorical gap.
+
+### 2. Sweep the context size before spending more on memory
+
+The same review reports that quality-versus-context curves are **remarkably shallow**
+on relational data: H&M churn moves 0.649 -> 0.673 for a *200x* larger context (500 vs
+100k rows), and their conclusion is that 10k-20k context rows reach within epsilon of
+the best observed quality on every relational dataset they tested.
+
+If that holds here it matters directly. rel-avito used 116,598 context rows and needed
+an L40S; at 10-20k it would run on a 12 GB card. It also reframes row chunking as one
+cost lever among two, where the other -- use fewer rows -- is free and untested by us.
+Cheap experiment: rel-avito at 10k / 20k / 40k context against the measured 64.46.
+
+### 3. The other feature-budget axis
+
+`max_columns` caps *source columns* and keeps every statistic. That review's DFS caveat
+proposes the orthogonal cut: keep every column and cap the *aggregates per column*
+("drop aggregate features of the same column and keep only 1"). Both shrink the matrix
+along different axes and should compose. Given that cap=1 beat cap=4 here, and that
+their own DFS feature counts run 14-36 with free text and high-cardinality categoricals
+excluded, the combination is worth one sweep.
+
+### 4. GFS, if depth is ever revisited
+
+GFS (*Graph-based Feature Synthesis*, VLDB Workshop 2024) is described as a strict
+generalization of DFS: every feature DFS produces, GFS produces, plus more, by covering
+*all* join paths up to k hops instead of one traversal -- and it beats DFS specifically
+on deeper schemas. Our depth-2 result was a single traversal on one task, so it does not
+rule this out. Low priority until something suggests depth pays at all.
+
+### Deliberately not doing
+
+* **Retrieval / nearest-neighbour context selection.** That review tested an
+  entity-overlap strategy across four temporal RDBs and it disappointed on all but one
+  (Favorita, a pure forecasting task). That is essentially `select_context(method="knn")`.
+  Independent evidence against a direction we had not found a reason to pursue either.
+* **Greedy block selection over relations.** Parked, per the rel-trial result above.
+* **Sketches for as-of categoricals.** Superseded by item 1, except for true `nunique`.
+
 ## Status
 
 | # | Feature | Status |
