@@ -140,8 +140,36 @@ every level. Most of it arrives with the first window; the third adds +0.003, so
 count is a cost/benefit choice, not a free lunch -- 570 columns approaches TabICL's
 comfortable feature range.
 
+**It does not generalise.** Repeating the A/B across five RelBench tasks, routed
+through `asof_statistics` so the ten-child schemas finish at all:
+
+| dataset / task | all history | + 30d,365d | delta |
+|---|---:|---:|---:|
+| rel-f1 / driver-top3 | 0.7874 | 0.8874 | **+0.100** |
+| rel-trial / study-outcome | 0.5010 | 0.5393 | +0.038 |
+| rel-avito / user-visits | 0.6282 | 0.6288 | +0.001 |
+| rel-event / user-ignore | 0.5485 | 0.5428 | -0.006 |
+| rel-event / user-repeat | 0.5653 | 0.5228 | **-0.043** |
+
+Median +0.001. The rel-f1 result is real and reproducible -- it appears again here on a
+different feature set -- but it is a property of that task, not of windows.
+
+The pattern in *when* it works is the useful part. rel-f1 is the only task whose
+features work well at all (0.88); the rest sit between 0.50 and 0.63. Windows triple
+the column count, so where signal is weak the extra columns are mostly noise, and the
+worst loss is the task with a single sparse child table (13 -> 39 features, -0.043).
+Recency plausibly matters more for driver form, which changes season to season, than
+for event attendance.
+
+Two qualifications on the weak rows: rel-event received only one child table because
+`event_attendees` (8.4M rows) exceeded the harness size cap, so those arms are
+under-featured rather than cleanly tested; and rel-trial's baseline is chance, so its
+gain is movement off a floor.
+
 Consistent with the motif finding that relation *choice* beat typing: what goes into
-the features has mattered more than what is computed over them, every time.
+the features has mattered more than what is computed over them, every time -- and
+which features help is task-specific enough that a single-dataset result should not be
+generalised, in either direction.
 
 ### Does any of this help TabICL? (RelBench rel-f1)
 
