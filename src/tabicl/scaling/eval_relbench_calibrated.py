@@ -84,6 +84,14 @@ def _stratified(frame: pd.DataFrame, target: str, n: int, seed: int = 0) -> pd.D
     return pd.concat(parts).sort_index().reset_index(drop=True)
 
 
+def _report_feasible(spec, predicted: int, budget: float) -> bool:
+    ok = predicted <= budget
+    if not ok:
+        print(f"    {spec}: skipped, predicted {predicted / 2**30:.1f} GB "
+              f"> budget {budget / 2**30:.1f} GB", flush=True)
+    return ok
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dataset")
@@ -94,6 +102,8 @@ def main() -> None:
     parser.add_argument("--select-estimators", type=int, default=1,
                         help="ensemble size during selection; the final fit uses --n-estimators")
     parser.add_argument("--tolerance", type=float, default=0.005)
+    parser.add_argument("--memory-budget-gb", type=float, default=8.0,
+                        help="predicted peak a feature spec may use before it is skipped")
     parser.add_argument("--select-context", type=int, default=5000,
                         help="context held fixed while feature specs are compared; the "
                              "feature sweep would otherwise run at full context, which "
@@ -121,6 +131,37 @@ def main() -> None:
     children = children[: args.children]
     print(f"{args.dataset}/{args.task}  train={len(train)} val={len(val)} test={len(test)}  "
           f"children={[c[0] for c in children]}", flush=True)
+
+    def predicted_bytes(spec: Tuple) -> int:
+        """Rough peak of the as-of scan for one feature spec.
+
+        Deliberately a prediction rather than a try/except. The scan's prefix arrays are
+        sized by the *child* table, not by the context, so shrinking the context does not
+        make an expensive spec affordable -- rel-avito reached 24.6 GB on a 5,000-row
+        context for exactly this reason. And an over-large allocation on a paging OS
+        thrashes rather than raising, so there is nothing to catch.
+
+        Counts float64 arrays over child rows: roughly four per numeric column (sum,
+        sumsq, non-null count, plus the values re-read for min/max) and one per category
+        bucket, with the window blocks re-reading the same columns.
+        """
+        max_cols, top_k, _use_mode = spec
+        total = 0
+        for name, fk, time_col, n_rows in children:
+            frame = db.table_dict[name].df
+            excluded = {fk, time_col}
+            numeric = [c for c in frame.columns
+                       if c not in excluded and pd.api.types.is_numeric_dtype(frame[c])]
+            categorical = [c for c in frame.columns
+                           if c not in excluded and c not in numeric]
+            if max_cols is not None:
+                numeric = numeric[:max_cols]
+                categorical = categorical[:max_cols]
+            per_column = 4 * n_rows * 8
+            total += len(numeric) * per_column * (1 + len(WINDOWS))
+            if top_k:
+                total += len(categorical) * (top_k + 1) * n_rows * 8 * (1 + len(WINDOWS))
+        return total
 
     def build(frame: pd.DataFrame, spec: Tuple) -> pd.DataFrame:
         max_cols, top_k, use_mode = spec
@@ -178,6 +219,8 @@ def main() -> None:
         # Fewer columns is cheaper, and FEATURE_CANDIDATES runs widest-first, so the
         # cheap end is the tail rather than the head.
         cheaper_first=False,
+        feasible=lambda spec: _report_feasible(spec, predicted_bytes(spec),
+                                               args.memory_budget_gb * 2**30),
     )
     print(f"\nfeature spec  chosen={feature_result.chosen}  {feature_result.curve}", flush=True)
 

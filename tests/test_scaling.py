@@ -1945,3 +1945,35 @@ def test_calibrate_context_size_stratifies_by_default():
         candidates=(100,),
     )
     assert rates[0] == pytest.approx(y_tr.mean(), abs=0.02)
+
+
+def test_sweep_declines_infeasible_candidates_without_running_them():
+    """Catching MemoryError is not a memory guard.
+
+    A configuration larger than RAM does not reliably raise on a paging OS -- it
+    thrashes, and takes the machine with it. A rel-avito candidate reached 24.6 GB on a
+    5,000-row context because the as-of scan sizes its prefix arrays by the child table,
+    not the context. So the expensive candidate must be declined *before* it runs.
+    """
+    from tabicl.scaling import sweep_configurations
+
+    ran = []
+
+    def score(candidate):
+        ran.append(candidate)
+        return {"small": 0.70, "huge": 0.99}[candidate]
+
+    result = sweep_configurations(
+        ["small", "huge"], score, feasible=lambda c: c != "huge"
+    )
+    assert ran == ["small"], "the infeasible candidate must not be evaluated"
+    assert result.chosen == "small"
+    assert dict(result.curve)["huge"] == float("-inf")
+
+
+def test_sweep_raises_when_nothing_is_runnable():
+    """Silently returning an unrunnable setting would be worse than failing."""
+    from tabicl.scaling import sweep_configurations
+
+    with pytest.raises(RuntimeError, match="no candidate was runnable"):
+        sweep_configurations(["a", "b"], lambda c: 1.0, feasible=lambda c: False)

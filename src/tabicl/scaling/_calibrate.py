@@ -110,6 +110,7 @@ def sweep_configurations(
     score_fn: Callable[[object], float],
     tolerance: float = 0.0,
     cheaper_first: bool = True,
+    feasible: Optional[Callable[[object], bool]] = None,
 ) -> Calibration:
     """Evaluate each candidate and select the cheapest one that is good enough.
 
@@ -132,6 +133,18 @@ def sweep_configurations(
         Whether ``candidates`` is already ordered cheapest-first. Set False when it is
         ordered the other way; the tolerance rule then still picks the cheap end.
 
+    feasible : callable, optional
+        ``feasible(candidate) -> bool``, consulted *before* the candidate is run. False
+        scores it ``-inf`` without evaluating.
+
+        This exists because catching exceptions is not a memory guard. A configuration
+        that needs more memory than the machine has does not reliably raise
+        ``MemoryError`` -- on a paging OS it thrashes instead, and a sweep that relies on
+        try/except will take the machine down rather than skip the candidate. Predicting
+        the cost and declining is the only thing that works. Measured: a rel-avito
+        candidate reached 24.6 GB on a 5,000-row context, because the as-of scan builds
+        prefix arrays over the full 5.3M-row child table regardless of context size.
+
     Returns
     -------
     Calibration
@@ -139,8 +152,17 @@ def sweep_configurations(
     if not len(candidates):
         raise ValueError("candidates must be non-empty")
 
-    curve = [(candidate, float(score_fn(candidate))) for candidate in candidates]
+    def evaluate(candidate: object) -> float:
+        if feasible is not None and not feasible(candidate):
+            return float("-inf")
+        return float(score_fn(candidate))
+
+    curve = [(candidate, evaluate(candidate)) for candidate in candidates]
     best_setting, best_score = max(curve, key=lambda pair: pair[1])
+    if best_score == float("-inf"):
+        raise RuntimeError(
+            "no candidate was runnable; widen the budget or supply cheaper candidates"
+        )
 
     ordered = curve if cheaper_first else list(reversed(curve))
     chosen = next(
