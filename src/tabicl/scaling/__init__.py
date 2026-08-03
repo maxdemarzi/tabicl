@@ -6,6 +6,7 @@ attention) that cannot be fully realised without pretraining.
 
 from ._mqa import collapse_kv_heads, expand_kv_heads, kv_cache_bytes
 from ._relational import Table, flatten_relational, hop_product
+from ._retrieval import select_context
 from ._semiring import (
     BOOLEAN,
     BUILTIN_SEMIRINGS,
@@ -54,6 +55,7 @@ __all__ = [
     "BOOLEAN",
     "BUILTIN_SEMIRINGS",
     "check_semiring_laws",
+    "select_context",
     "think_predict_proba",
     "ThinkingResult",
     "Atom",
