@@ -1325,3 +1325,26 @@ def test_windows_without_a_cutoff_are_rejected():
             entity, "uid",
             [Table(child, "uid", "ev", time_column="ts", windows=[pd.Timedelta(days=7)])],
         )
+
+
+def test_all_null_categorical_group_has_no_mode():
+    """value_counts() drops NaN, so a non-empty all-null group has no mode."""
+    entity = pd.DataFrame({"uid": [0], "cutoff": pd.to_datetime(["2026-02-01"])})
+    child = pd.DataFrame(
+        {"uid": [0, 0], "ts": pd.to_datetime(["2026-01-01"] * 2), "label": [None, None]}
+    )
+    out = flatten_relational(
+        entity, "uid", [Table(child, "uid", "ev", time_column="ts")], cutoff_column="cutoff"
+    )
+    assert out["ev__count"].iloc[0] == 2
+    assert pd.isna(out["ev__label__mode"].iloc[0])
+
+
+def test_duplicate_child_names_are_rejected():
+    """Colliding names produce duplicate columns; pandas then fails opaquely."""
+    entity = pd.DataFrame({"uid": [0]})
+    child = pd.DataFrame({"uid": [0], "v": [1.0]})
+    with pytest.raises(ValueError, match="unique"):
+        flatten_relational(
+            entity, "uid", [Table(child, "uid", "ev"), Table(child, "uid", "ev")]
+        )

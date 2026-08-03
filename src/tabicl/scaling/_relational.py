@@ -151,9 +151,13 @@ def _stat_columns(child: Table, df: pd.DataFrame, nested_stats: Set[str], groupe
             # nunique and mode are NOT semiring aggregates -- distinct-count cannot be
             # rolled up exactly without a sketch, and a mode of modes is not a mode.
             out[f"{stem}__{col}__nunique"] = grouped[col].nunique()
-            out[f"{stem}__{col}__mode"] = grouped[col].agg(
-                lambda v: v.value_counts().index[0] if len(v) else np.nan
-            )
+            # value_counts() drops NaN, so a group that is non-empty but all-null has
+            # no mode at all -- guarding on len(v) raised IndexError on real data.
+            def _mode(values):
+                counts = values.value_counts()
+                return counts.index[0] if len(counts) else np.nan
+
+            out[f"{stem}__{col}__mode"] = grouped[col].agg(_mode)
 
     out[f"{stem}__count"] = out[f"{stem}__count"].fillna(0)
     return out
@@ -388,6 +392,13 @@ def flatten_relational(
             "entity keys repeat, which makes a grandchild's cutoff ambiguous; "
             "nested children currently require one row per entity key"
         )
+
+    names = [child.name for child in children]
+    clashes = {n for n in names if names.count(n) > 1}
+    if clashes:
+        # Every generated column is prefixed by the table name, so a collision yields
+        # duplicate columns and pandas fails later with an opaque internal error.
+        raise ValueError(f"child table names must be unique; repeated: {sorted(clashes)}")
 
     anchor = pd.DataFrame({"__key": keys.values, "__row": np.arange(len(entity_df))})
     if cutoff_column:
