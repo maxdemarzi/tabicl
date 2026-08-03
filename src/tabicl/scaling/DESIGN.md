@@ -285,37 +285,56 @@ and cannot leak.
 
 `eval_relbench_typed_temporal.py`, same task and split as the table above:
 
-| | features | TabICL AUC | GBDT AUC |
-|---|---:|---:|---:|
-| A relational only | 32 | 0.6032 | 0.6509 |
-| B + static friend motifs | 35 | 0.7332 | 0.7258 |
-| G + static co-occurrence | 35 | 0.8166 | 0.7985 |
-| D + causal motifs | 35 | 0.8056 | 0.7604 |
-| C + typed static motifs | 45 | **0.8591** | 0.8174 |
-| E + causal, windowed, phased | 46 | 0.7921 | 0.7559 |
-| F + static friend AND causal | 49 | 0.8162 | 0.7477 |
+| | relations | causal | typed | features | TabICL AUC | GBDT AUC |
+|---|---|---|---|---:|---:|---:|
+| A relational only | — | — | — | 32 | 0.6032 | 0.6509 |
+| B + static friend motifs | friend | no | no | 35 | 0.7332 | 0.7258 |
+| G + static co-occurrence | co-occ | no | no | 35 | 0.8166 | 0.7985 |
+| D + causal motifs | co-occ | yes | no | 35 | 0.8056 | 0.7604 |
+| H + typed causal | co-occ | **yes** | yes | 38 | **0.8261** | 0.7663 |
+| I + typed, friend static | all 3 | partly | yes | 45 | 0.8420 | 0.7832 |
+| C + typed static motifs | all 3 | no | yes | 45 | **0.8591** | 0.8174 |
+| E + causal, windowed, phased | co-occ | yes | no | 46 | 0.7921 | 0.7559 |
+| F + static friend AND causal | all 3 | partly | no | 49 | 0.8162 | 0.7477 |
 
 B reproduces the 0.7332 recorded above, so this is the same measurement as before.
 
-**Type splitting earns it: +0.126 over untyped (B -> C).** That is comparable to the
-entire original motif gain, obtained by splitting one relation into three, and it is
-the one refinement degree provably cannot supply. TabICL also pulls ahead of GBDT here
-(0.8591 vs 0.8174) where the untyped run had them level.
+**The decomposition, because no single comparison isolates anything.** B and C differ
+in three ways at once -- relation set, typing, and cutoff -- so the gap between them
+attributes nothing. Changing one thing at a time from B to C:
 
-**Causality is nearly free, and G is what shows it.** D beats B by +0.072, and the
-tempting reading -- that enforcing the cutoff pays -- is wrong. D differs from B in two
-ways, so level G holds the relation fixed and removes only the cutoff:
+| step | change | AUC | delta |
+|---|---|---:|---:|
+| B | untyped, friend, static | 0.7332 | — |
+| G | -> co-occurrence relations | 0.8166 | **+0.083** relation choice |
+| D | -> enforce the cutoff | 0.8056 | **-0.011** causality |
+| H | -> split by type | 0.8261 | **+0.021** typing |
+| I | -> add friend as a static type | 0.8420 | **+0.016** relation count |
+| C | -> drop the cutoff again | 0.8591 | **+0.017** the leak |
 
-| comparison | isolates | delta |
-|---|---|---:|
-| B -> G | relation choice | **+0.083** |
-| G -> D | causality | **-0.011** |
+Sums to +0.126 exactly.
 
-Nearly all of D - B is relation choice. Enforcing causality costs about a hundredth of
-AUC, which is the expected direction: removing future information should lose a little.
-The useful conclusion is that the leak recorded against the original result was *not*
-propping it up, so the causal version is worth shipping for correctness at negligible
-cost.
+**Type splitting earns its place, but it is worth +0.021, not +0.126.** The clean
+comparison is D -> H: same edges, same cutoff, typed versus not. The larger figure is
+what you get by also swapping the relation and re-introducing the leak, and reading it
+as a typing result would repeat precisely the error level G was added to catch one step
+earlier. Typing is real, cheap and not available to degree -- and it is a fifth the
+size of simply choosing a better relation.
+
+**Relation choice dominates everything else here: +0.083.** Co-invitation and
+co-attendance beat declared friendship by more than typing, causality and windowing
+combined. Worth remembering before reaching for the join engine: the largest single win
+in this table came from picking different edges, not from computing more on the same
+ones.
+
+**Causality costs about -0.011 to -0.017 and should be paid.** G -> D isolates it under
+no typing, C -> I under typing. Both are small and in the expected direction, since
+removing future information should lose a little. The useful conclusion is that the
+leak recorded against the original result was not propping it up. H (0.8261) is the
+best strictly causal configuration: every relation in it carries a timestamp, it beats
+the original leaky 0.7332 by +0.093, and it is correct. C's 0.8591 is higher and leaks.
+I sits between them and leaks too -- friendship has no timestamp, so including it as a
+static type makes the whole result only as causal as its least causal relation.
 
 **Windows and phases do not earn it: -0.014 (D -> E).** Eleven extra columns for a loss.
 The recency/ordering half of the temporal machinery is a negative result on this task.
@@ -323,14 +342,13 @@ The recency/ordering half of the temporal machinery is a negative result on this
 prediction window is five months against event timestamps that only reach 13.9% coverage
 by the midpoint cutoff, so most rows see too little history for a phase split to mean
 anything. A denser, longer-running temporal graph is where it would get a fair test.
+`typed_temporal_motif_features` therefore offers no phase splitting: combining phases
+with types would cost `(k * n_phases) ** 3` joins for a measured loss.
 
-**Not yet run: typed *and* causal.** `temporal_motif_features` takes a single edge set,
-so there is no typed causal variant -- per-type calls would give within-type triangles
-but not cross-type ones, and `tri__friend_coinvite_coinvite` is exactly the kind of
-column that earned C its +0.126. Since typing is where the signal is and causality is
-nearly free, extending the temporal path to accept `edges_by_type` is the obvious next
-step. F (0.8162) is not that experiment: it bolts untyped causal columns onto untyped
-friendship columns and lands below C.
+**What the join engine is worth, restated.** The earlier ablation put it at +0.016
+(degree vs degree+triangles). Typing raises that to +0.021 on the same causal footing,
+still an order of magnitude below what free features and relation choice deliver. The
+machinery is correct, fast and general; on this task it remains the small term.
 
 ### Cyclic patterns: worst-case optimal joins
 
