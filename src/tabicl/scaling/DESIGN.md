@@ -923,6 +923,50 @@ also drove committed memory to 99 GB against 64 GB physical and began paging -- 
 thrash recorded elsewhere in this file, caused the same way, by running two heavy jobs
 at once. rel-trial's 6,000 arm was lost to it.
 
+### Calibrating per dataset -- better protocol, and not a cure
+
+Three settings measured here reverse across datasets (`max_columns`, the categorical
+blocks, context size), so the response was to stop looking for defaults and choose per
+dataset on a validation split. `eval_relbench_calibrated` does that: feature spec and
+context size selected on validation, test touched once.
+
+It also fixes a protocol problem that had gone unremarked. The hand-picked table below
+is a per-task *maximum selected on test* -- `max_columns` chosen by comparing 1/2/4 on
+the test split, join-versus-scan the same way, context size the same way. That inflates
+it, and it is not comparable with the published single-configuration figures beside it.
+
+| task | hand-picked (selected on test) | calibrated (validation) | delta |
+|---|---:|---:|---:|
+| rel-f1 / driver-top3 | 79.77 | **80.70** | +0.93 |
+| rel-event / user-ignore | 80.81 | **78.11** | -2.70 |
+| rel-trial / study-outcome | 67.61 | **66.50** | -1.11 |
+
+Mean 76.06 -> 75.10, so roughly **one point of the old table was test-selection
+inflation** -- about what one would expect, and the calibrated column is the defensible
+one.
+
+**But calibration picked a configuration we already knew was wrong.** On rel-event,
+validation preferred the categorical blocks (80.86 against 80.38 without) -- and those
+blocks were independently measured at **-3.21 on test** for that exact task. The
+validation split is 2,013 rows; rel-trial's is 960. At that size the selection signal is
+comparable to its own noise, and a margin of 0.49 means nothing.
+
+So "calibrate per dataset" is not the clean answer to "no default generalises". It is
+better than selecting on test, and it is honest, but a noisy validation split can select
+something worse than a sensible fixed default would have been. Two candidate fixes, both
+untested at time of writing:
+
+* **Repeated or reseeded splits** for selection rather than the single provided
+  validation set. If rel-event's choice flips under reseeding, noise is confirmed as the
+  cause.
+* **A margin requirement before accepting a more expensive configuration.** rel-event's
+  categorical block won by 0.49 on validation and cost 2.3x the compute. Requiring a
+  real margin -- rather than the current tolerance, which only ever favours the cheaper
+  option when scores are close -- would have rejected it.
+
+rel-avito is the test of the noise explanation rather than another number: its validation
+split is far larger, so if the diagnosis is right its calibration should behave better.
+
 ### Where this lands against published RelBench numbers
 
 Official protocol throughout: fit on `train`, score the held-out `test` split, whose

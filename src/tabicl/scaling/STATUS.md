@@ -147,12 +147,21 @@ columns are published figures from the TabPFN-3 paper's Table 14.
 > version: every setting chosen on a validation split, test touched once. Expect lower
 > numbers.
 
-| task | this branch | TabPFN-REL | RelGNN | RDBLearn+v3 |
-|---|---:|---:|---:|---:|
-| rel-f1 / driver-top3 | **79.77** | 79.98 | 85.69 | 82.72 |
-| rel-event / user-ignore | 80.81 | 85.38 | 86.18 | 73.70 |
-| rel-avito / user-visits | 64.46 | 66.68 | 66.18 | 66.76 |
-| rel-trial / study-outcome | 67.61 | 76.43 | 71.24 | 72.89 |
+| task | calibrated | hand-picked | TabPFN-REL | RelGNN | RDBLearn+v3 |
+|---|---:|---:|---:|---:|---:|
+| rel-f1 / driver-top3 | **80.70** | 79.77 | 79.98 | 85.69 | 82.72 |
+| rel-event / user-ignore | 78.11 | 80.81 | 85.38 | 86.18 | 73.70 |
+| rel-avito / user-visits | *running* | 64.46 | 66.68 | 66.18 | 66.76 |
+| rel-trial / study-outcome | 66.50 | 67.61 | 76.43 | 71.24 | 72.89 |
+
+**Quote the calibrated column.** It is the one produced by a single procedure with every
+setting chosen on validation. The hand-picked column selected its configuration on the
+test split, which is worth about a point of inflation (mean 76.06 vs 75.10 over the three
+tasks measured so far) and is not comparable with the published figures beside it.
+
+Calibration is better protocol, not a cure: on rel-event it chose the categorical blocks
+on a 0.49 validation margin, and those blocks measure −3.21 on test there. Validation
+splits of 960–2,013 rows are small enough that selection noise is real.
 
 Level with TabPFN-REL on rel-f1, −2.2 on rel-avito, −4.6 on rel-event, −8.8 on
 rel-trial. This is a generic flattening pipeline in front of a stock TabICL, against
