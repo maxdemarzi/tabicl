@@ -1175,6 +1175,51 @@ def test_typed_temporal_windows_apply_per_type():
     assert out["recent__deg__a"].iloc[0] == 2
 
 
+def test_typed_temporal_caching_matches_the_naive_per_cutoff_path():
+    """Static types are hoisted out of the cutoff loop; that must be invisible.
+
+    The reference here is the obvious implementation -- slice every type at each cutoff
+    and call the static census -- which is exactly what the optimisation replaces.
+    """
+    from tabicl.scaling import typed_temporal_motif_features
+
+    rng = np.random.default_rng(5)
+    friend = _random_graph(18, 0.3, 31)
+    invite = _random_graph(18, 0.3, 32)
+    attend = _random_graph(18, 0.25, 33)
+    # Both directions of an edge must share a timestamp or the slices disagree.
+    def stamp(edges, seed):
+        r = np.random.default_rng(seed)
+        keyed = {}
+        for a, b in edges:
+            keyed.setdefault((min(a, b), max(a, b)), int(r.integers(0, 50)))
+        return np.array([keyed[(min(a, b), max(a, b))] for a, b in edges])
+
+    t_inv, t_att = stamp(invite, 1), stamp(attend, 2)
+    nodes = rng.integers(0, 18, 40).astype(np.int64)
+    cutoffs = rng.choice([10, 25, 40, 60], size=40)
+
+    got = typed_temporal_motif_features(
+        {"friend": friend, "invite": invite, "attend": attend},
+        {"friend": None, "invite": t_inv, "attend": t_att},
+        nodes=nodes,
+        cutoffs=cutoffs,
+    )
+
+    for row in range(len(nodes)):
+        cut = cutoffs[row]
+        reference = typed_motif_features(
+            {
+                "friend": friend,  # static: the cutoff does not apply
+                "invite": invite[t_inv < cut],
+                "attend": attend[t_att < cut],
+            },
+            nodes=np.array([nodes[row]], dtype=np.int64),
+        )
+        for col in reference.columns:
+            assert got[f"all__{col}"].iloc[row] == reference[col].iloc[0], (row, col)
+
+
 def test_typed_temporal_rejects_missing_or_mismatched_times():
     from tabicl.scaling import typed_temporal_motif_features
 

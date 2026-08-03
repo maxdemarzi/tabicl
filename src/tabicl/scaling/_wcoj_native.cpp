@@ -63,6 +63,7 @@
 #include <cstdint>
 #include <functional>
 #include <iterator>
+#include <memory>
 #include <numeric>
 #include <stdexcept>
 #include <vector>
@@ -135,6 +136,46 @@ struct Trie {
 	}
 };
 
+// A relation with its index already built, handed back to Python so it outlives one
+// query.
+//
+// The motivating case is the typed triangle census: k**3 queries over the same k edge
+// tables, so a k=3 census issues 27 queries that between them rebuild the same three
+// tries 81 times. The trie is a lexicographic sort over the whole relation, so that is
+// the dominant cost once the relations are large. Holding the index across queries turns
+// it into three builds.
+//
+// The source array is kept alive by `keepalive`, because `data` points into it.
+struct Relation {
+	py::object keepalive;
+	Trie trie;
+	const i64 *data = nullptr;
+	std::size_t rows = 0;
+	int arity = 0;
+	i64 max_value = -1;
+
+	explicit Relation(py::array_t<i64, py::array::c_style | py::array::forcecast> src) {
+		auto buf = src.request();
+		if (buf.ndim != 2) {
+			throw std::runtime_error("each relation must be 2-D");
+		}
+		keepalive = src;
+		data = static_cast<const i64 *>(buf.ptr);
+		rows = static_cast<std::size_t>(buf.shape[0]);
+		arity = static_cast<int>(buf.shape[1]);
+
+		const std::size_t n = rows * static_cast<std::size_t>(arity);
+		for (std::size_t j = 0; j < n; ++j) {
+			max_value = std::max(max_value, data[j]);
+		}
+		{
+			// Sorting touches no Python objects.
+			py::gil_scoped_release release;
+			trie.build(data, rows, arity);
+		}
+	}
+};
+
 } // namespace
 
 namespace {
@@ -142,7 +183,7 @@ namespace {
 // Per-worker search state. The tries are read-only once built, so workers share them
 // and own only their cursor stack and output buffer.
 struct JoinState {
-	const std::vector<Trie> *tries = nullptr;
+	const std::vector<const Trie *> *tries = nullptr;
 	const std::vector<std::vector<std::pair<int, int>>> *by_var = nullptr;
 	const std::vector<std::vector<int>> *lower_bounds = nullptr;
 	int n_vars = 0;
@@ -187,15 +228,15 @@ void JoinState::recurse(int level) {
 		int lead = 0, best = INT_MAX;
 		for (std::size_t p = 0; p < participants.size(); ++p) {
 			const int rel = participants[p].first, depth = participants[p].second;
-			const int width = T[rel].hi(depth, node[rel]) - T[rel].lo(depth, node[rel]);
+			const int width = T[rel]->hi(depth, node[rel]) - T[rel]->lo(depth, node[rel]);
 			if (width < best) {
 				best = width;
 				lead = static_cast<int>(p);
 			}
 		}
 		const int lrel = participants[lead].first, ldep = participants[lead].second;
-		const i64 *lbeg = T[lrel].vals[ldep].data() + T[lrel].lo(ldep, node[lrel]);
-		const i64 *lend = T[lrel].vals[ldep].data() + T[lrel].hi(ldep, node[lrel]);
+		const i64 *lbeg = T[lrel]->vals[ldep].data() + T[lrel]->lo(ldep, node[lrel]);
+		const i64 *lend = T[lrel]->vals[ldep].data() + T[lrel]->hi(ldep, node[lrel]);
 		if (has_floor) {
 			lbeg = std::lower_bound(lbeg, lend, floor_value);
 		}
@@ -206,8 +247,8 @@ void JoinState::recurse(int level) {
 				continue;
 			}
 			const int rel = participants[p].first, depth = participants[p].second;
-			const i64 *obeg = T[rel].vals[depth].data() + T[rel].lo(depth, node[rel]);
-			const i64 *oend = T[rel].vals[depth].data() + T[rel].hi(depth, node[rel]);
+			const i64 *obeg = T[rel]->vals[depth].data() + T[rel]->lo(depth, node[rel]);
+			const i64 *oend = T[rel]->vals[depth].data() + T[rel]->hi(depth, node[rel]);
 			tmp.clear();
 			std::set_intersection(acc.begin(), acc.end(), obeg, oend, std::back_inserter(tmp));
 			acc.swap(tmp);
@@ -284,7 +325,7 @@ void JoinState::recurse(int level) {
 	int lead = 0, best = INT_MAX;
 	for (std::size_t p = 0; p < participants.size(); ++p) {
 		const int rel = participants[p].first, depth = participants[p].second;
-		const int width = T[rel].hi(depth, node[rel]) - T[rel].lo(depth, node[rel]);
+		const int width = T[rel]->hi(depth, node[rel]) - T[rel]->lo(depth, node[rel]);
 		if (width < best) {
 			best = width;
 			lead = static_cast<int>(p);
@@ -292,9 +333,9 @@ void JoinState::recurse(int level) {
 	}
 
 	const int lrel = participants[lead].first, ldep = participants[lead].second;
-	const int lbegin = T[lrel].lo(ldep, node[lrel]);
-	const int lfinish = T[lrel].hi(ldep, node[lrel]);
-	const std::vector<i64> &lvals = T[lrel].vals[ldep];
+	const int lbegin = T[lrel]->lo(ldep, node[lrel]);
+	const int lfinish = T[lrel]->hi(ldep, node[lrel]);
+	const std::vector<i64> &lvals = T[lrel]->vals[ldep];
 
 	int cursor = lbegin;
 	if (has_floor) {
@@ -312,20 +353,20 @@ void JoinState::recurse(int level) {
 				continue;
 			}
 			const int rel = participants[p].first, depth = participants[p].second;
-			const std::vector<i64> &vv = T[rel].vals[depth];
-			const int a = T[rel].lo(depth, node[rel]), b = T[rel].hi(depth, node[rel]);
+			const std::vector<i64> &vv = T[rel]->vals[depth];
+			const int a = T[rel]->lo(depth, node[rel]), b = T[rel]->hi(depth, node[rel]);
 			const auto it = std::lower_bound(vv.begin() + a, vv.begin() + b, value);
 			if (it == vv.begin() + b || *it != value) {
 				ok = false;
 				break;
 			}
 			saved[n_saved++] = node[rel];
-			node[rel] = T[rel].child[depth][it - vv.begin()];
+			node[rel] = T[rel]->child[depth][it - vv.begin()];
 		}
 
 		if (ok) {
 			const int saved_lead = node[lrel];
-			node[lrel] = T[lrel].child[ldep][cursor];
+			node[lrel] = T[lrel]->child[ldep][cursor];
 			binding[level] = value;
 			recurse(level + 1);
 			node[lrel] = saved_lead;
@@ -360,11 +401,11 @@ struct WorkItem {
 // Cost = PRODUCT of the candidate-set widths at this item's level, not the minimum.
 // Relations sharing only an already-bound variable fan out multiplicatively, so a min
 // estimate understates exactly the hub vertices that dominate a run.
-inline double estimate(const std::vector<Trie> &T, const std::vector<std::pair<int, int>> &parts,
+inline double estimate(const std::vector<const Trie *> &T, const std::vector<std::pair<int, int>> &parts,
                        const std::vector<int> &node) {
 	double cost = 1.0;
 	for (const auto &pd : parts) {
-		const int width = T[pd.first].hi(pd.second, node[pd.first]) - T[pd.first].lo(pd.second, node[pd.first]);
+		const int width = T[pd.first]->hi(pd.second, node[pd.first]) - T[pd.first]->lo(pd.second, node[pd.first]);
 		cost *= static_cast<double>(width > 0 ? width : 1);
 	}
 	return cost;
@@ -372,7 +413,7 @@ inline double estimate(const std::vector<Trie> &T, const std::vector<std::pair<i
 
 // Bind one more variable, turning an item into its children. Mirrors the interior
 // level of the search, but emits work instead of recursing.
-void expand(const std::vector<Trie> &T, const std::vector<std::vector<std::pair<int, int>>> &by_var,
+void expand(const std::vector<const Trie *> &T, const std::vector<std::vector<std::pair<int, int>>> &by_var,
             const std::vector<std::vector<int>> &lower_bounds, const WorkItem &item, std::vector<WorkItem> &out) {
 	const int level = item.level;
 	const auto &parts = by_var[level];
@@ -387,15 +428,15 @@ void expand(const std::vector<Trie> &T, const std::vector<std::vector<std::pair<
 	int lead = 0, best = INT_MAX;
 	for (std::size_t p = 0; p < parts.size(); ++p) {
 		const int rel = parts[p].first, depth = parts[p].second;
-		const int width = T[rel].hi(depth, item.node[rel]) - T[rel].lo(depth, item.node[rel]);
+		const int width = T[rel]->hi(depth, item.node[rel]) - T[rel]->lo(depth, item.node[rel]);
 		if (width < best) {
 			best = width;
 			lead = static_cast<int>(p);
 		}
 	}
 	const int lrel = parts[lead].first, ldep = parts[lead].second;
-	const std::vector<i64> &lvals = T[lrel].vals[ldep];
-	const int lbegin = T[lrel].lo(ldep, item.node[lrel]), lfinish = T[lrel].hi(ldep, item.node[lrel]);
+	const std::vector<i64> &lvals = T[lrel]->vals[ldep];
+	const int lbegin = T[lrel]->lo(ldep, item.node[lrel]), lfinish = T[lrel]->hi(ldep, item.node[lrel]);
 
 	int cursor = lbegin;
 	if (has_floor) {
@@ -412,19 +453,19 @@ void expand(const std::vector<Trie> &T, const std::vector<std::vector<std::pair<
 				continue;
 			}
 			const int rel = parts[p].first, depth = parts[p].second;
-			const std::vector<i64> &vv = T[rel].vals[depth];
-			const int a = T[rel].lo(depth, item.node[rel]), b = T[rel].hi(depth, item.node[rel]);
+			const std::vector<i64> &vv = T[rel]->vals[depth];
+			const int a = T[rel]->lo(depth, item.node[rel]), b = T[rel]->hi(depth, item.node[rel]);
 			const auto it = std::lower_bound(vv.begin() + a, vv.begin() + b, value);
 			if (it == vv.begin() + b || *it != value) {
 				ok = false;
 				break;
 			}
-			child[rel] = T[rel].child[depth][it - vv.begin()];
+			child[rel] = T[rel]->child[depth][it - vv.begin()];
 		}
 		if (!ok) {
 			continue;
 		}
-		child[lrel] = T[lrel].child[ldep][cursor];
+		child[lrel] = T[lrel]->child[ldep][cursor];
 
 		WorkItem next;
 		next.prefix = item.prefix;
@@ -440,7 +481,8 @@ void expand(const std::vector<Trie> &T, const std::vector<std::vector<std::pair<
 
 // Shared driver. `counting` selects FAQ-style aggregation: the search is identical,
 // only what happens at a completed prefix differs.
-static void run_join(const std::vector<py::array_t<i64>> &relations, const std::vector<std::vector<int>> &var_ids,
+static void run_join(const std::vector<std::shared_ptr<Relation>> &relations,
+                     const std::vector<std::vector<int>> &var_ids,
                      int n_vars, const std::vector<std::pair<int, int>> &less_than, std::size_t max_results,
                      int threads, bool counting, int ring, const std::vector<double> *weights_ptr,
                      std::vector<i64> &merged, i64 &grand_total, std::vector<i64> &merged_counts,
@@ -453,21 +495,15 @@ static void run_join(const std::vector<py::array_t<i64>> &relations, const std::
 		throw std::runtime_error("n_vars must be positive");
 	}
 
-	std::vector<Trie> tries(n_rel);
-	std::vector<const i64 *> ptrs(n_rel);
-	std::vector<std::size_t> rows(n_rel);
 	std::vector<int> arity(n_rel);
 	for (int i = 0; i < n_rel; ++i) {
-		auto buf = relations[i].request();
-		if (buf.ndim != 2) {
-			throw std::runtime_error("each relation must be 2-D");
+		if (!relations[i]) {
+			throw std::runtime_error("relation handle is null");
 		}
-		arity[i] = static_cast<int>(buf.shape[1]);
+		arity[i] = relations[i]->arity;
 		if (arity[i] != static_cast<int>(var_ids[i].size())) {
 			throw std::runtime_error("var_ids length must match relation arity");
 		}
-		ptrs[i] = static_cast<const i64 *>(buf.ptr);
-		rows[i] = static_cast<std::size_t>(buf.shape[0]);
 	}
 
 	std::vector<std::vector<std::pair<int, int>>> by_var(n_vars);
@@ -490,15 +526,12 @@ static void run_join(const std::vector<py::array_t<i64>> &relations, const std::
 		lower_bounds[lt.second].push_back(lt.first);
 	}
 
-	// Counter array is indexed by value, so it must span the value domain.
+	// Counter array is indexed by value, so it must span the value domain. Each
+	// relation cached its own maximum when it was indexed, so this no longer rescans.
 	i64 domain = 0;
 	if (counting) {
 		for (int i = 0; i < n_rel; ++i) {
-			const i64 *d = ptrs[i];
-			const std::size_t n = rows[i] * static_cast<std::size_t>(arity[i]);
-			for (std::size_t j = 0; j < n; ++j) {
-				domain = std::max(domain, d[j]);
-			}
+			domain = std::max(domain, relations[i]->max_value);
 		}
 		++domain;
 		if (domain <= 0) {
@@ -506,13 +539,18 @@ static void run_join(const std::vector<py::array_t<i64>> &relations, const std::
 		}
 	}
 
+	// A cyclic pattern is the same relation under several variable bindings -- a
+	// triangle is three copies of `edge` -- so the same handle arrives repeatedly.
+	// Relations still need their own cursor (`node[rel]`), because they sit at different
+	// depths, but they share the read-only trie behind it.
+	std::vector<const Trie *> tries(n_rel);
+	for (int i = 0; i < n_rel; ++i) {
+		tries[i] = &relations[i]->trie;
+	}
+
 	{
 		// The join touches no Python objects, so hold nothing while it runs.
 		py::gil_scoped_release release;
-
-		for (int i = 0; i < n_rel; ++i) {
-			tries[i].build(ptrs[i], rows[i], arity[i]);
-		}
 
 		auto fresh = [&]() {
 			JoinState st;
@@ -671,10 +709,45 @@ static void run_join(const std::vector<py::array_t<i64>> &relations, const std::
 
 }
 
-static py::array_t<i64> wcoj_hash_join(const std::vector<py::array_t<i64>> &relations,
+// Index each distinct array once per call. Dedup is on (pointer, rows, arity) and not
+// on the pointer alone: `edges[0:stop]` for two different stops shares a base address
+// while denoting different relations, which the temporal path produces routinely.
+static std::vector<std::shared_ptr<Relation>> index_arrays(
+    const std::vector<py::array_t<i64>> &arrays) {
+	struct Seen {
+		const void *ptr;
+		py::ssize_t rows, arity;
+		std::shared_ptr<Relation> rel;
+	};
+	std::vector<Seen> seen;
+	std::vector<std::shared_ptr<Relation>> out;
+	out.reserve(arrays.size());
+	for (const auto &array : arrays) {
+		auto buf = array.request();
+		if (buf.ndim != 2) {
+			throw std::runtime_error("each relation must be 2-D");
+		}
+		std::shared_ptr<Relation> found;
+		for (const auto &s : seen) {
+			if (s.ptr == buf.ptr && s.rows == buf.shape[0] && s.arity == buf.shape[1]) {
+				found = s.rel;
+				break;
+			}
+		}
+		if (!found) {
+			found = std::make_shared<Relation>(array);
+			seen.push_back({buf.ptr, buf.shape[0], buf.shape[1], found});
+		}
+		out.push_back(found);
+	}
+	return out;
+}
+
+static py::array_t<i64> wcoj_hash_join(const std::vector<py::array_t<i64>> &arrays,
                                        const std::vector<std::vector<int>> &var_ids, int n_vars,
                                        const std::vector<std::pair<int, int>> &less_than, std::size_t max_results,
                                        int threads) {
+	const auto relations = index_arrays(arrays);
 	std::vector<i64> merged, counts;
 	i64 total = 0;
 	double agg_total = 0.0;
@@ -692,9 +765,27 @@ static py::array_t<i64> wcoj_hash_join(const std::vector<py::array_t<i64>> &rela
 
 // FAQ-style aggregation: returns (total results, per-value occurrence counts) without
 // ever materialising a result tuple.
-static py::tuple wcoj_count(const std::vector<py::array_t<i64>> &relations,
+static py::tuple wcoj_count_prepared(const std::vector<std::shared_ptr<Relation>> &relations,
+                                     const std::vector<std::vector<int>> &var_ids, int n_vars,
+                                     const std::vector<std::pair<int, int>> &less_than, int threads) {
+	std::vector<i64> merged, counts;
+	std::vector<double> agg;
+	i64 total = 0;
+	double agg_total = 0.0;
+	run_join(relations, var_ids, n_vars, less_than, 0, threads, true, 0, nullptr, merged, total, counts, agg_total,
+	         agg);
+
+	py::array_t<i64> out(static_cast<py::ssize_t>(counts.size()));
+	if (!counts.empty()) {
+		std::copy(counts.begin(), counts.end(), static_cast<i64 *>(out.request().ptr));
+	}
+	return py::make_tuple(total, out);
+}
+
+static py::tuple wcoj_count(const std::vector<py::array_t<i64>> &arrays,
                             const std::vector<std::vector<int>> &var_ids, int n_vars,
                             const std::vector<std::pair<int, int>> &less_than, int threads) {
+	const auto relations = index_arrays(arrays);
 	std::vector<i64> merged, counts;
 	std::vector<double> agg;
 	i64 total = 0;
@@ -711,13 +802,14 @@ static py::tuple wcoj_count(const std::vector<py::array_t<i64>> &relations,
 
 // FAQ with a payload. `ring` selects how alternative witnesses combine: 0 sums,
 // 1 takes the minimum, 2 the maximum. `weights` is indexed by value.
-static py::tuple wcoj_aggregate(const std::vector<py::array_t<i64>> &relations,
+static py::tuple wcoj_aggregate(const std::vector<py::array_t<i64>> &arrays,
                                 const std::vector<std::vector<int>> &var_ids, int n_vars,
                                 const std::vector<std::pair<int, int>> &less_than, int ring,
                                 const std::vector<double> &weights, int threads) {
 	if (ring < 0 || ring > 2) {
 		throw std::runtime_error("ring must be 0 (sum), 1 (min) or 2 (max)");
 	}
+	const auto relations = index_arrays(arrays);
 	std::vector<i64> merged, counts;
 	std::vector<double> agg;
 	i64 total = 0;
@@ -734,9 +826,17 @@ static py::tuple wcoj_aggregate(const std::vector<py::array_t<i64>> &relations,
 
 PYBIND11_MODULE(_wcoj_native, m) {
 	m.doc() = "Worst-case optimal join (Umbra, VLDB 2020, Algorithm 3)";
+	py::class_<Relation, std::shared_ptr<Relation>>(m, "Relation",
+	                                                "A relation with its trie already built, reusable across queries.")
+	    .def(py::init<py::array_t<i64, py::array::c_style | py::array::forcecast>>(), py::arg("data"))
+	    .def_readonly("rows", &Relation::rows)
+	    .def_readonly("arity", &Relation::arity)
+	    .def_readonly("max_value", &Relation::max_value);
 	m.def("wcoj_hash_join", &wcoj_hash_join, py::arg("relations"), py::arg("var_ids"), py::arg("n_vars"),
 	      py::arg("less_than"), py::arg("max_results") = 0, py::arg("threads") = 0);
 	m.def("wcoj_count", &wcoj_count, py::arg("relations"), py::arg("var_ids"), py::arg("n_vars"),
+	      py::arg("less_than"), py::arg("threads") = 0);
+	m.def("wcoj_count_prepared", &wcoj_count_prepared, py::arg("relations"), py::arg("var_ids"), py::arg("n_vars"),
 	      py::arg("less_than"), py::arg("threads") = 0);
 	m.def("wcoj_aggregate", &wcoj_aggregate, py::arg("relations"), py::arg("var_ids"), py::arg("n_vars"),
 	      py::arg("less_than"), py::arg("ring"), py::arg("weights"), py::arg("threads") = 0);

@@ -267,6 +267,47 @@ The `k**3` and `n_phases**3` growth is real but mild at this scale, because each
 runs over a `1/k` slice of the edges; the fixed cost of symmetrising and deduping the
 edge list is a large share of the untyped 1.48 s baseline.
 
+#### Making the census fast: the cost was never the language
+
+On a rel-event-shaped synthetic -- three relations of 213k/72k/16k edges, 23 cutoffs,
+19k query rows -- the obvious implementation took 57.3 s. Profiling the first cached
+version put 80% of the remaining time inside the compiled join, which reads as "already
+optimal, and what is left is Python". Both halves of that reading were wrong.
+
+| | time | what changed |
+|---|---:|---|
+| slice every type at every cutoff, full census each time | 57.3 s | — |
+| hoist static types out of the cutoff loop | 25.7 s | Python |
+| dedupe identical tries within a call, drop the identity-permutation copy | 19.2 s | C++ / Python |
+| reuse a built index across queries (`Relation` handles) | 8.1 s | C++ |
+| pack `(u << 32) \| v` instead of `np.unique(axis=0)` | **6.7 s** | Python |
+
+**8.6x end to end, and the join kernel itself was never touched.** Every win was
+redundant work, not slow code:
+
+* *Static types are loop-invariant.* Their symmetrisation, degrees, and any triangle
+  whose three slots are all static do not depend on the cutoff. Level I was re-deriving
+  the 213k-edge friendship graph 23 times per split.
+* *The index was rebuilt per query.* A `k=3` census issues 27 queries over 3 tables and
+  was building 81 tries, each a full lexicographic sort. `Relation` handles make that 3.
+  This alone took the in-kernel time from 20.4 s to 5.4 s -- so **73% of what profiled as
+  "join time" was index construction, not search.**
+* *Fancy indexing copies.* `atom.data[:, cols]` gave each of a triangle's three atoms a
+  private copy of the same edge table, which also hid from the backend that they were the
+  same buffer. Skipping the copy when the permutation is the identity fixed both.
+* *`np.unique(axis=0)` sorts a void view of each row*, several times slower than sorting
+  int64. Node ids fit in 32 bits, so packing the pair into one key is exact, with a
+  fallback for ids that do not fit.
+
+Two correctness notes, because both were nearly lost in the speedup. Trie dedup keys on
+`(pointer, rows, arity)` and **not** on the pointer alone: `edges[0:stop]` for two
+different stops shares a base address while denoting different relations, which the
+temporal path produces routinely. And the handle path initially bypassed
+`_require_non_negative`, which is the guard against the out-of-bounds write recorded
+above; it now runs once per census instead of once per query. Both are tested.
+
+All nine eval levels return bit-identical AUCs before and after.
+
 #### Which of them earns it (RelBench rel-event again)
 
 rel-event has three user-user relations, not the one the earlier run used:

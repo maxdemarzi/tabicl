@@ -336,7 +336,16 @@ def _marshal(atoms: Sequence[Atom], order: List[str], less_than: Sequence[Tuple[
             raise ValueError(f"atom {atom.name!r} uses variables not in order: {sorted(missing)}")
         local = [v for v in order if v in atom.variables]
         cols = [list(atom.variables).index(v) for v in local]
-        relations.append(np.ascontiguousarray(atom.data[:, cols], dtype=np.int64))
+        data = atom.data
+        if cols != list(range(len(cols))) or data.dtype != np.int64:
+            # Fancy indexing copies, so only pay for it when the columns actually move.
+            # Otherwise the three atoms of a triangle each get a private copy of the
+            # same edge table, and the compiled backend cannot tell they are the same
+            # buffer -- which is exactly what lets it build one trie instead of three.
+            data = np.ascontiguousarray(data[:, cols], dtype=np.int64)
+        elif not data.flags["C_CONTIGUOUS"]:
+            data = np.ascontiguousarray(data)
+        relations.append(data)
         var_ids.append([position[v] for v in local])
 
     pairs = []
@@ -468,10 +477,22 @@ def wcoj_aggregate(
 
 
 def _undirected_edges(edges: np.ndarray) -> np.ndarray:
-    """Symmetrise and dedupe, so an undirected motif is counted once per orientation."""
+    """Symmetrise and dedupe, so an undirected motif is counted once per orientation.
+
+    Dedup is on a packed ``(u << 32) | v`` key rather than ``np.unique(..., axis=0)``.
+    The 2-D form sorts a void view of each row, which is several times slower than
+    sorting int64 and is called once per (cutoff x window) on the temporal path. Falls
+    back to the general form when ids do not fit in 32 bits.
+    """
     both = np.vstack([edges, edges[:, ::-1]])
     both = both[both[:, 0] != both[:, 1]]
-    return np.unique(both, axis=0)
+    if both.size == 0:
+        return both
+    if both.dtype != np.int64 or int(both.max()) >= (1 << 31) or int(both.min()) < 0:
+        return np.unique(both, axis=0)
+    packed = (both[:, 0] << np.int64(32)) | both[:, 1]
+    keep = np.unique(packed)
+    return np.column_stack([keep >> np.int64(32), keep & np.int64(0xFFFFFFFF)])
 
 
 def _gather(by_value: np.ndarray, nodes: np.ndarray) -> np.ndarray:
@@ -670,39 +691,82 @@ def typed_triangle_counts(
         nodes = np.unique(np.concatenate(present)) if present else np.empty(0, dtype=np.int64)
     nodes = np.asarray(nodes, dtype=np.int64)
 
+    columns = _typed_census(prepared, types, nodes, threads)
+    return pd.DataFrame(
+        {"tri__" + "_".join(types[i] for i in combo): counts for combo, counts in columns.items()},
+        index=pd.Index(nodes, name="node"),
+    )
+
+
+def _typed_census(
+    prepared: Sequence[np.ndarray],
+    types: Sequence[str],
+    nodes: np.ndarray,
+    threads: int,
+    wanted: set | None = None,
+) -> Dict[Tuple[int, ...], np.ndarray]:
+    """Run the ordered-triple loop over already-symmetrised edge arrays.
+
+    Split out so the temporal path can ask for a *subset* of combinations. Combos whose
+    three slots are all static do not change with the cutoff, so recomputing them once
+    per prediction time is pure waste; ``wanted`` is how they get skipped.
+
+    Each edge table is indexed once and the handle reused across all ``k ** 3`` queries.
+    Without that the census rebuilds the same tries `k ** 2` times each -- and the trie
+    is a full lexicographic sort, so on large relations that dominated the run.
+
+    Returns a dict keyed by sorted index triple, so the caller owns column naming.
+    """
     columns = {
         combo: np.zeros(len(nodes), dtype=np.int64)
         for combo in itertools.combinations_with_replacement(range(len(types)), 3)
     }
 
+    # Once per census rather than once per query, but it must still happen: the counting
+    # kernel accumulates into an array indexed BY VALUE, so a negative value is an
+    # out-of-bounds write rather than a wrong answer.
+    _require_non_negative(prepared)
+
+    indexed = None
+    if _wcoj_native is not None and len(nodes):
+        # Every atom below is already in global variable order (a<b, b<c, a<c under
+        # ["a","b","c"]), so no column permutation stands between the array and its
+        # index -- which is what makes one handle per type reusable across the census.
+        indexed = [
+            _wcoj_native.Relation(np.ascontiguousarray(e, dtype=np.int64)) if e.size else None
+            for e in prepared
+        ]
+    var_ids = [[0, 1], [1, 2], [0, 2]]
+    pairs = [(0, 1), (1, 2)]
+
     for i, j, k in itertools.product(range(len(types)), repeat=3):
+        key = tuple(sorted((i, j, k)))
+        if wanted is not None and key not in wanted:
+            continue
         ab, bc, ac = prepared[i], prepared[j], prepared[k]
         if ab.size == 0 or bc.size == 0 or ac.size == 0 or len(nodes) == 0:
             continue
-        atoms = [
-            Atom(types[i], ("a", "b"), ab),
-            Atom(types[j], ("b", "c"), bc),
-            Atom(types[k], ("a", "c"), ac),
-        ]
-        slot = columns[tuple(sorted((i, j, k)))]
-        if _wcoj_native is not None:
-            _total, occurrences = wcoj_count(
-                atoms, ["a", "b", "c"], less_than=[("a", "b"), ("b", "c")], threads=threads
+        slot = columns[key]
+        if indexed is not None:
+            _total, occurrences = _wcoj_native.wcoj_count_prepared(
+                [indexed[i], indexed[j], indexed[k]], var_ids, 3, pairs, int(threads)
             )
             slot += _gather(occurrences, nodes)
         else:
             # No sparse shortcut here: diag(A^3) needs one adjacency matrix, and the
             # three slots carry different ones. Enumerate and bincount instead.
+            atoms = [
+                Atom(types[i], ("a", "b"), ab),
+                Atom(types[j], ("b", "c"), bc),
+                Atom(types[k], ("a", "c"), ac),
+            ]
             found = wcoj_join(
                 atoms, ["a", "b", "c"], less_than=[("a", "b"), ("b", "c")], backend="python"
             )
             if found.size:
                 slot += _gather(np.bincount(found.ravel()), nodes)
 
-    return pd.DataFrame(
-        {"tri__" + "_".join(types[i] for i in combo): counts for combo, counts in columns.items()},
-        index=pd.Index(nodes, name="node"),
-    )
+    return columns
 
 
 def typed_motif_features(
@@ -1069,24 +1133,61 @@ def typed_temporal_motif_features(
             name = "_".join(types[i] for i in combo)
             out[f"{label}__tri__{name}"] = np.zeros(len(nodes), dtype=np.int64)
 
+    # --- everything a static type contributes is loop-invariant ----------------------
+    # A static type's edge set is the same at every cutoff and ignores windows, so its
+    # symmetrisation, its degrees, and any triangle whose three slots are all static are
+    # computed once here rather than once per prediction time. On rel-event this is the
+    # difference between symmetrising a 213k-edge friendship graph twice and 46 times.
+    symmetrised = {name: _undirected_edges(prepared[name][0]) for name in static}
+    static_names = [n for n in types if n in static]
+    static_index = {n: i for i, n in enumerate(static_names)}
+    all_static = {
+        tuple(sorted(static_index[types[i]] for i in combo))
+        for combo in combos
+        if all(types[i] in static for i in combo)
+    }
+
+    if static_names:
+        # Computed over the *whole* nodes array once; per-cutoff rows index into it.
+        frozen_degrees = {
+            name: _degrees(symmetrised[name], nodes) for name in static_names
+        }
+        frozen_census = _typed_census(
+            [symmetrised[n] for n in static_names], static_names, nodes, threads, all_static
+        )
+        for label in spans:
+            for name in static_names:
+                out[f"{label}__deg__{name}"] = frozen_degrees[name].copy()
+            for combo, counts in frozen_census.items():
+                column = "_".join(static_names[i] for i in combo)
+                out[f"{label}__tri__{column}"] = counts.copy()
+
+    # Triangles the cutoff can move: at least one slot comes from a timestamped type.
+    moving = {
+        combo for combo in combos if any(types[i] not in static for i in combo)
+    }
+
     for cutoff in np.unique(cutoff_time):
         rows = np.flatnonzero(cutoff_time == cutoff)
         asked = nodes[rows]
         for label, span in spans.items():
-            sliced = {}
+            ordered = []
             for name in types:
-                edges, when = prepared[name]
-                if when is None:  # static: no cutoff to apply
-                    sliced[name] = edges
+                if name in static:
+                    ordered.append(symmetrised[name])
                     continue
+                edges, when = prepared[name]
                 stop = int(np.searchsorted(when, cutoff, side="left"))
                 start = 0 if span is None else int(
                     np.searchsorted(when, cutoff - span, side="left")
                 )
-                sliced[name] = edges[start:stop]
+                sub = _undirected_edges(edges[start:stop])
+                ordered.append(sub)
+                out[f"{label}__deg__{name}"][rows] = _degrees(sub, asked)
 
-            feats = typed_motif_features(sliced, nodes=asked, threads=threads)
-            for column in feats.columns:
-                out[f"{label}__{column}"][rows] = feats[column].to_numpy()
+            census = _typed_census(ordered, types, asked, threads, moving)
+            for combo in moving:
+                column = "_".join(types[i] for i in combo)
+                out[f"{label}__tri__{column}"][rows] = census[combo]
 
     return pd.DataFrame(out, index=pd.RangeIndex(len(nodes)))
