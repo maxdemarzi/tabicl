@@ -117,7 +117,11 @@ run; do not tighten it on one that already fits, and choose the value on a valid
 split rather than assuming one.
 
 Categorical statistics on the as-of path are opt-in via `top_k_categories` and
-`include_mode`, and both are **off by default because they are not a general win**:
+`include_mode`. Both are **off by default**, though the evidence for that is weaker than
+it looked: the −3.21 below is a single measurement on 1,958 test rows, and reseeding the
+context subsample moves absolute scores by 5+ points on this task. A five-seed
+validation comparison gives +0.39 ± 0.29 in the *opposite* direction. Off-by-default
+remains the conservative choice; "not a general win" is provisional. Measured at:
 measured at +1.25 on rel-trial, 0.0 on rel-f1, and −3.21 on rel-event, where they also
 cost 2.3× the model time. The block's price is paid in columns, so it loses on any task
 where column count is already the binding constraint. Turn it on when a schema's signal
@@ -176,7 +180,7 @@ Ranked by measured AUC contribution, largest first:
 | which relations you traverse | +0.083 |
 | look-back windows | +0.089 on rel-f1; median +0.001 elsewhere |
 | column budget | +3.0 rel-event, 0.0 rel-trial, **−19.5 rel-f1** — task-dependent |
-| categorical blocks (as-of) | +1.25 rel-trial, 0.0 rel-f1, **−3.21 rel-event** — off by default |
+| categorical blocks (as-of) | +1.25 rel-trial, 0.0 rel-f1, −3.21 rel-event *(single seed, under re-verification)* — off by default |
 | context size | rel-avito loses nothing at 8.6%; rel-trial loses 2.74 at 23% — calibrate |
 | type-aware motifs | +0.021 |
 | the whole WCOJ/FAQ engine | +0.016 |

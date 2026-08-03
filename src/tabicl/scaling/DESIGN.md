@@ -858,6 +858,14 @@ Both are exact and tested. Neither should be turned on by default:
 | rel-f1 / driver-top3 | 60.31 | 60.31 | 0.00 (children are all numeric) |
 | rel-event / user-ignore | 79.85 | **76.64** | **-3.21** |
 
+> **Under re-verification, and the reason matters.** The -3.21 below is *one*
+> measurement on 1,958 test rows. Reseeding the context subsample on this task moves the
+> absolute score from 79.87 to 85.32 -- a 5.45-point swing from nothing but which rows
+> land in context -- so a 3-point difference measured once cannot carry the conclusion
+> drawn from it. A five-seed comparison on validation puts the categorical gap at
+> **+0.39 +- 0.29, winning 5/5**, which is the opposite sign. Treat the row below, and
+> "does not generalise", as provisional until the same reseeding is applied to test.
+
 **It hurts rel-event by more than it helps rel-trial**, and costs 2.3x the model time
 there (403s -> 912s). The explanation is consistent with everything else measured here:
 the block's price is paid in *columns*, and rel-event is the task where column count is
