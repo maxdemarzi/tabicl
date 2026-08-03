@@ -25,11 +25,18 @@ Levels
   C  + typed static motifs         does splitting by relation beat one untyped count
   D  + causal motifs               strictly before the cutoff -- but drops friendship
   E  + causal, windowed, phased    recency and ordering
-  F  + static friend AND causal    the combination worth shipping
+  F  + static friend AND causal    untyped combination
+  G  + static co-occurrence        the control that isolates causality from relation
+  H  + typed causal                strictly causal, every relation timestamped
+  I  + typed, friend static        H plus friendship, which has no timestamp
 
 **B -> D changes two things at once** -- it adds causality and removes the only
-relation covering 90% of task users. F is the controlled version: it holds the
-friendship features fixed and asks what causal temporal features add on top.
+relation covering 90% of task users. G holds the relation fixed and removes only the
+cutoff, so B -> G is relation choice and G -> D is causality.
+
+**H is the only strictly causal typed number.** I includes friendship as a static
+type, which is worth measuring because dropping a 91.8%-coverage relation is expensive,
+but a static type leaks and the result is only as causal as its least causal type.
 
 Usage
 -----
@@ -58,6 +65,7 @@ from tabicl.scaling import (
     native_available,
     temporal_motif_features,
     typed_motif_features,
+    typed_temporal_motif_features,
 )
 
 TASK = "user-ignore"
@@ -73,6 +81,8 @@ LABELS = {
     "E": "+ causal, windowed, phased",
     "F": "+ static friend AND causal",
     "G": "+ static co-occurrence",
+    "H": "+ typed causal (co-occ only)",
+    "I": "+ typed, friend static + causal",
 }
 
 
@@ -113,11 +123,11 @@ def cooccurrence_edges(attendees: pd.DataFrame, statuses, max_event: int):
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("levels", nargs="?", default="ABCDEF")
+    ap.add_argument("levels", nargs="?", default="ABCDEFGHI")
     ap.add_argument("--max-event", type=int, default=DEFAULT_MAX_EVENT)
     ap.add_argument("--n-estimators", type=int, default=4)
     args = ap.parse_args()
-    levels = [lv for lv in "ABCDEFG" if lv in set(args.levels.upper())]
+    levels = [lv for lv in "ABCDEFGHI" if lv in set(args.levels.upper())]
 
     db = get_dataset("rel-event").get_db()
     task = get_task("rel-event", TASK)
@@ -218,6 +228,25 @@ def main() -> None:
             joined = static_causal.reindex(ids)
             for col in static_causal.columns:
                 feats[f"cooc__{col}"] = joined[col].to_numpy()
+        if level in ("H", "I"):
+            # H is strictly causal: every relation in it carries a timestamp. I adds
+            # friendship as a *static* type, which leaks -- the whole point of keeping
+            # them separate is that only H's number is a causal one.
+            if level == "H":
+                edge_types = {"coinvite": invite_edges, "coattend": attend_edges}
+                time_types = {"coinvite": invite_times, "coattend": attend_times}
+            else:
+                edge_types = dict(by_type)
+                time_types = {"friend": None, "coinvite": invite_times,
+                              "coattend": attend_times}
+            typed_causal = typed_temporal_motif_features(
+                edge_types,
+                time_types,
+                nodes=ids,
+                cutoffs=entity_df["timestamp"].to_numpy(),
+            )
+            for col in typed_causal.columns:
+                feats[f"tc__{col}"] = typed_causal[col].to_numpy()
         if level in ("D", "E", "F"):
             if level == "D":
                 windows, phases = {"all": None}, 1

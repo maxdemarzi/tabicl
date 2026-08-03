@@ -29,6 +29,7 @@ from ._wcoj import (
     temporal_motif_features,
     triangle_counts,
     typed_motif_features,
+    typed_temporal_motif_features,
     typed_triangle_counts,
     wcoj_aggregate,
     wcoj_count,
@@ -64,5 +65,6 @@ __all__ = [
     "typed_triangle_counts",
     "typed_motif_features",
     "temporal_motif_features",
+    "typed_temporal_motif_features",
     "native_available",
 ]

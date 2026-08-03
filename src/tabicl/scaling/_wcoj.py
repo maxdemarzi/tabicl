@@ -42,6 +42,7 @@ __all__ = [
     "typed_triangle_counts",
     "typed_motif_features",
     "temporal_motif_features",
+    "typed_temporal_motif_features",
     "native_available",
 ]
 
@@ -941,5 +942,151 @@ def temporal_motif_features(
                 for combo in phase_combos:
                     name = "_".join(f"p{i}" for i in combo)
                     out[f"{label}__tri__{name}"][rows] = census[f"tri__{name}"].to_numpy()
+
+    return pd.DataFrame(out, index=pd.RangeIndex(len(nodes)))
+
+
+def typed_temporal_motif_features(
+    edges_by_type: Mapping[str, np.ndarray],
+    times_by_type: Mapping[str, object],
+    nodes: np.ndarray,
+    cutoffs,
+    windows: Mapping[str, object] | None = None,
+    threads: int = 0,
+):
+    """The typed census, under a per-row cutoff. Cross-type triangles included.
+
+    Measured on rel-event, typing was worth +0.126 AUC and the cutoff cost -0.011, so
+    the combination is the configuration worth having; see ``DESIGN.md``. Calling
+    :func:`temporal_motif_features` once per type would not give it, because the
+    cross-type columns -- ``tri__friend_coinvite_coinvite`` and the like -- are exactly
+    the ones carrying the gain, and no per-type run can see them.
+
+    Parameters
+    ----------
+    edges_by_type : Mapping[str, np.ndarray]
+        One ``(n_edges, 2)`` array per type, over a shared node id space. At most
+        :data:`MAX_EDGE_TYPES` types.
+
+    times_by_type : Mapping[str, array-like or None]
+        Timestamps for each type's edges, same keys as ``edges_by_type``. **``None``
+        marks a type as static** -- every edge of it is visible at every cutoff. Real
+        schemas have untimestamped relations (rel-event's `user_friends` is one) and
+        dropping them costs more than including them, but a static type does leak the
+        future, so the whole result is only as causal as its least causal type.
+
+    nodes : np.ndarray
+        Node id to describe, one per query row.
+
+    cutoffs : array-like
+        Prediction time per query row. Must match the time type of every non-``None``
+        entry in ``times_by_type``.
+
+    windows : Mapping[str, object], optional
+        Lookback width per named window; ``None`` as a width means all history before
+        the cutoff. Defaults to ``{"all": None}``. Static types ignore windows, since
+        they have no time to window over.
+
+    threads : int, default=0
+        Worker threads for the compiled backend; 0 means one per core.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per query, in input order, with a ``RangeIndex``. Columns are
+        ``<window>__deg__<type>`` and ``<window>__tri__<t1>_<t2>_<t3>``.
+
+    Notes
+    -----
+    No phase splitting here, deliberately. Phases are types, so combining them would
+    make the census ``(k * n_phases) ** 3`` joins -- 216 for three types and two phases
+    -- and phases measured as a *negative* result on rel-event (-0.014). The untyped
+    :func:`temporal_motif_features` still offers them.
+
+    Cost is ``k ** 3`` joins per (distinct cutoff x window). Distinct cutoffs, not rows.
+    """
+    import pandas as pd
+
+    types = list(edges_by_type)
+    if not types:
+        raise ValueError("edges_by_type is empty; give at least one edge type")
+    if len(types) > MAX_EDGE_TYPES:
+        raise ValueError(
+            f"{len(types)} edge types needs {len(types) ** 3} joins per cutoff; "
+            f"at most {MAX_EDGE_TYPES} are allowed. Merge rare types first."
+        )
+    missing = set(types) - set(times_by_type)
+    if missing:
+        raise ValueError(
+            f"times_by_type has no entry for {sorted(missing)}; pass None to mark a "
+            f"type static rather than omitting it"
+        )
+
+    nodes = np.asarray(nodes, dtype=np.int64)
+    cutoff_time, cutoffs_are_dates = _as_epoch(cutoffs, "cutoffs")
+    if len(cutoff_time) != len(nodes):
+        raise ValueError(
+            f"cutoffs has length {len(cutoff_time)} but there are {len(nodes)} query nodes"
+        )
+
+    # Sort each timestamped type chronologically once, so a window is a slice.
+    prepared, static = {}, set()
+    for name in types:
+        edges = np.asarray(edges_by_type[name])
+        if edges.ndim != 2 or edges.shape[1] != 2:
+            raise ValueError(f"edges for type {name!r} must have shape (n, 2), got {edges.shape}")
+        stamps = times_by_type[name]
+        if stamps is None:
+            static.add(name)
+            prepared[name] = (edges, None)
+            continue
+        when, are_dates = _as_epoch(stamps, f"times for type {name!r}")
+        if len(when) != len(edges):
+            raise ValueError(
+                f"times for type {name!r} has length {len(when)} but there are "
+                f"{len(edges)} edges"
+            )
+        if are_dates != cutoffs_are_dates:
+            raise ValueError(
+                f"times for type {name!r} and cutoffs must both be datetime-like or "
+                f"both numeric"
+            )
+        order = np.argsort(when, kind="stable")
+        prepared[name] = (edges[order], when[order])
+
+    if windows is None:
+        windows = {"all": None}
+    spans = {label: _as_span(width, cutoffs_are_dates) for label, width in windows.items()}
+    if not spans:
+        raise ValueError("windows is empty; pass at least one, or None for all history")
+
+    combos = list(itertools.combinations_with_replacement(range(len(types)), 3))
+    out: Dict[str, np.ndarray] = {}
+    for label in spans:
+        for name in types:
+            out[f"{label}__deg__{name}"] = np.zeros(len(nodes), dtype=np.int64)
+        for combo in combos:
+            name = "_".join(types[i] for i in combo)
+            out[f"{label}__tri__{name}"] = np.zeros(len(nodes), dtype=np.int64)
+
+    for cutoff in np.unique(cutoff_time):
+        rows = np.flatnonzero(cutoff_time == cutoff)
+        asked = nodes[rows]
+        for label, span in spans.items():
+            sliced = {}
+            for name in types:
+                edges, when = prepared[name]
+                if when is None:  # static: no cutoff to apply
+                    sliced[name] = edges
+                    continue
+                stop = int(np.searchsorted(when, cutoff, side="left"))
+                start = 0 if span is None else int(
+                    np.searchsorted(when, cutoff - span, side="left")
+                )
+                sliced[name] = edges[start:stop]
+
+            feats = typed_motif_features(sliced, nodes=asked, threads=threads)
+            for column in feats.columns:
+                out[f"{label}__{column}"][rows] = feats[column].to_numpy()
 
     return pd.DataFrame(out, index=pd.RangeIndex(len(nodes)))

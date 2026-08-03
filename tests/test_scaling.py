@@ -1108,6 +1108,87 @@ def test_temporal_features_accept_datetimes():
     assert full["all__triangles"].tolist() == [0, 1]
 
 
+def test_typed_temporal_matches_typed_motifs_on_the_edges_it_can_see():
+    """Under a cutoff past everything, the causal census must equal the static one."""
+    from tabicl.scaling import typed_temporal_motif_features
+
+    a = _random_graph(14, 0.35, 21)
+    b = _random_graph(14, 0.35, 22)
+    nodes = np.arange(14, dtype=np.int64)
+    ta, tb = np.arange(len(a)), np.arange(len(b))
+
+    static = typed_motif_features({"a": a, "b": b}, nodes=nodes)
+    causal = typed_temporal_motif_features(
+        {"a": a, "b": b},
+        {"a": ta, "b": tb},
+        nodes=nodes,
+        cutoffs=np.full(len(nodes), max(len(a), len(b)) + 1),
+    )
+    for col in static.columns:
+        assert causal[f"all__{col}"].tolist() == static[col].tolist(), col
+
+
+def test_typed_temporal_keeps_cross_type_triangles_a_per_type_run_would_lose():
+    """The whole reason this exists: one call per type cannot see a mixed triangle."""
+    from tabicl.scaling import typed_temporal_motif_features
+
+    friend = np.array([[0, 1]], dtype=np.int64)
+    coinvite = np.array([[1, 2], [0, 2]], dtype=np.int64)
+    out = typed_temporal_motif_features(
+        {"friend": friend, "coinvite": coinvite},
+        {"friend": [0], "coinvite": [1, 2]},
+        nodes=[0, 0],
+        cutoffs=[2, 3],
+    )
+    # At cutoff 2 the closing co-invite edge has not happened; at 3 it has.
+    assert out["all__tri__friend_coinvite_coinvite"].tolist() == [0, 1]
+    assert out["all__tri__friend_friend_friend"].tolist() == [0, 0]
+
+
+def test_typed_temporal_static_types_ignore_the_cutoff():
+    """A None timestamp means 'always visible' -- and that is a documented leak."""
+    from tabicl.scaling import typed_temporal_motif_features
+
+    friend = np.array([[0, 1], [1, 2], [0, 2]], dtype=np.int64)
+    coinvite = np.array([[0, 3]], dtype=np.int64)
+    out = typed_temporal_motif_features(
+        {"friend": friend, "coinvite": coinvite},
+        {"friend": None, "coinvite": [99]},
+        nodes=[0, 0],
+        cutoffs=[0, 100],
+    )
+    # The friend triangle is visible even at cutoff 0, because friend is static.
+    assert out["all__tri__friend_friend_friend"].tolist() == [1, 1]
+    # The co-invite edge at t=99 is not, at cutoff 0.
+    assert out["all__deg__coinvite"].tolist() == [0, 1]
+
+
+def test_typed_temporal_windows_apply_per_type():
+    from tabicl.scaling import typed_temporal_motif_features
+
+    a = np.array([[0, 1], [0, 2], [0, 3]], dtype=np.int64)
+    out = typed_temporal_motif_features(
+        {"a": a}, {"a": [0, 90, 95]}, nodes=[0], cutoffs=[100],
+        windows={"all": None, "recent": 20},
+    )
+    assert out["all__deg__a"].iloc[0] == 3
+    assert out["recent__deg__a"].iloc[0] == 2
+
+
+def test_typed_temporal_rejects_missing_or_mismatched_times():
+    from tabicl.scaling import typed_temporal_motif_features
+
+    e = np.array([[0, 1]], dtype=np.int64)
+    with pytest.raises(ValueError, match="pass None to mark a type static"):
+        typed_temporal_motif_features({"a": e, "b": e}, {"a": [0]}, nodes=[0], cutoffs=[1])
+    with pytest.raises(ValueError, match="has length"):
+        typed_temporal_motif_features({"a": e}, {"a": [0, 1]}, nodes=[0], cutoffs=[1])
+    with pytest.raises(ValueError, match="datetime-like or"):
+        typed_temporal_motif_features(
+            {"a": e}, {"a": [0]}, nodes=[0], cutoffs=pd.to_datetime(["2026-01-01"])
+        )
+
+
 def test_temporal_features_reject_mismatched_inputs():
     e = np.array([[0, 1], [1, 2]], dtype=np.int64)
     with pytest.raises(ValueError, match="times has length"):
