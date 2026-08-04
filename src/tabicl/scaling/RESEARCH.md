@@ -237,7 +237,16 @@ retracted result costs.
 Should also assert the temporal rule directly: recompute with cutoffs shifted earlier and
 confirm scores degrade rather than improve.
 
-## 8. Graph neighbours as ICL context — message passing without touching weights
+## 8. Graph neighbours as ICL context — MEASURED, +4.80 ⚠
+
+**First result in: a graph-neighbour context beats a random one of equal size by +4.80
+mean (4.33 / 8.80 / 1.28 over three paired seeds) on rel-event.** Homophily lift was
++0.29, so the gate passed decisively. The graph arm also beats the full-context baseline
+while using a quarter of the rows. Caveats: three seeds, wide spread, and a static
+friendship graph so this is an upper bound. See `PERFORMANCE.md`.
+
+This is the largest positive effect measured in the project, and the only one that
+attacks the i.i.d. limitation rather than adding a feature.
 
 **The strongest idea here, and it bridges 2 and 6.**
 

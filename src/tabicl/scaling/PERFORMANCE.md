@@ -36,14 +36,29 @@ five points. Pair everything.
 
 ## Run log
 
-### 2026-08-04 — graph-context experiment BLOCKED on infrastructure
-`eval_graph_context` is written, committed and unrun. Five consecutive RunPod L40S hosts
-came up with `nvidia-smi` healthy and `device_count 1` but every `torch.cuda` allocation
-failing — the CUDA-verification loop in `pod_runner.py` rejected and terminated each one,
-which is what it is for. Community capacity was also thin. Nothing left billing.
-*Nothing measured; no number to record.* Re-run when capacity recovers:
-`python -m tabicl.scaling.pod_runner create` then
-`python -m tabicl.scaling.eval_graph_context --context 5000 --seeds 3`.
+### 2026-08-04 — graph-neighbour context beats random by +4.80 ⚠ largest positive result
+rel-event / user-ignore, RTX 3090, AMP off, `n_estimators=4`, context 5,000 both arms.
+Sanity cell reproduced 80.93 first.
+
+Homophily gate: observed **0.8691** same-label edges against **0.5788** expected under
+random assignment, lift **+0.2903** over 37,707 label-known edges. Passed decisively.
+
+| seed | random context | graph context | gap |
+|---:|---:|---:|---:|
+| 0 | 81.14 | 85.47 | +4.33 |
+| 1 | 75.31 | 84.11 | +8.80 |
+| 2 | 82.78 | 84.06 | +1.28 |
+
+*Changed:* which rows enter the context. Nothing else — same features, same size, same
+seed, paired.
+*Mean gap +4.80, sd 3.78, all three seeds positive*, smallest well above the ±0.6 floor.
+The graph arm also beats the **full-context** baseline of 80.93 on 5,000 of 19,239 rows.
+*Caveats:* three seeds and a wide spread; and `user_friends` carries no timestamp, so the
+graph is static and a friendship formed after a prediction time is visible. Upper bound
+on a causal version. The random arm's own spread (75.31–82.78) is most of the variance.
+
+*Infrastructure note:* five consecutive L40S hosts had healthy `nvidia-smi` with every
+`torch.cuda` allocation failing; a 3090 worked first try. `pod_runner` now tries L40S last.
 
 ### 2026-08-04 — calibrated sweep completed
 rel-avito **64.85** (was 64.46 hand-picked), rel-event **78.11** (unchanged).
