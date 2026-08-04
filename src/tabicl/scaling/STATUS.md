@@ -2,7 +2,8 @@
 
 Where this branch stands today. `DESIGN.md` is the history log: derivations, what was
 tried, what failed, and why. `TODO.md` is the open work, including one unresolved
-question that a few claims below depend on. This file is only the present tense.
+question that a few claims below depend on, and `RESEARCH.md` the candidate directions
+after it. This file is only the present tense.
 
 ## What the package provides
 
