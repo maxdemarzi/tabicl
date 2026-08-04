@@ -59,6 +59,10 @@ def main() -> None:
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--n-estimators", type=int, default=4)
+    ap.add_argument("--calibrated", action="store_true",
+                    help="full protocol: choose selection method and context size on "
+                         "validation, then score test once. This is what makes the "
+                         "result eligible for the headline table.")
     ap.add_argument("--hops", type=int, default=1,
                     help="neighbourhood radius; beyond 2 the reachable set saturates "
                          "toward the whole component and selection stops selecting")
@@ -68,18 +72,20 @@ def main() -> None:
     task = get_task("rel-event", "user-ignore", download=True)
     key, target = task.entity_col, task.target_col
     train = task.get_table("train", mask_input_cols=False).df
+    val = task.get_table("val", mask_input_cols=False).df
     test = task.get_table("test", mask_input_cols=False).df
     tcol = next(c for c in train.columns if pd.api.types.is_datetime64_any_dtype(train[c]))
 
     # --- shared id space over users appearing in the task or the graph -----------------
     friends = db.table_dict["user_friends"].df[["user", "friend"]].dropna()
     universe = pd.Index(pd.unique(np.concatenate([
-        train[key].to_numpy(), test[key].to_numpy(),
+        train[key].to_numpy(), val[key].to_numpy(), test[key].to_numpy(),
         friends["user"].to_numpy(), friends["friend"].to_numpy()])))
     code = {v: i for i, v in enumerate(universe)}
     edges = np.column_stack([friends["user"].map(code).to_numpy(),
                              friends["friend"].map(code).to_numpy()]).astype(np.int64)
     train_nodes = train[key].map(code).to_numpy()
+    val_nodes = val[key].map(code).to_numpy()
     test_nodes = test[key].map(code).to_numpy()
 
     # --- stage 1: the gate --------------------------------------------------------------
@@ -129,6 +135,47 @@ def main() -> None:
         clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
                                random_state=seed, inference_config=NOAMP).fit(X[rows], y[rows])
         return roc_auc_score(y_te, clf.predict_proba(Xe)[:, 1]) * 100
+
+    if args.calibrated:
+        # Selection on validation only; test is touched once, at the end. The candidates
+        # are (method, context size), so the choice of *whether* to use the graph is made
+        # the same way as every other setting rather than assumed.
+        f_va = build(val).reindex(columns=f_tr.columns, fill_value=np.nan)
+        Xva, y_va = _numeric(f_va), val[target].to_numpy()
+
+        def fit_eval(rows, Xe_, y_):
+            clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
+                                   random_state=0, inference_config=NOAMP).fit(X[rows], y[rows])
+            return roc_auc_score(y_, clf.predict_proba(Xe_)[:, 1]) * 100
+
+        def rows_for(method, size, queries, seed=0):
+            if method == "random":
+                return np.random.default_rng(seed).choice(len(X), size=min(size, len(X)),
+                                                          replace=False)
+            picked = select_graph_context(edges, train_nodes, queries, n_context=size,
+                                          hops=args.hops, random_state=seed)
+            rows = np.array([node_to_row[n] for n in picked if n in node_to_row])
+            if len(rows) < min(size, len(X)):
+                spare = np.setdiff1d(np.arange(len(X)), rows)
+                need = min(size, len(X)) - len(rows)
+                rows = np.concatenate([rows, np.random.default_rng(seed).permutation(spare)[:need]])
+            return rows
+
+        best = None
+        print("selection (validation only):", flush=True)
+        for method in ("random", "graph"):
+            for size in (2000, 5000, 10000):
+                score_v = fit_eval(rows_for(method, size, val_nodes), Xva, y_va)
+                print(f"  {method:<7} context={size:<6} val={score_v:.2f}", flush=True)
+                if best is None or score_v > best[0]:
+                    best = (score_v, method, size)
+        _, method, size = best
+        print(f"
+chosen: {method} context={size}", flush=True)
+        auc = fit_eval(rows_for(method, size, test_nodes), Xe, y_te)
+        print(f"rel-event/user-ignore  CALIBRATED TEST ROC-AUC x100 = {auc:.2f}"
+              f"   (context selection={method}, size={size}, hops={args.hops})", flush=True)
+        return
 
     print(f"{'seed':>5} {'random':>9} {'graph':>9} {'gap':>8}", flush=True)
     gaps = []
