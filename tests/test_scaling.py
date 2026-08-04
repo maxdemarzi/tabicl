@@ -1977,3 +1977,56 @@ def test_sweep_raises_when_nothing_is_runnable():
 
     with pytest.raises(RuntimeError, match="no candidate was runnable"):
         sweep_configurations(["a", "b"], lambda c: 1.0, feasible=lambda c: False)
+
+
+def test_permutation_control_catches_a_feature_that_reads_its_own_label():
+    """The canonical leak: a 0-hop term, a self-loop, or the target left in the matrix."""
+    from tabicl.scaling import permutation_control
+
+    y = np.array([0, 1] * 50)
+
+    def leaky(labels):          # perfect score whatever the labels are
+        return 1.0
+
+    report = permutation_control(leaky, y, n_permutations=3)
+    assert not report.passed
+    assert "reading the row's own label" in report.reason
+
+
+def test_permutation_control_passes_an_honest_feature():
+    from tabicl.scaling import permutation_control
+
+    y = np.array([0, 1] * 50)
+    truth = y.copy()
+
+    def honest(labels):
+        # Scores well only when the labels it is handed are the real ones.
+        return 0.95 if np.array_equal(labels, truth) else 0.5
+
+    report = permutation_control(honest, y, n_permutations=3)
+    assert report.passed
+    assert report.observed == pytest.approx(0.95)
+
+
+def test_temporal_control_catches_features_reaching_past_the_cutoff():
+    """Withholding history cannot add information, so an improvement is a leak."""
+    from tabicl.scaling import temporal_control
+
+    report = temporal_control(lambda shift: 0.70 + 0.05 * shift, shifts=(0.0, 1.0, 2.0))
+    assert not report.passed
+    assert "reaching past the cutoff" in report.reason
+
+
+def test_temporal_control_passes_when_earlier_cutoffs_degrade():
+    from tabicl.scaling import temporal_control
+
+    report = temporal_control(lambda shift: 0.80 - 0.03 * shift, shifts=(0.0, 30.0))
+    assert report.passed
+    assert report.observed == pytest.approx(0.80)
+
+
+def test_temporal_control_requires_an_unshifted_baseline():
+    from tabicl.scaling import temporal_control
+
+    with pytest.raises(ValueError, match="must start at 0.0"):
+        temporal_control(lambda s: 0.5, shifts=(30.0, 90.0))
