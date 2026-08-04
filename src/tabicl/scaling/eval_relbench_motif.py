@@ -11,8 +11,13 @@ Caveat, stated because it matters: `user_friends` carries no timestamp, so the g
 is static. RelBench models it that way, but a friendship formed after a prediction
 time is still visible to that prediction, so any lift from (3) is an upper bound on
 what a strictly causal version would give.
+
+Usage
+-----
+    python -m tabicl.scaling.eval_relbench_motif [--device auto] [--n-estimators 8]
 """
 
+import argparse
 import time
 import warnings
 
@@ -26,8 +31,8 @@ warnings.filterwarnings("ignore")
 from relbench.datasets import get_dataset
 from relbench.tasks import get_task
 
-from tabicl import TabICLClassifier
 from tabicl.scaling import Table, flatten_relational, motif_features, native_available
+from tabicl.scaling._evalcfg import add_model_args, describe_model, make_classifier
 
 TASK = "user-ignore"
 
@@ -41,6 +46,8 @@ def numeric(df: pd.DataFrame) -> np.ndarray:
 
 
 def main() -> None:
+    args = add_model_args(argparse.ArgumentParser()).parse_args()
+
     db = get_dataset("rel-event", download=True).get_db()
     task = get_task("rel-event", TASK, download=True)
     key, target = task.entity_col, task.target_col
@@ -48,6 +55,7 @@ def main() -> None:
     print(f"task={TASK} entity_col={key!r} target={target!r} "
           f"train={len(train)} val={len(val)} pos={train[target].mean():.3f}")
     print(f"compiled WCOJ backend: {native_available()}")
+    print(describe_model(args))
 
     users_tbl = db.table_dict["users"].df
     interest = db.table_dict["event_interest"].df
@@ -92,7 +100,7 @@ def main() -> None:
         f_va = f_va.reindex(columns=f_tr.columns, fill_value=np.nan)
         X_tr, X_va = numeric(f_tr), numeric(f_va)
 
-        clf = TabICLClassifier(n_estimators=4, device="cpu", random_state=0).fit(X_tr, y_tr)
+        clf = make_classifier(args).fit(X_tr, y_tr)
         auc = roc_auc_score(y_va, clf.predict_proba(X_va)[:, 1])
         gbdt = HistGradientBoostingClassifier(random_state=0).fit(X_tr, y_tr)
         auc_g = roc_auc_score(y_va, gbdt.predict_proba(X_va)[:, 1])

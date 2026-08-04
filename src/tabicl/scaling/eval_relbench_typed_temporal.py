@@ -41,6 +41,7 @@ but a static type leaks and the result is only as causal as its least causal typ
 Usage
 -----
     python -m tabicl.scaling.eval_relbench_typed_temporal [levels] [--max-event N]
+        [--device auto] [--n-estimators 8]
 """
 
 import argparse
@@ -57,7 +58,7 @@ warnings.filterwarnings("ignore")
 from relbench.datasets import get_dataset
 from relbench.tasks import get_task
 
-from tabicl import TabICLClassifier
+from tabicl.scaling._evalcfg import add_model_args, describe_model, make_classifier
 from tabicl.scaling import (
     Table,
     flatten_relational,
@@ -125,7 +126,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("levels", nargs="?", default="ABCDEFGHI")
     ap.add_argument("--max-event", type=int, default=DEFAULT_MAX_EVENT)
-    ap.add_argument("--n-estimators", type=int, default=4)
+    add_model_args(ap)
     args = ap.parse_args()
     levels = [lv for lv in "ABCDEFGHI" if lv in set(args.levels.upper())]
 
@@ -138,6 +139,7 @@ def main() -> None:
     print(f"cutoffs: {train['timestamp'].nunique()} train + {val['timestamp'].nunique()} val "
           f"distinct, {str(train['timestamp'].min())[:10]} -> {str(val['timestamp'].max())[:10]}")
     print(f"compiled WCOJ backend: {native_available()}")
+    print(describe_model(args))
 
     users_tbl = db.table_dict["users"].df
     interest = db.table_dict["event_interest"].df
@@ -265,9 +267,7 @@ def main() -> None:
         f_va = f_va.reindex(columns=f_tr.columns, fill_value=np.nan)
         X_tr, X_va = numeric(f_tr), numeric(f_va)
 
-        clf = TabICLClassifier(
-            n_estimators=args.n_estimators, device="cpu", random_state=0
-        ).fit(X_tr, y_tr)
+        clf = make_classifier(args).fit(X_tr, y_tr)
         auc = roc_auc_score(y_va, clf.predict_proba(X_va)[:, 1])
         gbdt = HistGradientBoostingClassifier(random_state=0).fit(X_tr, y_tr)
         auc_g = roc_auc_score(y_va, gbdt.predict_proba(X_va)[:, 1])

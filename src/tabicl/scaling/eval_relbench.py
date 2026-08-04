@@ -4,8 +4,13 @@ RelBench rel-f1 / driver-top3: predict whether a driver finishes top-3, from a
 timestamped prediction table over a genuine multi-table schema. The entity table
 carries almost no signal on its own, so any lift has to come from the history that
 `flatten_relational` aggregates -- under a per-row cutoff, so nothing leaks.
+
+Usage
+-----
+    python -m tabicl.scaling.eval_relbench [--device auto] [--n-estimators 8]
 """
 
+import argparse
 import time
 import warnings
 
@@ -18,8 +23,8 @@ warnings.filterwarnings("ignore")
 from relbench.datasets import get_dataset
 from relbench.tasks import get_task
 
-from tabicl import TabICLClassifier
 from tabicl.scaling import Table, flatten_relational
+from tabicl.scaling._evalcfg import add_model_args, describe_model, make_classifier
 
 TARGET = "qualifying"
 
@@ -52,6 +57,8 @@ def numeric(df: pd.DataFrame) -> np.ndarray:
 
 
 def main() -> None:
+    args = add_model_args(argparse.ArgumentParser()).parse_args()
+
     db = get_dataset("rel-f1", download=True).get_db()
     task = get_task("rel-f1", "driver-top3", download=True)
     train = task.get_table("train").df
@@ -60,6 +67,7 @@ def main() -> None:
     y_tr = train[TARGET].to_numpy()
     y_va = val[TARGET].to_numpy()
     print(f"train={len(train)}  val={len(val)}  positive rate={y_tr.mean():.3f}")
+    print(describe_model(args))
 
     for label, with_history in (("entity table only", False), ("+ relational history", True)):
         t0 = time.perf_counter()
@@ -70,7 +78,7 @@ def main() -> None:
 
         X_tr, X_va = numeric(f_tr), numeric(f_va)
 
-        clf = TabICLClassifier(n_estimators=4, device="cpu", random_state=0)
+        clf = make_classifier(args)
         clf.fit(X_tr, y_tr)
         auc = roc_auc_score(y_va, clf.predict_proba(X_va)[:, 1])
 
