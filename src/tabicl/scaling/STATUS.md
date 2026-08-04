@@ -157,8 +157,15 @@ columns are published figures from the TabPFN-3 paper's Table 14.
 |---|---:|---:|---:|---:|---:|
 | rel-f1 / driver-top3 | **80.70** | 79.77 | 79.98 | 85.69 | 82.72 |
 | rel-event / user-ignore | 78.11 | 80.81 | 85.38 | 86.18 | 73.70 |
-| rel-avito / user-visits | *not run* | 64.46 | 66.68 | 66.18 | 66.76 |
+| rel-avito / user-visits | *not run* | 64.46 † | 66.68 | 66.18 | 66.76 |
 | rel-trial / study-outcome | 66.50 | 67.61 | 76.43 | 71.24 | 72.89 |
+
+† Measured on GPU with the default `use_amp=True`, which costs 7.3 AUC on rel-event.
+Likely understated; needs re-measuring with `use_amp=False`.
+
+**On GPU, set `use_amp=False` for any accuracy measurement.** The default is `True` and it
+scored 73.61 against CPU's 80.93 on rel-event; `use_amp=False` reproduces CPU exactly. It
+is harmless on well-separated data and expensive exactly where the model is uncertain.
 
 **Quote the calibrated column.** It is the one produced by a single procedure with every
 setting chosen on validation. The hand-picked column selected its configuration on the

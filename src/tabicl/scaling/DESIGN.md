@@ -1003,6 +1003,45 @@ untested at time of writing:
 rel-avito is the test of the noise explanation rather than another number: its validation
 split is far larger, so if the diagnosis is right its calibration should behave better.
 
+### AMP is on by default and costs 7.3 AUC on rel-event
+
+The largest single effect measured in this project, and it is not a feature at all.
+
+Chasing why two runners disagreed about `n_estimators` led to a much bigger discrepancy:
+the same configuration scored 80.93 on CPU and 73.61 on CUDA. Isolated on one machine, one
+variable at a time:
+
+| ruled out | evidence |
+|---|---|
+| pandas | 3.0.5 and 2.3.3 give *identical* scores |
+| torch version | pod torch 2.4.1 CPU = 80.93, local torch 2.12 CPU = 80.77 |
+| checkpoint | byte-identical, `tabicl-classifier-v2-20260212.ckpt`, 110,368,038 B |
+
+Leaving the device, and then the cause:
+
+| configuration | rel-event / user-ignore |
+|---|---:|
+| CPU | 80.93 |
+| CUDA, `use_amp=True` (**the default**) | **73.61** |
+| CUDA, `use_amp=False` | **80.93** |
+
+`use_amp=True` is set in all three inference configs. On synthetic well-separated data it
+is harmless -- AUC 98.94 vs 98.93 -- but predictions still differ by `max|dp| = 1.8e-02`,
+and *that* is the mechanism: on a task scoring ~80 the predictions cluster near the
+boundary, so a perturbation of that size reshuffles enough pairwise orderings to cost
+seven points. AMP is safe where the model is confident and expensive where it is not,
+which is exactly backwards from where one would want to spend precision.
+
+**This contaminates every GPU measurement in this file**, including rel-avito's 64.46 on
+the L40S, which was run with the default and is therefore likely understated. It does not
+touch the CPU results, and it does not touch the row-chunking equivalence proof -- that
+was verified CPU-side at `max|dp| = 1.1e-05`.
+
+Practical rule: **`use_amp=False` for any accuracy measurement on GPU.** AMP roughly
+halves runtime (11s vs 20s here), so it remains reasonable for memory benchmarking and for
+production ranking where a fixed threshold is not in play -- but not for a number anyone
+will compare.
+
 ### Where this lands against published RelBench numbers
 
 Official protocol throughout: fit on `train`, score the held-out `test` split, whose
