@@ -158,7 +158,21 @@ mean/std) and **recency-ordered fixed windows** for temporal many-to-many -- "la
 events" is the one case where a literal array is right, because the order is principled
 rather than arbitrary.
 
-### 6b. Label propagation as a feature
+### 6b. Label propagation as a feature — PROMOTED: measured at 74 AUC standalone
+
+**Measured incidentally while diagnosing item 8, and it is the strongest single number in
+that family.** Score each rel-event query by the positive rate among its labelled train
+friends — one pass over the edge list, no model at all — and it reaches **AUC 73.89 on
+validation and 74.18 on test** (coverage 0.861 / 0.864). For scale, the whole calibrated
+pipeline sits at 78.11 on that task.
+
+It is also the *right shape* where item 8 is the wrong one: a feature is chosen by the
+same validation machinery as every other setting, so it has none of item 8's
+unselectability problem. Do this one next.
+
+Build the negative controls first (item 7, `_leakage.py` is written): a train row must not
+see its own label through its own neighbourhood, and the static-graph caveat means the
+temporal control matters as much as the permutation one.
 
 The direct attack on the i.i.d. limit: inject neighbours' labels as features. `A^k · y`
 with `y` the label indicator is "how many positives are reachable in k hops", and the
@@ -237,17 +251,37 @@ retracted result costs.
 Should also assert the temporal rule directly: recompute with cutoffs shifted earlier and
 confirm scores degrade rather than improve.
 
-## 8. Graph neighbours as ICL context — MEASURED, +4.80 ⚠
+## 8. Graph neighbours as ICL context — MEASURED, real, and NOT SELECTABLE ⚠
 
-**Confirmed at 8 paired seeds: +3.10 (1 hop) and +3.37 (2 hops) over a random context
-of equal size on rel-event, 7/8 seeds positive.** It also makes the score ~3x more
-reproducible — the graph arm spans 3.1 points where random spans 9.1. Homophily lift was
-+0.29, so the gate passed decisively. The graph arm also beats the full-context baseline
-while using a quarter of the rows. Caveats: three seeds, wide spread, and a static
-friendship graph so this is an upper bound. See `PERFORMANCE.md`.
+**The effect is real and reproduces:** +3.10 (1 hop) / +3.37 (2 hops) at 8 paired seeds,
++4.80 unstratified and +4.94 stratified at 3 seeds, 7/8 seeds positive, over a random
+context of equal size on rel-event. Homophily lift +0.29. It also makes the score ~3x
+more reproducible — the graph arm spans 3.1 points where random spans 9.1 — and beats the
+full-context baseline on a quarter of the rows.
 
-This is the largest positive effect measured in the project, and the only one that
-attacks the i.i.d. limitation rather than adding a feature.
+**And the calibrated protocol rejects it anyway: 82.01 ± 4.94 over 5 replicates, graph
+chosen 1 time in 5.** That is the blocker, and it is not a measurement problem to be
+solved with more seeds. Validation rates graph selection 74.1–74.5 across every seed —
+stable to ±0.15 — while test rates the same selection +4.80 *above* random. The splits
+are not the explanation: the standalone neighbour-label signal is 73.89 on val and 74.18
+on test, and their connectivity is near-identical.
+
+Two hypotheses are already dead. **Class balance:** unstratified selection really does
+build a 0.019–0.046-positive context against a 0.163 base rate, because ranking by reach
+ranks by popularity and hubs are negative — but stratifying it changes the test gap by
+0.14, inside the floor. **Grid artefact:** the size-10000 cell was never a graph
+configuration (pool is 7,111), and it is the only cell validation ever picked; that is now
+dropped from the grid.
+
+So the open question is no longer "does graph context help" — it does — but **"what
+validation signal would ever select it?"** Until that is answered the effect cannot enter
+the headline table, because a result you cannot choose without seeing test is not a result
+you can report. Worth trying: select on a held-out slice of *train* rather than the
+official val split; or select on the paired gap rather than the absolute score, since
+pairing is what takes the noise from 2.28 to 0.29.
+
+This remains the only idea here that attacks the i.i.d. limitation rather than adding a
+feature — which is why it is worth the extra work rather than abandonment.
 
 **The strongest idea here, and it bridges 2 and 6.**
 
