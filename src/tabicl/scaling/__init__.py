@@ -8,6 +8,7 @@ from ._mqa import collapse_kv_heads, expand_kv_heads, kv_cache_bytes
 from ._relational import Table, asof_statistics, flatten_relational, hop_product
 from ._calibrate import Calibration, calibrate_context_size, sweep_configurations
 from ._leakage import LeakageReport, permutation_control, temporal_control
+from ._graph_context import label_homophily, select_graph_context
 from ._retrieval import select_context
 from ._selection import prune_features
 from ._semiring import (
@@ -59,6 +60,8 @@ __all__ = [
     "BOOLEAN",
     "BUILTIN_SEMIRINGS",
     "check_semiring_laws",
+    "label_homophily",
+    "select_graph_context",
     "LeakageReport",
     "permutation_control",
     "temporal_control",

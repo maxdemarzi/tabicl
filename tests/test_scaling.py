@@ -2030,3 +2030,62 @@ def test_temporal_control_requires_an_unshifted_baseline():
 
     with pytest.raises(ValueError, match="must start at 0.0"):
         temporal_control(lambda s: 0.5, shifts=(30.0, 90.0))
+
+
+def test_label_homophily_separates_signal_from_chance():
+    """The gate: connected nodes sharing labels more than a random assignment would."""
+    from tabicl.scaling import label_homophily
+
+    labels = np.array([0, 0, 0, 1, 1, 1])
+    homophilous = np.array([[0, 1], [1, 2], [3, 4], [4, 5]])       # only within-class
+    mixed = np.array([[0, 3], [1, 4], [2, 5]])                      # only across-class
+
+    good = label_homophily(homophilous, labels)
+    assert good["observed"] == pytest.approx(1.0)
+    assert good["lift"] > 0.4
+
+    bad = label_homophily(mixed, labels)
+    assert bad["observed"] == pytest.approx(0.0)
+    assert bad["lift"] < 0          # heterophily, the opposite signal
+
+
+def test_graph_context_prefers_neighbours_of_many_queries():
+    from tabicl.scaling import select_graph_context
+
+    # node 0 neighbours both queries (10, 11); node 1 neighbours only one; 2 and 3 neither
+    edges = np.array([[10, 0], [11, 0], [10, 1]])
+    chosen = select_graph_context(edges, train_idx=np.array([0, 1, 2, 3]),
+                                  query_idx=np.array([10, 11]), n_context=2)
+    assert set(chosen.tolist()) == {0, 1}
+    assert chosen[0] == 0, "the node reached by both queries must rank first"
+
+
+def test_graph_context_never_puts_a_query_in_its_own_context():
+    """A query in its own context is the leak this whole family is prone to."""
+    from tabicl.scaling import select_graph_context
+
+    edges = np.array([[0, 1], [1, 2]])
+    chosen = select_graph_context(edges, train_idx=np.array([0, 1, 2]),
+                                  query_idx=np.array([1]), n_context=2)
+    assert 1 not in chosen.tolist()
+
+
+def test_graph_context_returns_the_requested_size_even_when_isolated():
+    """Equal context length is what makes the comparison against random meaningful."""
+    from tabicl.scaling import select_graph_context
+
+    edges = np.array([[0, 1]])
+    chosen = select_graph_context(edges, train_idx=np.arange(10),
+                                  query_idx=np.array([7]), n_context=4)
+    assert len(chosen) == 4
+    assert len(set(chosen.tolist())) == 4
+
+
+def test_graph_context_two_hops_reaches_further_than_one():
+    from tabicl.scaling import select_graph_context
+
+    edges = np.array([[9, 0], [0, 1], [1, 2]])
+    one = select_graph_context(edges, np.array([0, 1, 2]), np.array([9]), n_context=1, hops=1)
+    two = select_graph_context(edges, np.array([0, 1, 2]), np.array([9]), n_context=2, hops=2)
+    assert one.tolist() == [0]
+    assert set(two.tolist()) == {0, 1}
