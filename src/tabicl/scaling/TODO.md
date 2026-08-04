@@ -4,6 +4,29 @@ Written on stopping, so this can be picked up cold. `STATUS.md` is the current s
 `DESIGN.md` the history log. Nothing here is blocking — the branch is committed, tested
 (147 passed, 1 skipped) and pushed.
 
+## 0. AMP contaminates every GPU number — re-measure before comparing
+
+`use_amp=True` is the default in all three inference configs and costs **7.3 AUC** on
+rel-event (CPU 80.93, CUDA-with-AMP 73.61, CUDA-without-AMP 80.93). See `DESIGN.md`.
+
+Consequences for the items below:
+
+* **Any GPU measurement in these documents predates this finding**, including rel-avito's
+  64.46. Re-measure with `use_amp=False` before quoting.
+* **GPU is now the right place for this work.** With AMP off a rel-event fit takes ~20s on
+  a 24 GB card against ~250s on CPU, and it reproduces CPU *exactly*. That converts
+  five-seed paired comparisons from an hour into a minute, which is the thing that would
+  have prevented most of the wrong conclusions in `DESIGN.md`.
+* **`pod.py stop`, not `terminate`.** Terminating destroys the volume, and re-downloading
+  rel-event costs ~30 minutes at the ~700 kB/s these pods get. Stop preserves it.
+
+Set it like this:
+
+```python
+NOAMP = {k: {"use_amp": False} for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG")}
+TabICLClassifier(device="cuda:0", inference_config=NOAMP)
+```
+
 ## 1. The open question: does a setting's verdict flip with `n_estimators`?
 
 **This is the one to resume with.** Everything else below depends on the answer.
@@ -26,7 +49,16 @@ Ruled out already, so do not re-test:
 * **Selection noise on a small validation split.** The categorical blocks won 5/5 seeds
   on validation (+0.39 ± 0.29) and 5/5 on test (+1.26 ± 0.70) at `n_estimators=1`.
 
-`n_estimators` is the only variable left between the two runners.
+**Correction, and this reopens the question.** `n_estimators` was *not* the only variable:
+the +1.50 runner fit on train only (19,239 rows) and the -2.93 runner on train+val
+(21,252). Two variables, which is the error this project keeps repeating. And the first
+GPU attempt at the sweep confidently reported "the sign FLIPS" — an artifact of AMP, since
+every cell in it was distorted.
+
+So the question is still open and must be re-run with **one** variable moving and
+`use_amp=False`: identical fit set, identical features, `n_estimators` in {1, 2, 4, 8}.
+`eval_ensemble_size` already holds the fit set fixed at train+val, so it is the right
+harness; it needs the no-AMP config added.
 
 **Run:** `python -m tabicl.scaling.eval_ensemble_size` — sweeps `{1, 2, 4, 8}` against
 both feature specs with everything else fixed. Roughly 45 minutes on CPU; the

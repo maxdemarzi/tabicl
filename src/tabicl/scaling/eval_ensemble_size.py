@@ -25,6 +25,7 @@ Everything is held fixed except n_estimators: same features, same fit set (train
 same random_state, same official test split.
 """
 
+import os
 import time
 import warnings
 
@@ -41,7 +42,11 @@ from tabicl.scaling import Table, asof_statistics
 
 DS, TK = "rel-event", "user-ignore"
 W = [pd.Timedelta(days=30), pd.Timedelta(days=365)]
-SIZES = (1, 2, 4, 8)
+DEVICE = os.environ.get('TABICL_DEVICE', 'cpu')
+SIZES = tuple(int(x) for x in os.environ.get('ENSEMBLE_SIZES', '1,2,4').split(','))
+# 8 was dropped from the default: at full context it reached ~22 GB and drove the
+# machine to 854 MB available. 1 vs 4 is the comparison that matters; 2 shows the
+# transition. Override with ENSEMBLE_SIZES if there is headroom.
 SPECS = [((2, None, False), "plain"), ((2, 4, True), "categorical")]
 
 
@@ -64,7 +69,7 @@ ent_df, pk = db.table_dict[ent].df, db.table_dict[ent].pkey_col
 kids = [(n, fk, t.time_col) for n, t in db.table_dict.items()
         for fk, pt in (t.fkey_col_to_pkey_table or {}).items()
         if pt == ent and t.time_col][:3]
-print(f"{DS}/{TK}  fit={len(tr)}  test={len(te)}", flush=True)
+print(f"{DS}/{TK}  fit={len(tr)}  test={len(te)}  device={DEVICE}  sizes={SIZES}", flush=True)
 
 
 def build(frame, spec):
@@ -91,7 +96,13 @@ for spec, label in SPECS:
     print(f"\n{label}: {X.shape[1]} features", flush=True)
     for n_est in SIZES:
         t0 = time.perf_counter()
-        clf = TabICLClassifier(n_estimators=n_est, device="cpu", random_state=0).fit(X, y)
+        # AMP is on by default and costs 7.3 AUC on this task, so it is disabled for any
+        # accuracy comparison. With it off, CUDA reproduces CPU exactly.
+        cfg = None if DEVICE == "cpu" else {k: {"use_amp": False}
+                                            for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG")}
+        kwargs = {"inference_config": cfg} if cfg else {}
+        clf = TabICLClassifier(n_estimators=n_est, device=DEVICE, random_state=0,
+                               **kwargs).fit(X, y)
         auc = roc_auc_score(y_te, clf.predict_proba(Xe)[:, 1]) * 100
         scores[(label, n_est)] = auc
         print(f"  n_estimators={n_est:<2}  AUC={auc:.2f}   ({time.perf_counter()-t0:.0f}s)",
