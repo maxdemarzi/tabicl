@@ -14,19 +14,40 @@ feature spec, fit set, and the one thing that changed.
 
 ---
 
-## Current standing (2026-08-04)
+## Standing vs published results (2026-08-04)
 
-RelBench, official protocol, calibrated: every setting chosen on validation, test touched
-once, AMP off, selection and scoring at the same `n_estimators`.
+RelBench, official protocol. Test ROC-AUC x100. Comparison columns are the published
+figures from the TabPFN-3 technical report's Table 14 (arXiv 2605.13986); RelGNN is the
+paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model result.
 
-| task | calibrated | selected configuration |
-|---|---:|---|
-| rel-f1 / driver-top3 | **80.70** | `max_columns=None`, no categorical, context 5,000 |
-| rel-event / user-ignore | **78.11** | `max_columns=2`, categorical on, context 20,000 |
-| rel-avito / user-visits | **64.85** | `max_columns=None`, no categorical, context 10,000 |
-| rel-trial / study-outcome | **66.50** | `max_columns=2`, categorical on, context 10,000 |
+| task | **ours** | TabPFN-REL | RelGNN | RDBLearn+v3 | vs TabPFN-REL | vs best |
+|---|---:|---:|---:|---:|---:|---:|
+| rel-f1 / driver-top3 | **80.70** | 79.98 | **85.69** | 82.72 | **+0.72** | −4.99 |
+| rel-event / user-ignore | **78.11** | 85.38 | **86.18** | 73.70 | −7.27 | −8.07 |
+| rel-avito / user-visits | **64.85** | 66.68 | 66.18 | **66.76** | −1.83 | −1.91 |
+| rel-trial / study-outcome | **66.50** | **76.43** | 71.24 | 72.89 | −9.93 | −9.93 |
 
-Published comparisons: TabPFN-REL 79.98 / 85.38 / 66.68 / 76.43.
+Ours are **calibrated**: every setting chosen on a validation split, test touched once,
+AMP off, selection and scoring at the same `n_estimators`. The published figures are
+presumably single-configuration, so this is the like-for-like column — an earlier
+per-task-maximum table selected on test ran about a point higher and was not comparable.
+
+**Read the gaps honestly.** This is a generic flattening pipeline in front of a stock
+TabICL, with no relational machinery in the model and no retraining, against systems built
+for relational data. Ahead of TabPFN-REL on rel-f1, within 2 on rel-avito, and well behind
+on rel-event and rel-trial.
+
+**Not yet in the table:** graph-neighbour context measured **+4.80** over a random context
+of equal size on rel-event (2026-08-04, below). If that holds up under more seeds and a
+time-respecting graph, it closes most of that task's gap — but it is three seeds on a
+static graph, so it stays out of the headline until it is measured properly.
+
+| selected configuration per task | |
+|---|---|
+| rel-f1 | `max_columns=None`, no categorical, context 5,000 |
+| rel-event | `max_columns=2`, categorical on, context 20,000 |
+| rel-avito | `max_columns=None`, no categorical, context 10,000 |
+| rel-trial | `max_columns=2`, categorical on, context 10,000 |
 
 **Measurement floor: ±0.6.** Paired-gap sd is 0.29 on rel-event; absolute-score sd is
 2.28. Differences under ~0.6 are not resolvable, and unpaired comparisons cannot resolve
