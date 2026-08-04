@@ -1,7 +1,11 @@
 # Research directions
 
-Six candidate directions, ordered by expected value rather than by expected benefit.
+Candidate directions, ordered by expected value rather than by expected benefit.
 `TODO.md` is the open engineering work; this is what to build after it.
+
+Directions 1-6 came from a proposed research table; 7-12 were generated afterwards, and
+**8 and 7 outrank most of the original list** -- 8 because it attacks the i.i.d.
+limitation with no weight changes, 7 because it gates every label-derived feature here.
 
 ## The criterion used to order them
 
@@ -126,8 +130,179 @@ result is a *ceiling*, which should be stated before anyone invests further:
   them, and even that was mostly inside the noise floor
 
 "Extends TFMs to enterprise databases" is true with an asterisk. The remaining upside is
-in schema *expressivity* (GFS covers all k-hop join paths rather than one traversal), not
-in more aggregates.
+in schema *expressivity*, not in more aggregates. Concretely:
+
+### 6a. Set-valued columns — worth doing, but does not lift the ceiling
+
+The natural instinct for many-to-many is to store an array per row. It splits into two
+problems and arrays only solve one.
+
+*Representation* is the solvable half, and it collapses back to aggregation. TabICL needs
+a fixed-width numeric matrix, so an array must be reduced anyway. Padding to length K
+spends columns teaching the model that `[a,b,c]` and `[c,b,a]` are the same. Sorting
+first makes it permutation-invariant but then it *is* an order statistic. The principled
+form is a fixed-width **set encoding** -- quantiles, top-K histograms (already built),
+VLAD residuals -- which is strictly better than mean/std but is not a new capability.
+
+*The i.i.d. violation* is the half arrays cannot touch, and it is where the ceiling
+actually is. When the signal is in neighbours' **labels** rather than their features,
+storing their ids changes nothing: at fit time using those labels is leakage or
+transduction, at predict time they are unknown.
+
+The practical split: many-to-many where the neighbour's *features* carry the signal
+(customers-products via transactions) is already handled. Where the neighbour's *label*
+carries it, see 6b.
+
+Worth building anyway: **quantile aggregates** (cheap, permutation-invariant, more than
+mean/std) and **recency-ordered fixed windows** for temporal many-to-many -- "last 10
+events" is the one case where a literal array is right, because the order is principled
+rather than arbitrary.
+
+### 6b. Label propagation as a feature
+
+The direct attack on the i.i.d. limit: inject neighbours' labels as features. `A^k · y`
+with `y` the label indicator is "how many positives are reachable in k hops", and the
+semiring layer already computes it -- this would be its first application on real signal.
+
+| semiring | feature |
+|---|---|
+| `SUM_PRODUCT` | walk counts -- positives weighted by path multiplicity |
+| `BOOLEAN` | distinct reachability |
+| `MIN_PLUS` | **hop distance to the nearest positive**, often stronger than any count and degree-robust by construction |
+
+`O(k·E)` sparse matvec, tractable on rel-event's 30.4M edges.
+
+Two constraints decide it, neither computational:
+
+* **Leakage.** Exclude self, use only labels known before the row's cutoff, never touch
+  test labels. This is the feature family where a mistake yields a spectacular fake
+  result, so it needs the negative control in *7* below before any number is believed.
+* **Small-world saturation.** In a social graph the k-hop reachable set explodes toward
+  the whole component. By k=3 on 30M edges, `reachable_count` risks becoming
+  "component size" for every row, and the positive *fraction* converges to the global
+  base rate -- worse than useless, because it still looks informative. Use fraction, not
+  count; expect k=1,2, maybe 3; and measure the saturation curve rather than assuming it.
+
+**Gate before building:** measure label homophily/assortativity at k=1. If a node's label
+is uncorrelated with its neighbours', nothing downstream can help. One cheap number.
+
+### 6c. Label-typed triangles — the degree-robust version of 6b
+
+Raw triangle counts are largely determined by the degree sequence (see the degree-confound
+section in `DESIGN.md`; a k-star count is exactly `C(d,k)`). But *whose labels close the
+triangle* is not determined by degree, and it measures community cohesion rather than
+connectivity: if your positive neighbours are also neighbours of each other, you sit
+inside a positive-labelled community rather than merely adjacent to some positives.
+
+This is computable with the **existing** `typed_triangle_counts`, by typing each edge with
+the label pair of its endpoints and making "unknown at cutoff" a first-class type:
+
+    P = known positive before cutoff,  N = known negative,  U = unknown (includes the ego)
+
+That gives `{PP, PN, PU, NN, NU, UU}` -- exactly `MAX_EDGE_TYPES`. For an ego `v` (type
+`U`) whose two mutually-connected friends are both known positive, the triple is
+`(PP, PU, PU)`; both known negative gives `(NN, NU, NU)`; the mixed `(PN, PU, NU)` is the
+bridging triangle *between* subgroups, its own signal. The ratio between the first two is
+the "which community am I more embedded in" feature.
+
+**The leakage rule is enforced by the typing itself** -- a node whose label is not known
+before the cutoff is `U` by construction -- which is exactly the property this family
+needs.
+
+Costs: `k**3` = 216 joins at six types, and 56 sorted-triple columns, which is a lot of
+features on tasks where feature count itself has been shown to hurt. Note also that the
+measured gain from typing was only +0.021, but that was typing by *relation* type; typing
+by *label* encodes homophily directly and is a different proposition.
+
+**Gate:** do same-label pairs close triangles at a higher rate than the graph's baseline
+transitivity? One number, and it is precisely the effect this feature would exploit.
+
+---
+
+# Further directions
+
+Generated after the six above, and two of these outrank most of that list.
+
+## 7. Leakage negative-control harness — build this before anything in 6b/6c
+
+Permute the labels and recompute the feature. Any feature that still predicts is leaking.
+It is a standard negative control, it is cheap, and it is the only thing standing between
+"label propagation works" and a spectacular fake result.
+
+This project's own record argues for it: several conclusions here were wrong for reasons
+that produced *confident, plausible numbers* rather than errors. Label-derived features
+are the highest-risk family yet attempted, and the harness costs a fraction of what one
+retracted result costs.
+
+Should also assert the temporal rule directly: recompute with cutoffs shifted earlier and
+confirm scores degrade rather than improve.
+
+## 8. Graph neighbours as ICL context — message passing without touching weights
+
+**The strongest idea here, and it bridges 2 and 6.**
+
+TabICL attends from each test row to labelled context rows. If the context contains that
+row's **graph neighbours with their labels**, then attention *is* one round of learned
+message passing — structurally what a GNN layer does, obtained with no weight changes and
+no retraining.
+
+This reframes the retrieval question productively. Retrieval by *feature* similarity
+disappointed both here and in an independent four-dataset evaluation. Retrieval by *graph
+proximity* is a different hypothesis and directly targets the i.i.d. limitation that
+feature-similarity retrieval never addressed.
+
+It also composes with the context-size result: rel-avito matches full-context quality on
+8.6% of its rows, so there is budget to spend on *which* rows without paying more.
+
+Test: at equal context size, ego-graph neighbours versus random versus k-NN. Paired,
+multi-seed. If neighbour-context beats random on a task with label homophily and not on
+one without, the mechanism is confirmed rather than merely observed.
+
+## 9. Time-respecting propagation — the causally sound form of 6b
+
+A path only carries influence if timestamps increase along it. "Positives reachable by a
+**time-respecting** path" is a far stronger causal claim than static reachability, and
+`temporal_motif_features` is the start of the machinery.
+
+It also fixes a caveat already recorded in `DESIGN.md`: rel-event's `user_friends` carries
+no timestamp, so the graph is static and any lift there is an upper bound. Time-respecting
+paths make that limitation explicit rather than silent.
+
+## 10. Context-resampling uncertainty — turn the measurement noise into a product
+
+Absolute scores move with sd 2.28 across context subsamples on rel-event. That variance
+has been a nuisance all along; it is also **information**. Resampling the context yields a
+predictive distribution at no architectural cost, giving uncertainty estimates that are
+honest about the dominant source of variance in this model — which rows happened to be in
+context.
+
+Composes directly with direction 1 (attribution): a prediction that is stable across
+context resamples is one no single row controls, which is a usable robustness measure.
+Cheap, since `n_estimators` already does something structurally similar.
+
+## 11. Incremental maintenance — recompute only what changed
+
+The semiring layer's `invertible` flag already distinguishes statistics that can be
+maintained under deletion from those that cannot. That is the foundation for
+factorised incremental view maintenance: on a daily refresh, update the aggregates the new
+rows touch instead of rebuilding every feature from scratch.
+
+A capability claim rather than an accuracy one, which is why it survives the noise floor.
+It is also the difference between a batch experiment and something that runs in
+production. `SUM_PRODUCT` statistics are maintainable; `MIN_PLUS`/`MAX_PLUS` extrema are
+not, and needing a recompute for those is a known, bounded cost.
+
+## 12. Model-side column selection
+
+`max_columns` prunes by non-null coverage, which is target-free but blind -- and the same
+setting is worth +3.0 on one task and -19.5 on another. The column-embedding stage
+produces a per-column representation *inside the model*; its attention is a far better
+relevance signal than coverage.
+
+Prune using the model's own view of the columns, on a small context, then fit on the
+survivors. Directly targets the one setting measured to have a 22-point spread, which
+makes it the highest-leverage of the feature-side ideas even though it is still an
+accuracy claim.
 
 ---
 
