@@ -2091,6 +2091,113 @@ def test_graph_context_two_hops_reaches_further_than_one():
     assert set(two.tolist()) == {0, 1}
 
 
+def test_neighbour_labels_never_include_the_rows_own_label():
+    """The leak this family is prone to, pinned directly rather than inferred.
+
+    Node 0 is positive and every other node is negative. If 0's own label reached its own
+    feature, its positive rate would be non-zero.
+    """
+    from tabicl.scaling import neighbour_label_features
+
+    edges = np.array([[0, 1], [0, 2], [1, 2], [0, 0]])   # including a self-loop
+    nodes = np.array([0, 1, 2])
+    values = np.array([1, 0, 0])
+    out = neighbour_label_features(edges, nodes, values, query_nodes=nodes)
+
+    assert out["nbr__positive_rate"].iloc[0] == 0.0, "node 0 saw its own positive label"
+    # 1 and 2 are both neighbours of the positive node 0, and of each other.
+    assert out["nbr__positive_rate"].iloc[1] == pytest.approx(0.5)
+    assert out["nbr__labelled_degree"].tolist() == [2, 2, 2]
+
+
+def test_isolated_rows_get_nan_not_a_zero_rate():
+    """Absence of neighbours must not read as confident negativity."""
+    from tabicl.scaling import neighbour_label_features
+
+    edges = np.array([[0, 1]])
+    out = neighbour_label_features(edges, np.array([0, 1]), np.array([1, 0]),
+                                   query_nodes=np.array([0, 1, 9]))
+    assert out["nbr__labelled_degree"].iloc[2] == 0
+    assert np.isnan(out["nbr__positive_rate"].iloc[2])
+    assert np.isnan(out["nbr__positive_count"].iloc[2])
+
+
+def test_label_horizon_hides_outcomes_still_being_decided():
+    """A neighbour's label is knowable only once its own window has closed."""
+    from tabicl.scaling import neighbour_label_features
+
+    edges = np.array([[0, 1]])
+    day = pd.Timedelta(days=1)
+    base = pd.Timestamp("2020-01-01")
+    # Neighbour 1's label is stamped at day 0 and resolves over the following 10 days.
+    kw = dict(label_nodes=np.array([1]), label_values=np.array([1]),
+              label_times=np.array([base]), query_nodes=np.array([0]))
+
+    early = neighbour_label_features(edges, query_times=np.array([base + 5 * day]),
+                                     label_horizon=10 * day, **kw)
+    assert early["nbr__labelled_degree"].iloc[0] == 0, "read a label still resolving"
+    assert np.isnan(early["nbr__positive_rate"].iloc[0])
+
+    late = neighbour_label_features(edges, query_times=np.array([base + 20 * day]),
+                                    label_horizon=10 * day, **kw)
+    assert late["nbr__labelled_degree"].iloc[0] == 1
+    assert late["nbr__positive_rate"].iloc[0] == 1.0
+
+    # Without the horizon the same query reads the unresolved label -- the failure mode.
+    naive = neighbour_label_features(edges, query_times=np.array([base + 5 * day]), **kw)
+    assert naive["nbr__positive_rate"].iloc[0] == 1.0
+
+
+def test_a_neighbour_counts_once_however_many_label_events_it_has():
+    """Otherwise the feature measures activity rather than label."""
+    from tabicl.scaling import neighbour_label_features
+
+    edges = np.array([[0, 1], [0, 2]])
+    base = pd.Timestamp("2020-01-01")
+    day = pd.Timedelta(days=1)
+    # Node 1 appears three times, node 2 once. Node 1's latest usable label is 0.
+    out = neighbour_label_features(
+        edges,
+        label_nodes=np.array([1, 1, 1, 2]),
+        label_values=np.array([1, 1, 0, 1]),
+        label_times=np.array([base, base + day, base + 2 * day, base]),
+        query_nodes=np.array([0]),
+        query_times=np.array([base + 10 * day]),
+    )
+    assert out["nbr__labelled_degree"].iloc[0] == 2, "two neighbours, not four events"
+    assert out["nbr__positive_count"].iloc[0] == 1.0
+    assert out["nbr__positive_rate"].iloc[0] == pytest.approx(0.5)
+
+
+def test_permutation_control_catches_a_deliberately_leaky_feature():
+    """The control must fire on a feature that reads the row's own label.
+
+    A control that never fails proves nothing, so it is checked against a known-bad
+    feature as well as the real one.
+    """
+    from tabicl.scaling import neighbour_label_features
+    from tabicl.scaling._leakage import permutation_control
+    from sklearn.metrics import roc_auc_score
+
+    rng = np.random.default_rng(0)
+    n = 200
+    nodes = np.arange(n)
+    # A homophilous ring: neighbours share labels, so the honest feature has real signal.
+    y = (np.arange(n) // 20) % 2
+    edges = np.column_stack([nodes, (nodes + 1) % n])
+
+    def honest(labels):
+        out = neighbour_label_features(edges, nodes, labels, query_nodes=nodes)
+        score = out["nbr__positive_rate"].fillna(labels.mean()).to_numpy()
+        return roc_auc_score(labels, score)
+
+    def leaky(labels):
+        return roc_auc_score(labels, labels.astype(float))    # reads the label itself
+
+    assert permutation_control(honest, y, n_permutations=3).passed
+    assert not permutation_control(leaky, y, n_permutations=3).passed
+
+
 def test_unstratified_selection_can_collapse_the_class_balance():
     """The defect this guards against, stated as a test so it stays visible.
 

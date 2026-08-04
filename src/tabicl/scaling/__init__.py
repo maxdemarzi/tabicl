@@ -9,6 +9,7 @@ from ._relational import Table, asof_statistics, flatten_relational, hop_product
 from ._calibrate import Calibration, calibrate_context_size, sweep_configurations
 from ._leakage import LeakageReport, permutation_control, temporal_control
 from ._graph_context import label_homophily, select_graph_context
+from ._propagation import neighbour_label_features
 from ._retrieval import select_context
 from ._selection import prune_features
 from ._semiring import (
@@ -62,6 +63,7 @@ __all__ = [
     "check_semiring_laws",
     "label_homophily",
     "select_graph_context",
+    "neighbour_label_features",
     "LeakageReport",
     "permutation_control",
     "temporal_control",
