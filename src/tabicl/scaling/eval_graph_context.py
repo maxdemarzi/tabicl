@@ -59,6 +59,9 @@ def main() -> None:
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--n-estimators", type=int, default=4)
+    ap.add_argument("--hops", type=int, default=1,
+                    help="neighbourhood radius; beyond 2 the reachable set saturates "
+                         "toward the whole component and selection stops selecting")
     args = ap.parse_args()
 
     db = get_dataset("rel-event", download=True).get_db()
@@ -118,7 +121,7 @@ def main() -> None:
     f_te = build(test).reindex(columns=f_tr.columns, fill_value=np.nan)
     X, Xe = _numeric(f_tr), _numeric(f_te)
     y, y_te = train[target].to_numpy(), test[target].to_numpy()
-    print(f"{X.shape[1]} features, {len(X)} train rows, context={args.context}", flush=True)
+    print(f"{X.shape[1]} features, {len(X)} train rows, context={args.context}, hops={args.hops}", flush=True)
 
     node_to_row = {n: i for i, n in enumerate(train_nodes)}
 
@@ -134,7 +137,7 @@ def main() -> None:
         rand_rows = rng.choice(len(X), size=min(args.context, len(X)), replace=False)
 
         picked = select_graph_context(edges, train_nodes, test_nodes,
-                                      n_context=args.context, hops=1, random_state=seed)
+                                      n_context=args.context, hops=args.hops, random_state=seed)
         graph_rows = np.array([node_to_row[n] for n in picked if n in node_to_row])
         if len(graph_rows) < len(rand_rows):     # keep the two arms the same size
             spare = np.setdiff1d(np.arange(len(X)), graph_rows)
