@@ -99,8 +99,13 @@ def main() -> None:
     parser.add_argument("--children", type=int, default=4)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--n-estimators", type=int, default=4)
-    parser.add_argument("--select-estimators", type=int, default=1,
-                        help="ensemble size during selection; the final fit uses --n-estimators")
+    parser.add_argument("--select-estimators", type=int, default=None,
+                        help="ensemble size during selection. Defaults to --n-estimators, "
+                             "and should stay there: a configuration's sign can flip with "
+                             "ensemble size, so selecting at 1 and scoring at 4 chooses in a "
+                             "regime that does not predict deployment. Measured on rel-event, "
+                             "the categorical blocks are +2.87 at n_estimators=1 and -3.52 at "
+                             "4. Lowering this is a real speed/soundness trade, not free.")
     parser.add_argument("--tolerance", type=float, default=0.005)
     parser.add_argument("--memory-budget-gb", type=float, default=8.0,
                         help="predicted peak a feature spec may use before it is skipped")
@@ -109,6 +114,8 @@ def main() -> None:
                              "feature sweep would otherwise run at full context, which "
                              "is quadratic and unaffordable on the large tasks")
     args = parser.parse_args()
+    if args.select_estimators is None:
+        args.select_estimators = args.n_estimators
 
     db = get_dataset(args.dataset, download=True).get_db()
     task = get_task(args.dataset, args.task, download=True)

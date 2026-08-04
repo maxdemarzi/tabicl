@@ -1042,6 +1042,42 @@ halves runtime (11s vs 20s here), so it remains reasonable for memory benchmarki
 production ranking where a fixed threshold is not in play -- but not for a number anyone
 will compare.
 
+### A configuration's sign flips with ensemble size
+
+The two runners that disagreed about the categorical blocks were both right. Measured on
+a validated GPU host (AMP off; sanity cell reproduced the CPU baseline at 80.92 against
+80.93), fit set held fixed at train+val, everything varying but `n_estimators`:
+
+| `n_estimators` | plain | categorical | gap |
+|---:|---:|---:|---:|
+| 1 | 75.02 | 77.89 | **+2.87** |
+| 2 | 79.65 | 78.70 | -0.95 |
+| 4 | 80.92 | 77.40 | **-3.52** |
+| 8 | 81.03 | 77.97 | -3.06 |
+
+The categorical blocks help a single estimator and hurt an ensemble, crossing over between
+1 and 2. So the original -3.21 was right at `n_estimators=4`, the +1.50 was right at 1, and
+the disagreement was never noise or leakage.
+
+The mechanism is visible in the columns. **Plain gains 6 points from ensembling (75.02 ->
+81.03); categorical gains nothing (77.89 -> 77.97).** TabICL's ensemble members differ by
+feature permutation, so a narrower feature set gives members that disagree usefully, while
+the wider one appears to give members that are individually better but redundant. Ensemble
+diversity, not raw feature quality, is what the extra columns cost.
+
+**Consequence for this package.** `eval_relbench_calibrated` selected at
+`--select-estimators 1` and scored the final fit at 4, purely to make the sweep affordable.
+That is unsound whenever a setting's sign is ensemble-dependent, and it is exactly what
+produced rel-event's calibrated 78.11: validation at `n_estimators=1` preferred the
+categorical blocks, which really are better there, and the final fit at 4 then paid for a
+choice made in a regime that does not predict deployment. `select_estimators` now defaults
+to `n_estimators`.
+
+Generalising: **calibrate in the regime you deploy in.** Any cheap-proxy shortcut during
+selection -- smaller ensemble, smaller context, fewer seeds -- is only valid if it
+preserves the *ranking* of candidates, and that is an assumption to test rather than
+assume.
+
 ### Where this lands against published RelBench numbers
 
 Official protocol throughout: fit on `train`, score the held-out `test` split, whose
