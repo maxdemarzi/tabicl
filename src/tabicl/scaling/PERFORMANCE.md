@@ -57,17 +57,30 @@ five points. Pair everything.
 
 ## Run log
 
-### 2026-08-04 — 8-seed / 2-hop follow-up NOT COMPLETED
-Attempted on a verified 3090. The job started but produced no output within the window
-available, so **no number was obtained** — the +4.80 below still rests on three seeds.
-Pod terminated rather than left billing unattended.
+### 2026-08-04 — graph context confirmed at 8 seeds: +3.10 (1 hop), +3.37 (2 hops)
+rel-event, RTX 3090, AMP off, `n_estimators=4`, context 5,000 both arms, paired by seed.
+Sanity cell reproduced 80.93 first. Homophily lift +0.2903.
 
-Re-run: `python -m tabicl.scaling.pod_runner create`, then
-`eval_graph_context --context 5000 --seeds 8 --hops 1` and the same with `--hops 2`.
-Redirect to a file and poll it; piping through `grep` buffers and hides progress, which
-has now wasted time twice.
+| | mean gap | sd | positive | graph arm | random arm |
+|---|---:|---:|---:|---|---|
+| 1 hop | **+3.10** | 3.45 | 7/8 | 82.34–85.47 | 75.31–84.43 |
+| 2 hops | **+3.37** | 2.76 | 7/8 | 83.66–85.09 | 75.31–84.43 |
 
-### 2026-08-04 — graph-neighbour context beats random by +4.80 ⚠ largest positive result
+*Changed:* seeds 3 → 8, and hops.
+*The mean shrank from the 3-seed +4.80 to +3.10*, which is what more seeds usually do and
+why three was never enough. Still far clear of the ±0.6 floor. 1 vs 2 hops differ by 0.27,
+inside the floor — a tie, so prefer 1 hop as the cheaper.
+
+**The variance result may matter more than the mean.** The graph arm spans 3.1 points
+(1 hop) or 1.4 (2 hops); the random arm spans 9.1. Choosing context by graph proximity
+makes the score roughly **3× more reproducible**, and nearly all the gap's variance comes
+from the random arm's own lottery. The single negative seed (3) is simply where random
+drew its best context, 84.43.
+
+*Caveat unchanged:* `user_friends` has no timestamp, so this is an upper bound on a
+time-respecting version.
+
+### 2026-08-04 — graph-neighbour context, first look (3 seeds, superseded above)
 rel-event / user-ignore, RTX 3090, AMP off, `n_estimators=4`, context 5,000 both arms.
 Sanity cell reproduced 80.93 first.
 

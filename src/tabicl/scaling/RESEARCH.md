@@ -239,8 +239,9 @@ confirm scores degrade rather than improve.
 
 ## 8. Graph neighbours as ICL context — MEASURED, +4.80 ⚠
 
-**First result in: a graph-neighbour context beats a random one of equal size by +4.80
-mean (4.33 / 8.80 / 1.28 over three paired seeds) on rel-event.** Homophily lift was
+**Confirmed at 8 paired seeds: +3.10 (1 hop) and +3.37 (2 hops) over a random context
+of equal size on rel-event, 7/8 seeds positive.** It also makes the score ~3x more
+reproducible — the graph arm spans 3.1 points where random spans 9.1. Homophily lift was
 +0.29, so the gate passed decisively. The graph arm also beats the full-context baseline
 while using a quarter of the rows. Caveats: three seeds, wide spread, and a static
 friendship graph so this is an upper bound. See `PERFORMANCE.md`.
