@@ -36,6 +36,15 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-04 — graph-context experiment BLOCKED on infrastructure
+`eval_graph_context` is written, committed and unrun. Five consecutive RunPod L40S hosts
+came up with `nvidia-smi` healthy and `device_count 1` but every `torch.cuda` allocation
+failing — the CUDA-verification loop in `pod_runner.py` rejected and terminated each one,
+which is what it is for. Community capacity was also thin. Nothing left billing.
+*Nothing measured; no number to record.* Re-run when capacity recovers:
+`python -m tabicl.scaling.pod_runner create` then
+`python -m tabicl.scaling.eval_graph_context --context 5000 --seeds 3`.
+
 ### 2026-08-04 — calibrated sweep completed
 rel-avito **64.85** (was 64.46 hand-picked), rel-event **78.11** (unchanged).
 *Changed:* AMP disabled; `select_estimators` now matches `n_estimators`; every setting

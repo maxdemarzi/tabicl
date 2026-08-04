@@ -42,8 +42,10 @@ GPU_PREFERENCE = ["NVIDIA RTX A6000", "NVIDIA A40", "NVIDIA L40S", "NVIDIA L40",
 IMAGES = [
     "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
     "runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04",
-    "runpod/pytorch",
 ]
+# Community capacity is erratic and some hosts have broken CUDA; secure costs more but
+# is far likelier to yield a usable machine.
+CLOUDS = ["COMMUNITY", "SECURE"]
 
 
 def auth() -> None:
@@ -90,15 +92,16 @@ def create():
         raise SystemExit(f"no public key at {PUBKEY}")
     pubkey = PUBKEY.read_text().strip()
     last = None
-    for gpu in GPU_PREFERENCE:
+    for cloud in CLOUDS:
+      for gpu in GPU_PREFERENCE:
         for image in IMAGES:
             try:
-                print(f"trying {gpu} / {image} ...", flush=True)
+                print(f"trying {cloud} {gpu} ...", flush=True)
                 pod = runpod.create_pod(
                     name=NAME,
                     image_name=image,
                     gpu_type_id=gpu,
-                    cloud_type="COMMUNITY",
+                    cloud_type=cloud,
                     gpu_count=1,
                     volume_in_gb=60,          # RelBench datasets are GB-scale
                     container_disk_in_gb=30,
@@ -107,7 +110,7 @@ def create():
                     env={"PUBLIC_KEY": pubkey},
                     support_public_ip=True,
                 )
-                print(f"created {pod['id']} on {gpu}", flush=True)
+                print(f"created {pod['id']} on {cloud} {gpu}", flush=True)
                 return pod
             except Exception as exc:      # noqa: BLE001 - try the next combination
                 last = exc
@@ -130,7 +133,7 @@ def main() -> int:
         # failed with "CUDA unknown error" -- unusable, and only visible from inside torch.
         probe = ('python -c "import torch;torch.zeros(1).cuda();'
                  'print(chr(67)+chr(85)+chr(68)+chr(65)+chr(95)+chr(79)+chr(75), torch.cuda.get_device_name(0))"')
-        for attempt in range(1, 6):
+        for attempt in range(1, 9):
             pod = find_pod() or create()
             pod, target = wait_ready(pod["id"])
             print(f"attempt {attempt}: ssh ready root@{target[0]} -p {target[1]}", flush=True)
