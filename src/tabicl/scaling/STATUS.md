@@ -119,13 +119,12 @@ run; do not tighten it on one that already fits, and choose the value on a valid
 split rather than assuming one.
 
 Categorical statistics on the as-of path are opt-in via `top_k_categories` and
-`include_mode`. Both are **off by default**, though the evidence for that is weaker than
-it looked: the −3.21 below is a single measurement on 1,958 test rows, and reseeding the
-context subsample moves absolute scores by 5+ points on this task. A five-seed
-validation comparison gives +0.39 ± 0.29 in the *opposite* direction. Off-by-default
-remains the conservative choice; "not a general win" is provisional. Measured at +1.25
-on rel-trial, 0.0 on rel-f1, and −3.21 on rel-event, where they also cost 2.3× the model
-time. The block's price is paid in columns, so it loses on any task
+`include_mode`. Both are **off by default**, and the reason is now understood: the effect
+is *ensemble-dependent*. On rel-event the blocks are **+2.87 at `n_estimators=1` and
+−3.52 at 4**, crossing over between 1 and 2. They help a single estimator and hurt an
+ensemble, because a wider feature set costs ensemble diversity — plain gains six points
+from ensembling where categorical gains nothing. Since the deployment default is an
+ensemble, off is right. Also +1.25 on rel-trial, 0.0 on rel-f1, at 2.3× the model time. The block's price is paid in columns, so it loses on any task
 where column count is already the binding constraint. Turn it on when a schema's signal
 is genuinely categorical, and verify on a validation split.
 
@@ -156,9 +155,12 @@ columns are published figures from the TabPFN-3 paper's Table 14.
 | task | calibrated | hand-picked | TabPFN-REL | RelGNN | RDBLearn+v3 |
 |---|---:|---:|---:|---:|---:|
 | rel-f1 / driver-top3 | **80.70** | 79.77 | 79.98 | 85.69 | 82.72 |
-| rel-event / user-ignore | 78.11 | 80.81 | 85.38 | 86.18 | 73.70 |
+| rel-event / user-ignore | 78.11 ‡ | 80.81 | 85.38 | 86.18 | 73.70 |
 | rel-avito / user-visits | *not run* | 64.46 † | 66.68 | 66.18 | 66.76 |
 | rel-trial / study-outcome | 66.50 | 67.61 | 76.43 | 71.24 | 72.89 |
+
+‡ Selected at `n_estimators=1` and scored at 4, which is unsound now that the sign is
+known to flip with ensemble size. Needs re-running with the fixed default.
 
 † Measured on GPU with the default `use_amp=True`, which costs 7.3 AUC on rel-event.
 Likely understated; needs re-measuring with `use_amp=False`.
@@ -189,7 +191,7 @@ Ranked by measured AUC contribution, largest first:
 | which relations you traverse | +0.083 |
 | look-back windows | +0.089 on rel-f1; median +0.001 elsewhere |
 | column budget | +3.0 rel-event, 0.0 rel-trial, **−19.5 rel-f1** — task-dependent |
-| categorical blocks (as-of) | +1.25 rel-trial, 0.0 rel-f1, −3.21 rel-event *(single seed, under re-verification)* — off by default |
+| categorical blocks (as-of) | ensemble-dependent: **+2.87 at n_estimators=1, −3.52 at 4** — off by default |
 | context size | rel-avito loses nothing at 8.6%; rel-trial loses 2.74 at 23% — calibrate |
 | type-aware motifs | +0.021 |
 | the whole WCOJ/FAQ engine | +0.016 |
