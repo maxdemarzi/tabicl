@@ -57,6 +57,16 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-04 — 8-seed / 2-hop follow-up NOT COMPLETED
+Attempted on a verified 3090. The job started but produced no output within the window
+available, so **no number was obtained** — the +4.80 below still rests on three seeds.
+Pod terminated rather than left billing unattended.
+
+Re-run: `python -m tabicl.scaling.pod_runner create`, then
+`eval_graph_context --context 5000 --seeds 8 --hops 1` and the same with `--hops 2`.
+Redirect to a file and poll it; piping through `grep` buffers and hides progress, which
+has now wasted time twice.
+
 ### 2026-08-04 — graph-neighbour context beats random by +4.80 ⚠ largest positive result
 rel-event / user-ignore, RTX 3090, AMP off, `n_estimators=4`, context 5,000 both arms.
 Sanity cell reproduced 80.93 first.
