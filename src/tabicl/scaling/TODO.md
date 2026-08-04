@@ -27,6 +27,18 @@ NOAMP = {k: {"use_amp": False} for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG
 TabICLClassifier(device="cuda:0", inference_config=NOAMP)
 ```
 
+### Pod hygiene, learned the hard way
+
+* **Always run a sanity cell first.** Reproduce a known CPU number before trusting any new
+  environment. This is what caught AMP, and what caught a second pod whose CUDA was
+  broken -- both of which had produced confident, plausible, wrong output.
+* **Community pods can be silently broken.** One L40S host reported a healthy
+  `nvidia-smi` and `device_count 1`, yet `torch.cuda.is_available()` was False and every
+  allocation failed with "CUDA unknown error", with `CUDA_VISIBLE_DEVICES` unset or set.
+  `/dev/nvidiactl` was present. Not fixable from inside; terminate and take another host.
+* **`stop` preserves the volume, `terminate` destroys it.** Re-downloading rel-event costs
+  ~30 minutes at the ~700 kB/s these pods get, so stop unless the host is bad.
+
 ## 1. The open question: does a setting's verdict flip with `n_estimators`?
 
 **This is the one to resume with.** Everything else below depends on the answer.
