@@ -41,10 +41,14 @@ TabICL, with no relational machinery in the model and no retraining, against sys
 for relational data. Ahead of TabPFN-REL on rel-f1, within 2 on rel-avito, and well behind
 on rel-event and rel-trial.
 
-**Not yet in the table:** graph-neighbour context measured **+4.80** over a random context
-of equal size on rel-event (2026-08-04, below). If that holds up under more seeds and a
-time-respecting graph, it closes most of that task's gap — but it is three seeds on a
-static graph, so it stays out of the headline until it is measured properly.
+**Not in the table, and now for a measured reason:** graph-neighbour context beats a random
+context of equal size by **+3.10 to +4.94** on rel-event, reproduced across seeds, hop
+counts and stratification. It still does not enter the headline, because the calibrated
+protocol that would make it eligible **rejects it in 4 of 5 replicates** and returns
+82.01 ± 4.94 — a spread eight times the measurement floor. A method only enters the table
+if the selection rule picks it, and on this task the selection rule does not. See the
+2026-08-04 entry below for why, including a malformed configuration grid that would have
+put a *non-graph* result in the table under a graph label.
 
 | selected configuration per task | |
 |---|---|
@@ -61,15 +65,69 @@ five points. Pair everything.
 
 ## Run log
 
-### 2026-08-04 — calibrated graph-context run NOT COMPLETED (slow host)
-`--calibrated` mode is written, committed and ready; the run did not get past setup. The
-host managed ~270 kB/s, so pip took ~25 min and rel-event's 385 MB dataset did not finish
-inside the window. **No number obtained.** Pod terminated rather than left billing.
+### 2026-08-04 — calibrated graph-context run COMPLETED: the result stays out, and why
+rel-event, L40S at 99 MB/s, AMP off, `n_estimators=4`, 5 replicates of the full protocol
+(select on validation, score test once per replicate).
 
-Re-run on a host with reasonable bandwidth:
-`pod_runner create`, then `eval_graph_context --calibrated --hops 1`. It chooses selection
-method *and* context size on validation and scores test once, which is what the headline
-table requires. Until it produces a number, rel-event stays at 78.11 there.
+**Environment check passed exactly.** Same runner, same config as the 3090: `+4.80 mean,
+sd 3.78 over 3 seeds`, reproducing the recorded cells to the decimal. Numbers from this
+host are comparable to earlier ones. *(The full-context cell reads 83.88 here, which is
+**not** the 80.93 baseline — that baseline is a different feature build. Checking against
+a same-runner cell is what made this conclusive.)*
+
+**Calibrated result: 82.01 ± 4.94 over 5 replicates (range 75.31–88.39), graph chosen 1/5.**
+It does not go in the headline table. Three reasons, in order of how badly each would have
+misled:
+
+1. **The configuration grid was malformed.** The eligible context pool is 7,111 users
+   (val) and 7,184 (test), but the grid offered sizes 2000/5000/**10000** — and
+   `select_graph_context` early-returns the *entire pool* once the request exceeds it. So
+   "graph, context=10000" was not a graph configuration; it was "use every eligible
+   training user". That is the one cell validation ever picked (seed 3, test 88.39). A
+   single-replicate run would have reported 88.39 as a graph result. It is not one.
+2. **The protocol is too noisy to compare against published single numbers.** Replicate
+   spread ±4.94 against a ±0.6 floor. The mean's standard error alone is 2.21.
+3. **Validation and test disagree systematically on this method**, not randomly. Graph
+   selection scores 74.1–74.5 on validation across all five seeds — stable to ±0.15 —
+   while the same selection wins by +4.80 on test.
+
+**Why they disagree is not a signal difference.** The neighbour-label signal is equally
+strong on both splits: scoring each query by the positive rate among its labelled train
+friends, with no model involved, gives **AUC 73.89 on val and 74.18 on test** (coverage
+0.861 / 0.864, median 6 vs 8 train friends). The splits are structurally near-identical.
+
+*Changed since the previous entry:* nothing in the method — this is the same +4.80 effect,
+put through a selection rule for the first time.
+
+### 2026-08-04 — class-balance hypothesis for the graph context: refuted
+Unstratified reach-ranking builds a **near-single-class context**: positive rate
+**0.019–0.046 against a 0.163 base rate**, because ranking by how many queries reach a node
+is a popularity ranking and hubs are overwhelmingly negative (selected median degree 26 vs
+10 for random). That looked like the explanation.
+
+It is not. Stratifying the selection to preserve the training class balance, as the only
+variable moved:
+
+| | A/B gap on test | calibrated |
+|---|---:|---|
+| unstratified | +4.80 (sd 3.78) | 82.01 ± 4.94, graph 1/5 |
+| stratified | +4.94 (sd 3.49) | 82.01 ± 4.94, graph 1/5 |
+
+*The test gap moves by 0.14 — inside the ±0.6 floor, a tie.* The calibrated numbers are
+**identical**, because the only configuration validation ever chose was the size-10000
+no-op, which never reaches the stratification branch. On validation stratification was
+actively worse (62.86 vs 74.43 at size 2000).
+
+*Conclusion:* a 4–8× distortion of the context's class balance changes the result by
+nothing measurable. Whatever drives the graph effect, it is not context class balance.
+`labels=` is kept in `select_graph_context` because building a 0.02-positive context by
+accident is still a defect worth being able to switch off, but it buys no accuracy.
+
+**The finding worth taking forward is the standalone one:** neighbour positive-rate is a
+**74 AUC predictor by itself**, no model, one pass over the edge list. That is a feature,
+not a context-selection strategy, and it is `RESEARCH.md` item 6b. It needs the negative
+controls in `_leakage.py` first — a train row must not see its own label through its
+neighbours — and the static-graph caveat still applies.
 
 ### 2026-08-04 — graph context confirmed at 8 seeds: +3.10 (1 hop), +3.37 (2 hops)
 rel-event, RTX 3090, AMP off, `n_estimators=4`, context 5,000 both arms, paired by seed.
@@ -190,8 +248,20 @@ Run this before trusting any number from a new machine, container or pod. It has
 two silent failures — the AMP default, and a pod reporting a healthy `nvidia-smi` with
 `device_count 1` while every CUDA allocation failed.
 
-1. **Reproduce a known baseline.** rel-event plain, `max_columns=2`, `n_estimators=4`,
-   full context, AMP off → **80.9**. Anything else means the environment differs.
+1. **Reproduce a known baseline — with the same runner that recorded it.** rel-event plain,
+   `max_columns=2`, `n_estimators=4`, full context, AMP off → **80.9**. A near-miss from a
+   *different* runner proves nothing: `eval_graph_context` at full context reads 83.88 on a
+   verified-good host because it builds different features. Pick a cell the runner in front
+   of you actually produced.
 2. `torch.cuda` must allocate, not merely report a device.
-3. Record `pandas`, `torch`, device, `use_amp`, checkpoint filename.
-4. Never compare across entries that differ in more than one of those.
+3. **Measure download bandwidth before scheduling work.** `pod_runner create` now enforces
+   a 5 MB/s floor. One host managed 270 kB/s: `nvidia-smi` healthy, CUDA fine, and the run
+   simply never started because pip took 25 minutes and a 385 MB dataset never arrived. A
+   good host does ~100 MB/s, so the gate costs 60 s and the failure it catches costs a
+   session.
+4. Record `pandas`, `torch`, device, `use_amp`, checkpoint filename.
+5. Never compare across entries that differ in more than one of those.
+6. **Check that every configuration in a sweep is the configuration it is labelled as.**
+   The graph sweep offered a context size larger than the pool it selects from, so one
+   third of the grid was "use everything" wearing a graph label — and that was the cell
+   the selection picked.

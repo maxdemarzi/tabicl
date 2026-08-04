@@ -84,6 +84,7 @@ def select_graph_context(
     n_context: int,
     hops: int = 1,
     random_state: Optional[int] = 0,
+    labels: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Choose context rows by graph proximity to the queries.
 
@@ -113,6 +114,17 @@ def select_graph_context(
 
     random_state : int, optional
         Seed for the top-up.
+
+    labels : np.ndarray, optional
+        Label per node, used only to **stratify** the selection. Strongly recommended.
+
+        Ranking by reach is a popularity ranking, and on a social graph popularity is
+        correlated with the label: measured on rel-event, an unstratified selection
+        returned a context with a positive rate of 0.019--0.046 against a base rate of
+        0.163, i.e. it silently built a near-single-class context. Passing ``labels``
+        keeps each class's share of the eligible pool intact and applies the proximity
+        ranking *within* each class, so the method selects on graph structure rather than
+        on the label through it.
 
     Returns
     -------
@@ -148,6 +160,27 @@ def select_graph_context(
             break
         np.add.at(reached, neighbours, 1)
         frontier = np.unique(neighbours)
+
+    if labels is not None:
+        labels = np.asarray(labels)
+        if len(labels) < n_nodes:
+            raise ValueError(f"labels must cover {n_nodes} nodes, got {len(labels)}")
+        eligible_labels = labels[eligible]
+        classes, counts = np.unique(eligible_labels, return_counts=True)
+        # Quota per class = that class's share of the eligible pool, so the context's
+        # balance matches what random selection would have given.
+        exact = counts / counts.sum() * n_context
+        quota = np.floor(exact).astype(np.int64)
+        while quota.sum() < n_context:                    # hand out the remainder
+            quota[np.argmax(exact - quota)] += 1
+        picked = []
+        for cls, want in zip(classes, quota):
+            pool = eligible[eligible_labels == cls]
+            # Rank within the class by reach; ties broken at random rather than by node
+            # id, which would otherwise bias every seed toward the same low-id nodes.
+            order = np.lexsort((rng.permutation(len(pool)), -reached[pool]))
+            picked.append(pool[order[:want]])
+        return np.concatenate(picked).astype(np.int64)
 
     eligible_mask = np.zeros(n_nodes, dtype=bool)
     eligible_mask[eligible] = True

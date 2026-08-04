@@ -47,6 +47,13 @@ IMAGES = [
 # is far likelier to yield a usable machine.
 CLOUDS = ["COMMUNITY", "SECURE"]
 
+# A host that cannot pull data is as useless as one that cannot allocate CUDA, and it
+# fails far more expensively: one host managed 270 kB/s, so pip alone took 25 minutes and
+# rel-event's 385 MB dataset never arrived inside the window. Measured before any work is
+# scheduled, because the cost of finding out late is a whole billed session.
+BANDWIDTH_FLOOR = 5_000_000        # bytes/sec; datacentre hosts normally do 10-100x this
+BANDWIDTH_PROBE_BYTES = 25_000_000
+
 
 def auth() -> None:
     runpod.api_key = TOKEN.read_text().strip()
@@ -76,15 +83,54 @@ def wait_ready(pod_id: str, timeout: int = 420):
     raise TimeoutError("pod did not expose ssh in time")
 
 
-def run_ssh(target, command: str, timeout: int = 3600) -> int:
+def _ssh_argv(target, command: str) -> list[str]:
     host, port = target
-    argv = [
+    return [
         "ssh", "-i", str(KEY), "-p", str(port),
         "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
         "-o", "LogLevel=ERROR", "-o", "ServerAliveInterval=30",
         f"root@{host}", command,
     ]
-    return subprocess.run(argv, timeout=timeout).returncode
+
+
+def run_ssh(target, command: str, timeout: int = 3600) -> int:
+    return subprocess.run(_ssh_argv(target, command), timeout=timeout).returncode
+
+
+def run_ssh_capture(target, command: str, timeout: int = 600) -> tuple[int, str]:
+    """Same, but return stdout so a probe's *output* can be inspected, not just its code."""
+    done = subprocess.run(_ssh_argv(target, command), timeout=timeout,
+                          capture_output=True, text=True)
+    return done.returncode, (done.stdout or "") + (done.stderr or "")
+
+
+def probe_host(target) -> tuple[bool, str]:
+    """Is this host usable at all? Checks CUDA from Python, then download bandwidth.
+
+    Both failures are silent otherwise. A broken community host reports a healthy
+    ``nvidia-smi`` and ``device_count 1`` while every allocation raises; a slow one looks
+    perfectly healthy and simply never finishes. Neither is worth discovering an hour in.
+    """
+    ok = "".join(chr(c) for c in (67, 85, 68, 65, 95, 79, 75))    # not echoed in the command
+    command = (
+        f'python -c "import torch;torch.zeros(1).cuda();'
+        f'print(chr(67)+chr(85)+chr(68)+chr(65)+chr(95)+chr(79)+chr(75), '
+        f'torch.cuda.get_device_name(0))" ; '
+        f'curl -s --max-time 60 -o /dev/null -w "BYTES_PER_SEC %{{speed_download}}\\n" '
+        f'"https://speed.cloudflare.com/__down?bytes={BANDWIDTH_PROBE_BYTES}"'
+    )
+    _, out = run_ssh_capture(target, command)
+    print("  " + out.strip().replace("\n", "\n  "), flush=True)
+
+    if ok not in out:
+        return False, "CUDA unusable from torch"
+
+    speed = next((float(line.split()[1]) for line in out.splitlines()
+                  if line.startswith("BYTES_PER_SEC") and len(line.split()) > 1), 0.0)
+    if speed < BANDWIDTH_FLOOR:
+        return False, (f"{speed / 1e6:.2f} MB/s is below the {BANDWIDTH_FLOOR / 1e6:.0f} MB/s "
+                       f"floor -- pip and a 385 MB dataset will not finish")
+    return True, f"CUDA ok, {speed / 1e6:.1f} MB/s"
 
 
 def create():
@@ -128,22 +174,18 @@ def main() -> int:
     auth()
 
     if args.action == "create":
-        # Verify CUDA works *from Python*, not just that nvidia-smi answers. A community
-        # L40S reported a healthy nvidia-smi and device_count 1 while every allocation
-        # failed with "CUDA unknown error" -- unusable, and only visible from inside torch.
-        probe = ('python -c "import torch;torch.zeros(1).cuda();'
-                 'print(chr(67)+chr(85)+chr(68)+chr(65)+chr(95)+chr(79)+chr(75), torch.cuda.get_device_name(0))"')
         for attempt in range(1, 9):
             pod = find_pod() or create()
             pod, target = wait_ready(pod["id"])
             print(f"attempt {attempt}: ssh ready root@{target[0]} -p {target[1]}", flush=True)
-            if run_ssh(target, probe) == 0:
-                print(f"USABLE  ssh root@{target[0]} -p {target[1]}", flush=True)
+            usable, why = probe_host(target)
+            if usable:
+                print(f"USABLE ({why})  ssh root@{target[0]} -p {target[1]}", flush=True)
                 return 0
-            print("  CUDA unusable from torch -- terminating and taking another host", flush=True)
+            print(f"  rejected: {why} -- terminating and taking another host", flush=True)
             runpod.terminate_pod(pod["id"])
             time.sleep(10)
-        raise SystemExit("no usable host after 5 attempts")
+        raise SystemExit("no usable host after 8 attempts")
 
     pod = find_pod()
     if not pod:

@@ -2089,3 +2089,48 @@ def test_graph_context_two_hops_reaches_further_than_one():
     two = select_graph_context(edges, np.array([0, 1, 2]), np.array([9]), n_context=2, hops=2)
     assert one.tolist() == [0]
     assert set(two.tolist()) == {0, 1}
+
+
+def test_unstratified_selection_can_collapse_the_class_balance():
+    """The defect this guards against, stated as a test so it stays visible.
+
+    Ranking by reach is ranking by popularity, and on a real social graph popularity
+    tracks the label: on rel-event this returned a context at a 0.02-0.05 positive rate
+    against a 0.163 base rate. Here every hub is negative, so an unstratified selection
+    takes only negatives while the pool is half positive.
+    """
+    from tabicl.scaling import select_graph_context
+
+    # Nodes 0-3 are negative hubs every query touches; 4-7 are positive leaves.
+    queries = np.array([100, 101])
+    edges = np.array([[q, h] for q in queries for h in range(4)]
+                     + [[100, 4], [101, 5]])
+    train_idx = np.arange(8)
+    labels = np.zeros(102, dtype=np.int64)
+    labels[4:8] = 1
+
+    plain = select_graph_context(edges, train_idx, queries, n_context=4, hops=1)
+    assert labels[plain].sum() == 0, "the hubs are all negative, so this is single-class"
+
+    balanced = select_graph_context(edges, train_idx, queries, n_context=4, hops=1,
+                                    labels=labels)
+    assert len(balanced) == 4
+    assert len(set(balanced.tolist())) == 4
+    # The eligible pool is half positive, so the context must be too.
+    assert labels[balanced].sum() == 2
+
+
+def test_stratified_selection_still_prefers_graph_proximity_within_a_class():
+    """Stratifying must not degrade into random selection -- it reorders within a class."""
+    from tabicl.scaling import select_graph_context
+
+    queries = np.array([100])
+    # Positive 4 is a neighbour; positives 5, 6 are not. Negative 0 is a neighbour.
+    edges = np.array([[100, 0], [100, 4]])
+    train_idx = np.arange(7)
+    labels = np.zeros(101, dtype=np.int64)
+    labels[4:7] = 1
+
+    chosen = select_graph_context(edges, train_idx, queries, n_context=2, hops=1,
+                                  labels=labels, random_state=0)
+    assert set(chosen.tolist()) == {0, 4}, "one per class, and the reachable one each time"

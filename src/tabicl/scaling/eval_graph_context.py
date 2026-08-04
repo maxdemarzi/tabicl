@@ -66,6 +66,11 @@ def main() -> None:
     ap.add_argument("--hops", type=int, default=1,
                     help="neighbourhood radius; beyond 2 the reachable set saturates "
                          "toward the whole component and selection stops selecting")
+    ap.add_argument("--stratify", action="store_true",
+                    help="preserve the training class balance in the selected context. "
+                         "Without it, ranking by reach ranks by popularity, and hubs are "
+                         "overwhelmingly negative: the context comes out at a 0.02-0.05 "
+                         "positive rate against a 0.163 base rate.")
     args = ap.parse_args()
 
     db = get_dataset("rel-event", download=True).get_db()
@@ -130,6 +135,13 @@ def main() -> None:
     print(f"{X.shape[1]} features, {len(X)} train rows, context={args.context}, hops={args.hops}", flush=True)
 
     node_to_row = {n: i for i, n in enumerate(train_nodes)}
+    # One label per node for stratification, taken from the same train row that
+    # `node_to_row` resolves to, so the label used to stratify is the label of the row
+    # that actually enters the context.
+    node_labels = np.zeros(len(universe), dtype=np.int64)
+    node_labels[train_nodes] = train[target].to_numpy()
+    strat = node_labels if args.stratify else None
+    print(f"selection is {'STRATIFIED' if args.stratify else 'unstratified'}", flush=True)
 
     def score(rows, seed):
         clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
@@ -143,38 +155,74 @@ def main() -> None:
         f_va = build(val).reindex(columns=f_tr.columns, fill_value=np.nan)
         Xva, y_va = _numeric(f_va), val[target].to_numpy()
 
-        def fit_eval(rows, Xe_, y_):
+        def fit_eval(rows, Xe_, y_, seed):
             clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
-                                   random_state=0, inference_config=NOAMP).fit(X[rows], y[rows])
+                                   random_state=seed, inference_config=NOAMP).fit(X[rows], y[rows])
             return roc_auc_score(y_, clf.predict_proba(Xe_)[:, 1]) * 100
 
-        def rows_for(method, size, queries, seed=0):
-            if method == "random":
-                return np.random.default_rng(seed).choice(len(X), size=min(size, len(X)),
-                                                          replace=False)
-            picked = select_graph_context(edges, train_nodes, queries, n_context=size,
-                                          hops=args.hops, random_state=seed)
-            rows = np.array([node_to_row[n] for n in picked if n in node_to_row])
-            if len(rows) < min(size, len(X)):
-                spare = np.setdiff1d(np.arange(len(X)), rows)
-                need = min(size, len(X)) - len(rows)
-                rows = np.concatenate([rows, np.random.default_rng(seed).permutation(spare)[:need]])
-            return rows
+        def rows_for(method, size, queries, seed):
+            """Returns the context rows and how many of them the graph actually chose.
 
-        best = None
-        print("selection (validation only):", flush=True)
-        for method in ("random", "graph"):
-            for size in (2000, 5000, 10000):
-                score_v = fit_eval(rows_for(method, size, val_nodes), Xva, y_va)
-                print(f"  {method:<7} context={size:<6} val={score_v:.2f}", flush=True)
-                if best is None or score_v > best[0]:
-                    best = (score_v, method, size)
-        _, method, size = best
-        print(f"
-chosen: {method} context={size}", flush=True)
-        auc = fit_eval(rows_for(method, size, test_nodes), Xe, y_te)
-        print(f"rel-event/user-ignore  CALIBRATED TEST ROC-AUC x100 = {auc:.2f}"
-              f"   (context selection={method}, size={size}, hops={args.hops})", flush=True)
+            The second number matters: if the neighbourhood is smaller than the budget the
+            remainder is filled at random, so a nominally "graph" context can be mostly
+            random and the comparison silently stops being a comparison.
+            """
+            want = min(size, len(X))
+            if method == "random":
+                return np.random.default_rng(seed).choice(len(X), size=want, replace=False), 0
+            picked = select_graph_context(edges, train_nodes, queries, n_context=size,
+                                          hops=args.hops, random_state=seed, labels=strat)
+            rows = np.array([node_to_row[n] for n in picked if n in node_to_row], dtype=np.int64)
+            rows = np.unique(rows)
+            n_graph = len(rows)
+            if n_graph < want:
+                spare = np.setdiff1d(np.arange(len(X)), rows)
+                rows = np.concatenate(
+                    [rows, np.random.default_rng(seed).permutation(spare)[: want - n_graph]])
+            return rows[:want], min(n_graph, want)
+
+        # The whole protocol is replicated per seed. One replicate is one draw from a
+        # distribution whose spread was measured at 9.1 points on the random arm, so a
+        # single calibrated number is not a measurement -- it is a ticket.
+        # A requested context at least as large as the eligible pool makes the selection
+        # return the whole pool, so "graph" at that size is not a graph configuration --
+        # it is "use every eligible training user". Leaving it in the grid put a non-graph
+        # result in the table under a graph label, so the sizes are checked against the
+        # pool rather than assumed to be smaller than it.
+        n_eligible = len(np.setdiff1d(np.unique(train_nodes), val_nodes))
+        sizes = (2000, 5000, 10000)
+        graph_sizes = [s for s in sizes if s < n_eligible]
+        dropped = [s for s in sizes if s >= n_eligible]
+        if dropped:
+            print(f"eligible pool is {n_eligible}; dropping graph sizes {dropped} from the "
+                  f"grid -- at that size the selection returns the whole pool and the "
+                  f"configuration is not a graph configuration", flush=True)
+
+        results = []
+        for seed in range(args.seeds):
+            best = None
+            print(f"\n-- seed {seed}: selection (validation only) --", flush=True)
+            for method in ("random", "graph"):
+                for size in (sizes if method == "random" else graph_sizes):
+                    rows, n_graph = rows_for(method, size, val_nodes, seed)
+                    score_v = fit_eval(rows, Xva, y_va, seed)
+                    detail = f" ({n_graph} of {len(rows)} from graph)" if method == "graph" else ""
+                    print(f"  {method:<7} context={size:<6} val={score_v:.2f}{detail}", flush=True)
+                    if best is None or score_v > best[0]:
+                        best = (score_v, method, size)
+            _, method, size = best
+            rows, n_graph = rows_for(method, size, test_nodes, seed)
+            auc = fit_eval(rows, Xe, y_te, seed)
+            results.append((auc, method, size))
+            print(f"  chosen {method} context={size} -> TEST {auc:.2f}", flush=True)
+
+        aucs = np.array([r[0] for r in results])
+        chose_graph = sum(r[1] == "graph" for r in results)
+        print(f"\nrel-event/user-ignore  CALIBRATED TEST ROC-AUC x100 = "
+              f"{aucs.mean():.2f} +- {aucs.std(ddof=1) if len(aucs) > 1 else 0:.2f} "
+              f"over {len(aucs)} replicates  (range {aucs.min():.2f}-{aucs.max():.2f})", flush=True)
+        print(f"validation chose the graph in {chose_graph}/{len(results)} replicates; "
+              f"sizes {[r[2] for r in results]}", flush=True)
         return
 
     print(f"{'seed':>5} {'random':>9} {'graph':>9} {'gap':>8}", flush=True)
@@ -183,8 +231,8 @@ chosen: {method} context={size}", flush=True)
         rng = np.random.default_rng(seed)
         rand_rows = rng.choice(len(X), size=min(args.context, len(X)), replace=False)
 
-        picked = select_graph_context(edges, train_nodes, test_nodes,
-                                      n_context=args.context, hops=args.hops, random_state=seed)
+        picked = select_graph_context(edges, train_nodes, test_nodes, n_context=args.context,
+                                      hops=args.hops, random_state=seed, labels=strat)
         graph_rows = np.array([node_to_row[n] for n in picked if n in node_to_row])
         if len(graph_rows) < len(rand_rows):     # keep the two arms the same size
             spare = np.setdiff1d(np.arange(len(X)), graph_rows)
