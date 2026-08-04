@@ -20,12 +20,16 @@ RelBench, official protocol. Test ROC-AUC x100. Comparison columns are the publi
 figures from the TabPFN-3 technical report's Table 14 (arXiv 2605.13986); RelGNN is the
 paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model result.
 
-| task | **ours** | TabPFN-REL | RelGNN | RDBLearn+v3 | vs TabPFN-REL | vs best |
+| task | ours | TabPFN-REL | RelGNN | RDBLearn+v3 | vs TabPFN-REL | vs best |
 |---|---:|---:|---:|---:|---:|---:|
-| rel-f1 / driver-top3 | **80.70** | 79.98 | **85.69** | 82.72 | **+0.72** | −4.99 |
-| rel-event / user-ignore | **78.11** | 85.38 | **86.18** | 73.70 | −7.27 | −8.07 |
-| rel-avito / user-visits | **64.85** | 66.68 | 66.18 | **66.76** | −1.83 | −1.91 |
-| rel-trial / study-outcome | **66.50** | **76.43** | 71.24 | 72.89 | −9.93 | −9.93 |
+| rel-f1 / driver-top3 | 80.70 | 79.98 | **85.69** | 82.72 | +0.72 | −4.99 |
+| rel-event / user-ignore | 78.11 | 85.38 | **86.18** | 73.70 | −7.27 | −8.07 |
+| rel-avito / user-visits | 64.85 | 66.68 | 66.18 | **66.76** | −1.83 | −1.91 |
+| rel-trial / study-outcome | 66.50 | **76.43** | 71.24 | 72.89 | −9.93 | −9.93 |
+
+Bold marks the best result per task. **None of them are ours** — we lead TabPFN-REL on
+rel-f1 but trail RelGNN there by 5, and trail everywhere else. Ours gets bolded when it
+wins a row, not before.
 
 Ours are **calibrated**: every setting chosen on a validation split, test touched once,
 AMP off, selection and scoring at the same `n_estimators`. The published figures are
