@@ -27,6 +27,19 @@ NOAMP = {k: {"use_amp": False} for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG
 TabICLClassifier(device="cuda:0", inference_config=NOAMP)
 ```
 
+### Run remotely, always
+
+**Standing rule: no heavy compute on the local machine.** Model fits, sweeps and
+benchmarks go to a remote GPU (RunPod; `pod.py` in the session scratchpad handles
+create/exec/stop, token at `~/.runpod/token.txt`).
+
+Two reasons, and the second matters more. Local runs repeatedly destabilised the
+workstation — four incidents in one session took available memory to 235 MB, 2 MB, 854 MB
+and near-zero, because TabICL fits here routinely want 20–30 GB and `TaskStop` kills the
+shell without killing its child Python. And a rel-event fit is ~250s on CPU against ~20s
+on a GPU, so multi-seed paired comparisons cost an hour and claims kept resting on one
+seed — which is the root cause of most wrong conclusions in `DESIGN.md`.
+
 ### Pod hygiene, learned the hard way
 
 * **Always run a sanity cell first.** Reproduce a known CPU number before trusting any new
@@ -73,8 +86,8 @@ So the question is still open and must be re-run with **one** variable moving an
 harness; it needs the no-AMP config added.
 
 **Run:** `python -m tabicl.scaling.eval_ensemble_size` — sweeps `{1, 2, 4, 8}` against
-both feature specs with everything else fixed. Roughly 45 minutes on CPU; the
-`n_estimators=8` cells are ~12 minutes each. It was killed before producing output.
+both feature specs with everything else fixed. Run it on a GPU pod with AMP disabled (the harness does this automatically when
+`TABICL_DEVICE` is not `cpu`); each cell is seconds there. No result has been produced yet.
 
 ## 2. If the sign does flip: fix the calibration
 
