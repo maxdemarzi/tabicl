@@ -193,8 +193,14 @@ def main() -> None:
             fit_frame = _stratified(fit_frame, target, context)
         f_fit = build(fit_frame, spec)
         f_eval = build(eval_frame, spec).reindex(columns=f_fit.columns, fill_value=np.nan)
+        # AMP is on by default and costs 7.3 AUC on rel-event, so it is disabled for any
+        # accuracy measurement. With it off, CUDA reproduces CPU exactly.
+        cfg = None if args.device == "cpu" else {
+            k: {"use_amp": False} for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG")
+        }
         model = TabICLClassifier(
-            n_estimators=n_estimators, device=args.device, random_state=0
+            n_estimators=n_estimators, device=args.device, random_state=0,
+            **({"inference_config": cfg} if cfg else {})
         ).fit(_numeric(f_fit), fit_frame[target].to_numpy())
         proba = model.predict_proba(_numeric(f_eval))[:, 1]
         return roc_auc_score(eval_frame[target].to_numpy(), proba) * 100
