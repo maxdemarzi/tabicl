@@ -32,7 +32,7 @@ from typing import Callable, List, Optional, Sequence
 
 import numpy as np
 
-__all__ = ["LeakageReport", "permutation_control", "temporal_control"]
+__all__ = ["LeakageReport", "permutation_control", "permutation_test", "temporal_control"]
 
 
 @dataclass
@@ -125,6 +125,71 @@ def permutation_control(
         f"is reading the row's own label"
     )
     return LeakageReport(passed, observed, control, chance, reason)
+
+
+def permutation_test(
+    build_and_score: Callable[[np.ndarray], float],
+    y: np.ndarray,
+    n_permutations: int = 5,
+    n_sigma: float = 3.0,
+    random_state: Optional[int] = 0,
+) -> LeakageReport:
+    """Permutation with the *empirical* null instead of chance.
+
+    Use this, not `permutation_control`, whenever the feature encodes structure as well as
+    labels -- which is most graph features. `permutation_control` asks whether the permuted
+    score is near 0.5, and that is only the right question when the feature's entire content
+    is labels.
+
+    A neighbour positive-rate is not such a feature. Its *noise* carries degree: a query with
+    one labelled neighbour scores 0 or 1, a query with twenty scores near the mean. Degree is
+    label-independent, survives any permutation, and on rel-event predicts the target on its
+    own at AUC 73.2 -- so the permuted score lands at 52.4, and a chance-based threshold calls
+    a sound feature a leak.
+
+    The right question is whether the real labels beat their own permuted null. Note this test
+    cannot detect a row reading its own label; it is not a substitute for `permutation_control`
+    where that control applies, nor for arranging the computation so the leak is impossible.
+
+    Parameters
+    ----------
+    build_and_score : callable
+        ``build_and_score(y) -> float``, rebuilding the features from the labels it is given.
+
+    y : np.ndarray
+        The real labels.
+
+    n_permutations : int, default=5
+        Shuffles forming the null. More than `permutation_control` needs, because here the
+        null's *spread* is used and not just its location.
+
+    n_sigma : float, default=3.0
+        How far above the null's mean the observed score must sit.
+
+    random_state : int, optional
+        Seed for the shuffles.
+
+    Returns
+    -------
+    LeakageReport
+        ``chance`` carries the null's mean rather than 0.5.
+    """
+    rng = np.random.default_rng(random_state)
+    observed = float(build_and_score(y))
+    control = [float(build_and_score(rng.permutation(y))) for _ in range(n_permutations)]
+
+    mean = float(np.mean(control))
+    sd = float(np.std(control, ddof=1)) if len(control) > 1 else 0.0
+    threshold = mean + n_sigma * sd
+    passed = observed > threshold
+    reason = (
+        f"observed {observed:.4f} beats its permuted null {mean:.4f} +- {sd:.4f} "
+        f"({(observed - mean) / sd:.1f} sd)" if passed and sd > 0 else
+        f"observed {observed:.4f} beats its permuted null {mean:.4f}" if passed else
+        f"observed {observed:.4f} does not clear the permuted null {mean:.4f} +- {sd:.4f} "
+        f"at {n_sigma} sd -- the label content adds nothing beyond structure"
+    )
+    return LeakageReport(passed, observed, control, mean, reason)
 
 
 def temporal_control(

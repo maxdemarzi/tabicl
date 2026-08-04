@@ -65,6 +65,42 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-04 — label propagation as a feature: controlled, and it does not help
+rel-event, L40S, AMP off, 5 paired seeds, context 10,000, base features identical in every
+arm. Three arms, because "propagation helps" and "label content helps" are different
+claims and only a degree arm separates them.
+
+| `n_estimators` | propagation − base | propagation − degree-only |
+|---:|---:|---:|
+| 4 | **−0.74** (sd 1.61, 1/5 positive) | +0.93 (sd 1.24, 4/5) |
+| 8 | **−0.38** (sd 1.54, 2/5 positive) | +0.96 (sd 1.49, 3/5) |
+
+*Changed:* three feature columns added to an unchanged pipeline. Nothing else.
+*Result:* no gain at either ensemble size, both inside the noise floor of zero. Ensemble
+diversity — which flipped the categorical verdict — does not rescue it: −0.74 and −0.38
+are a tie with each other as well as with zero. Label content does beat degree-only by
+~+0.95 consistently, so within the block the labels are doing something; the block as a
+whole still adds nothing the relational features were not already supplying.
+
+**Two corrections to the number this experiment was launched on.** The "74 AUC standalone
+neighbour-label signal" recorded earlier today was wrong twice over:
+
+- **It was mostly degree.** `labelled_degree` alone — no label content at all — scores
+  **73.24**. The positive-rate feature scores **67.78**, *below* it.
+- **It was reading unresolved labels.** The original 74.18 used every training label
+  regardless of time. A neighbour's outcome resolves over the 7 days *after* its own
+  prediction time; restricting to labels resolved at the query's cutoff costs **6.4 AUC**.
+  That gap is the measure of how much a plausible-looking temporal feature can borrow from
+  the future.
+
+**The controls earned their place, in both directions.** The permutation control *failed*
+first (permuted score 0.5354 against a 0.02 tolerance). It was not a leak: a test query's
+own label is never in the label set, so self-leak is impossible by construction, and what
+survives permutation is degree. The fix was the correct null — `permutation_test` against
+the permuted distribution, which the real labels clear by **6.4 sd** — not a loosened
+tolerance. `permutation_control` remains right for features whose entire content is labels
+and wrong for graph features, which encode structure too.
+
 ### 2026-08-04 — calibrated graph-context run COMPLETED: the result stays out, and why
 rel-event, L40S at 99 MB/s, AMP off, `n_estimators=4`, 5 replicates of the full protocol
 (select on validation, score test once per replicate).

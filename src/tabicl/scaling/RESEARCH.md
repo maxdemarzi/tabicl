@@ -158,21 +158,39 @@ mean/std) and **recency-ordered fixed windows** for temporal many-to-many -- "la
 events" is the one case where a literal array is right, because the order is principled
 rather than arbitrary.
 
-### 6b. Label propagation as a feature — PROMOTED: measured at 74 AUC standalone
+### 6b. Label propagation as a feature — BUILT, CONTROLLED, and it does not help
 
-**Measured incidentally while diagnosing item 8, and it is the strongest single number in
-that family.** Score each rel-event query by the positive rate among its labelled train
-friends — one pass over the edge list, no model at all — and it reaches **AUC 73.89 on
-validation and 74.18 on test** (coverage 0.861 / 0.864). For scale, the whole calibrated
-pipeline sits at 78.11 on that task.
+**Status: measured on rel-event, no gain. −0.74 at `n_estimators=4` and −0.38 at 8, both
+inside the noise floor of zero.** The features are real, causal and individually
+predictive; they add nothing on top of the relational features already there. Implemented
+in `_propagation.py`, measured by `eval_propagation.py`, both negative controls passed.
 
-It is also the *right shape* where item 8 is the wrong one: a feature is chosen by the
-same validation machinery as every other setting, so it has none of item 8's
-unselectability problem. Do this one next.
+**The 74 AUC figure this item was promoted on was wrong in two ways, and both corrections
+matter more than the negative result.**
 
-Build the negative controls first (item 7, `_leakage.py` is written): a train row must not
-see its own label through its own neighbourhood, and the static-graph caveat means the
-temporal control matters as much as the permutation one.
+*Most of it was degree, not labels.* `labelled_degree` alone — how many friends hold a
+resolved label, no label content whatsoever — scores **73.24**. The positive-rate feature
+scores **67.78**, i.e. *below* the structural feature it was supposed to improve on. What
+looked like "neighbours' labels predict your label" was substantially "well-connected
+users differ from isolated ones".
+
+*The rest included labels that had not happened yet.* The original 74.18 used every
+training label regardless of time. A neighbour's outcome is not knowable at the
+neighbour's prediction time — it resolves over the following 7 days — so restricting to
+labels actually resolved at the query's cutoff drops it to 67.78. **~6.4 AUC of the
+original number was read from the future.** `label_horizon` now enforces this.
+
+Conditional on degree the label content is genuine (within-stratum AUC 64.6–73.5, and the
+permutation test clears its null by 6.4 sd), so this is not a leak — it is a real effect
+that the pipeline already captures by other means.
+
+**Method note worth keeping.** `permutation_control` is the wrong control for a graph
+feature. It asks whether the permuted score returns to 0.5, which holds only when the
+feature's whole content is labels; a neighbour rate also encodes degree, which survives
+permutation and predicts this target at 73. Judged against chance, a sound feature reads
+as a leak — it did here, and the fix was `permutation_test` against the empirical null,
+not a loosened tolerance. Getting that wrong in the other direction would have discarded
+the feature; getting it wrong in this direction would have shipped a fake number.
 
 The direct attack on the i.i.d. limit: inject neighbours' labels as features. `A^k · y`
 with `y` the label indicator is "how many positives are reachable in k hops", and the

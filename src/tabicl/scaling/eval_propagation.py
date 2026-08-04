@@ -43,7 +43,7 @@ from tabicl.scaling import (
     label_homophily,
     neighbour_label_features,
 )
-from tabicl.scaling._leakage import permutation_control, temporal_control
+from tabicl.scaling._leakage import permutation_test, temporal_control
 
 WINDOWS = [pd.Timedelta(days=30), pd.Timedelta(days=365)]
 NOAMP = {k: {"use_amp": False} for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG")}
@@ -138,11 +138,22 @@ def main() -> None:
     print(f"test coverage: {coverage:.3f} of queries have a usable labelled neighbour",
           flush=True)
 
+    # How much of this block is structure rather than label content? Degree is
+    # label-independent, so it is the honest baseline for everything below.
+    deg = p_te["nbr__labelled_degree"].to_numpy().astype(float)
+    print(f"labelled_degree alone (no label content): {roc_auc_score(y_te, deg) * 100:.2f}",
+          flush=True)
+
     # --- control 1: permutation ----------------------------------------------------------
     # Built from shuffled training labels and scored against the *real* test labels, using
     # the propagation columns alone -- mixing in the base features would floor the control
-    # at the base score and it could never collapse to chance.
-    print("\ncontrol 1: permutation", flush=True)
+    # at the base score and it could never separate from it.
+    #
+    # The null is the permuted distribution, not chance. A test query's own label is never
+    # in the label set, so self-leak is impossible here by construction; what survives
+    # permutation is degree, which predicts this target at ~73 on its own. Judging against
+    # 0.5 would therefore condemn a sound feature. See `permutation_test`.
+    print("\ncontrol 1: permutation (null = permuted distribution)", flush=True)
 
     def prop_only_score(train_labels):
         block = propagation(test_nodes, test[tcol].to_numpy(), train_labels)
@@ -150,7 +161,7 @@ def main() -> None:
         rate = np.where(np.isnan(rate), np.nanmean(train_labels), rate)
         return roc_auc_score(y_te, rate)
 
-    perm = permutation_control(prop_only_score, y, n_permutations=3, tolerance=0.02)
+    perm = permutation_test(prop_only_score, y, n_permutations=5, n_sigma=3.0)
     print(f"  {perm!r}", flush=True)
 
     # --- control 2: temporal -------------------------------------------------------------
@@ -168,36 +179,50 @@ def main() -> None:
     print("controls passed\n", flush=True)
 
     # --- paired A/B ----------------------------------------------------------------------
+    # Three arms, because "propagation helps" and "label content helps" are different
+    # claims and only the degree arm separates them. Degree needs no labels at all, so if
+    # the full block does not beat it, the label content is buying nothing.
     p_tr = propagation(train_nodes, train[tcol].to_numpy(), y)
-    X_base, Xe_base = _numeric(b_tr), _numeric(b_te)
-    X_prop = _numeric(pd.concat([b_tr.reset_index(drop=True),
-                                 p_tr.reset_index(drop=True)], axis=1))
-    Xe_prop = _numeric(pd.concat([b_te.reset_index(drop=True),
-                                  p_te.reset_index(drop=True)], axis=1))
-    print(f"{X_base.shape[1]} base features -> {X_prop.shape[1]} with propagation, "
-          f"{len(X_base)} train rows, context={args.context}", flush=True)
+    degree_col = ["nbr__labelled_degree"]
+
+    def stack(base, prop, cols=None):
+        block = prop if cols is None else prop[cols]
+        return _numeric(pd.concat([base.reset_index(drop=True),
+                                   block.reset_index(drop=True)], axis=1))
+
+    arms = {
+        "base": (_numeric(b_tr), _numeric(b_te)),
+        "+degree": (stack(b_tr, p_tr, degree_col), stack(b_te, p_te, degree_col)),
+        "+prop": (stack(b_tr, p_tr), stack(b_te, p_te)),
+    }
+    print(f"{arms['base'][0].shape[1]} base features -> {arms['+prop'][0].shape[1]} with "
+          f"propagation, {len(arms['base'][0])} train rows, context={args.context}", flush=True)
 
     def score(X, Xe, rows, seed):
         clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
                                random_state=seed, inference_config=NOAMP).fit(X[rows], y[rows])
         return roc_auc_score(y_te, clf.predict_proba(Xe)[:, 1]) * 100
 
-    print(f"{'seed':>5} {'base':>9} {'+prop':>9} {'gap':>8}", flush=True)
-    gaps = []
+    print(f"\n{'seed':>5} {'base':>9} {'+degree':>9} {'+prop':>9} "
+          f"{'prop-base':>10} {'prop-deg':>9}", flush=True)
+    results = {k: [] for k in arms}
     for seed in range(args.seeds):
         rng = np.random.default_rng(seed)
-        rows = rng.choice(len(X_base), size=min(args.context, len(X_base)), replace=False)
+        rows = rng.choice(len(arms["base"][0]), size=min(args.context, len(arms["base"][0])),
+                          replace=False)
         t0 = time.perf_counter()
-        a = score(X_base, Xe_base, rows, seed)
-        b = score(X_prop, Xe_prop, rows, seed)
-        gaps.append(b - a)
-        print(f"{seed:>5} {a:>9.2f} {b:>9.2f} {b - a:>+8.2f}   "
+        for name, (X, Xe) in arms.items():
+            results[name].append(score(X, Xe, rows, seed))
+        a, d, b = (results[k][-1] for k in ("base", "+degree", "+prop"))
+        print(f"{seed:>5} {a:>9.2f} {d:>9.2f} {b:>9.2f} {b - a:>+10.2f} {b - d:>+9.2f}   "
               f"({time.perf_counter() - t0:.0f}s)", flush=True)
 
-    gaps = np.array(gaps)
-    print(f"\npropagation gap: mean {gaps.mean():+.2f} sd "
-          f"{gaps.std(ddof=1) if len(gaps) > 1 else 0:.2f} over {len(gaps)} seeds, "
-          f"{(gaps > 0).sum()}/{len(gaps)} positive", flush=True)
+    gaps = np.array(results["+prop"]) - np.array(results["base"])
+    over_degree = np.array(results["+prop"]) - np.array(results["+degree"])
+    for label, g in (("propagation over base", gaps), ("propagation over degree", over_degree)):
+        print(f"{label}: mean {g.mean():+.2f} sd "
+              f"{g.std(ddof=1) if len(g) > 1 else 0:.2f} over {len(g)} seeds, "
+              f"{(g > 0).sum()}/{len(g)} positive", flush=True)
     print("NOTE: the +-0.6 floor applies. user_friends carries no edge timestamps, so the "
           "graph is static; the label horizon makes the *labels* causal but not the edges.",
           flush=True)
