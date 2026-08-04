@@ -158,6 +158,30 @@ mean/std) and **recency-ordered fixed windows** for temporal many-to-many -- "la
 events" is the one case where a literal array is right, because the order is principled
 rather than arbitrary.
 
+### 6d. Shared-key track record — DONE, +5.45, and the first change to the headline table
+
+**rel-trial 66.50 → 69.36 calibrated, chosen by validation in 5/5 replicates.** Outcome
+history among rows sharing a foreign key — sponsor, condition, facility, intervention —
+as of this row's cutoff. `key_target_history` in `_propagation.py`,
+`eval_track_record.py`, both controls passed.
+
+The A/B is +5.45 (sd 0.30, 5/5) over an identical base, and +4.59 over a counts-only arm
+that isolates connectivity from outcome. sd 0.30 against a ±0.6 floor makes it the most
+reproducible effect in the project.
+
+**Why this worked where 6b did not**, since the two are the same idea through different
+structure. 6b reached neighbours through a *graph* and had to beat a base already at ~83
+with a feature worth 67.8. This reaches them through the *schema* and had to beat a base at
+~64 with three near-independent keys each worth ~61. The lesson is not "graphs bad" — it is
+that a label-derived feature earns its place only where the existing features are not
+already capturing the same base rate by other means, and that ratio is checkable up front
+with a standalone AUC before anything is built.
+
+**Generalise it.** Nothing in `key_target_history` is rel-trial-specific: it needs a link
+table, labels, timestamps and a horizon. rel-avito has user/ad keys, rel-event has
+user/event keys. Whether it transfers is the obvious next measurement, and the standalone
+gate makes it cheap to find out before building per-task plumbing.
+
 ### 6b. Label propagation as a feature — BUILT, CONTROLLED, and it does not help
 
 **Status: measured on rel-event, no gain. −0.74 at `n_estimators=4` and −0.38 at 8, both

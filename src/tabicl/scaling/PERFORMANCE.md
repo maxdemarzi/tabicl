@@ -25,11 +25,12 @@ paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model resu
 | rel-f1 / driver-top3 | 80.70 | 79.98 | **85.69** | 82.72 | +0.72 | −4.99 |
 | rel-event / user-ignore | 78.11 | 85.38 | **86.18** | 73.70 | −7.27 | −8.07 |
 | rel-avito / user-visits | 64.85 | 66.68 | 66.18 | **66.76** | −1.83 | −1.91 |
-| rel-trial / study-outcome | 66.50 | **76.43** | 71.24 | 72.89 | −9.93 | −9.93 |
+| rel-trial / study-outcome | 69.36 | **76.43** | 71.24 | 72.89 | −7.07 | −7.07 |
 
 Bold marks the best result per task. **None of them are ours** — we lead TabPFN-REL on
 rel-f1 but trail RelGNN there by 5, and trail everywhere else. Ours gets bolded when it
-wins a row, not before.
+wins a row, not before. rel-trial moved 66.50 → 69.36 on 2026-08-04 and is still last on
+that task; a narrowed gap is not a win.
 
 Ours are **calibrated**: every setting chosen on a validation split, test touched once,
 AMP off, selection and scoring at the same `n_estimators`. The published figures are
@@ -55,7 +56,7 @@ put a *non-graph* result in the table under a graph label.
 | rel-f1 | `max_columns=None`, no categorical, context 5,000 |
 | rel-event | `max_columns=2`, categorical on, context 20,000 |
 | rel-avito | `max_columns=None`, no categorical, context 10,000 |
-| rel-trial | `max_columns=2`, categorical on, context 10,000 |
+| rel-trial | `max_columns=2`, **shared-key track record on**, context 12,000 |
 
 **Measurement floor: ±0.6.** Paired-gap sd is 0.29 on rel-event; absolute-score sd is
 2.28. Differences under ~0.6 are not resolvable, and unpaired comparisons cannot resolve
@@ -64,6 +65,51 @@ five points. Pair everything.
 ---
 
 ## Run log
+
+### 2026-08-04 — shared-key track record on rel-trial: +5.45, and it enters the table
+rel-trial / study-outcome, L40S, AMP off, `n_estimators=4`, 5 paired seeds, base features
+identical in every arm. **The first result in this project to change the headline table:
+rel-trial 66.50 → 69.36.**
+
+The feature: outcome history among trials sharing a sponsor, condition, facility or
+intervention, as of this trial's cutoff. A flattener cannot produce it — it aggregates a
+related row's *columns*, never its *outcome*, and the outcome carries the base rate.
+
+| arm | mean gap | sd | positive |
+|---|---:|---:|---|
+| history over base | **+5.45** | 0.30 | 5/5 |
+| history over counts-only | **+4.59** | 0.81 | 5/5 |
+
+*Changed:* 15 columns added to an unchanged pipeline. Nothing else.
+*sd 0.30 against a ±0.6 floor* — 9× the floor and the most reproducible effect measured
+here. Compare graph context at +3.10 with sd 3.45.
+
+**The counts-only arm is why this is believable.** On rel-event an apparently strong
+neighbour-label feature turned out to be mostly *degree* — a count with no outcome
+information at all. So the count columns got their own arm, and history beats them by
++4.59. The outcome content is doing the work, not the connectivity.
+
+**Calibrated, and selected rather than assumed: 69.36 ± 0.98 over 5 replicates (range
+67.66–70.15). Validation chose `+history` 5 times out of 5**, at context 6,000–12,000.
+That unanimity is what item 8 never achieved, and it is the difference between an effect
+and a reportable number.
+
+*Gate first, as it should have been for item 8.* Each key was measured standalone before
+any machinery was built: condition 60.4, sponsor 61.4, facility 60.6, intervention 61.4
+test AUC at 44–88% coverage. Three near-independent keys, each nearly as strong alone as
+the entire pipeline was.
+
+*Controls:* permutation clears its null by 6.4 sd; earlier cutoffs produce **exactly** no
+improvement (0.6560 at every shift). The 365-day resolution horizon matters more here than
+anywhere else in the project — a trial's outcome takes a year to resolve, so ignoring it
+would let every row read a year of the future.
+
+**Caveat on the comparison, stated because the two numbers come from different pipelines.**
+The previous 66.50 was calibrated over `max_columns` and categorical blocks; this 69.36 is
+calibrated over arm and context size with 365/1095-day windows. Its base arm scores 63.82,
+*below* the old 66.50 — so the +5.45 is the controlled measurement and the headline change
+is "our best calibrated number on this task", not a like-for-like ablation. Adding the
+track record to the stronger base has not been measured and should be.
 
 ### 2026-08-04 — label propagation as a feature: controlled, and it does not help
 rel-event, L40S, AMP off, 5 paired seeds, context 10,000, base features identical in every

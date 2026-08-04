@@ -2091,6 +2091,67 @@ def test_graph_context_two_hops_reaches_further_than_one():
     assert set(two.tolist()) == {0, 1}
 
 
+def test_key_history_subtracts_the_rows_own_outcome_rather_than_dropping_it():
+    """Self-exclusion must remove one observation, not a key's whole accumulated history."""
+    from tabicl.scaling import key_target_history
+
+    base = pd.Timestamp("2020-01-01")
+    day = pd.Timedelta(days=1)
+    # Three studies share sponsor "s". A and B succeeded, C is the query and also succeeded.
+    links = pd.DataFrame({"study": ["A", "B", "C"], "sponsor": ["s", "s", "s"]})
+    out = key_target_history(
+        links,
+        label_entities=np.array(["A", "B", "C"]),
+        label_values=np.array([1.0, 1.0, 1.0]),
+        label_times=np.array([base, base + day, base + 2 * day]),
+        query_entities=np.array(["C"]),
+        query_times=np.array([base + 10 * day]),
+    )
+    # C's own success is inside the window and must be subtracted, leaving A and B.
+    assert out["hist__n_prior"].iloc[0] == 2, "own outcome not subtracted, or history dropped"
+    assert out["hist__positive_rate"].iloc[0] == 1.0
+
+
+def test_key_history_respects_the_resolution_horizon():
+    """rel-trial's outcomes take 365 days to resolve; reading them earlier is the future."""
+    from tabicl.scaling import key_target_history
+
+    base = pd.Timestamp("2020-01-01")
+    day = pd.Timedelta(days=1)
+    links = pd.DataFrame({"study": ["A", "B"], "sponsor": ["s", "s"]})
+    kw = dict(label_entities=np.array(["A"]), label_values=np.array([1.0]),
+              label_times=np.array([base]), query_entities=np.array(["B"]))
+
+    early = key_target_history(links, query_times=np.array([base + 100 * day]),
+                               label_horizon=365 * day, **kw)
+    assert early["hist__n_prior"].iloc[0] == 0
+    assert np.isnan(early["hist__positive_rate"].iloc[0])
+
+    late = key_target_history(links, query_times=np.array([base + 400 * day]),
+                              label_horizon=365 * day, **kw)
+    assert late["hist__n_prior"].iloc[0] == 1
+    assert late["hist__positive_rate"].iloc[0] == 1.0
+
+    # Without the horizon the same early query reads an outcome a year from resolving.
+    naive = key_target_history(links, query_times=np.array([base + 100 * day]), **kw)
+    assert naive["hist__positive_rate"].iloc[0] == 1.0
+
+
+def test_key_history_gives_nan_not_zero_for_no_track_record():
+    from tabicl.scaling import key_target_history
+
+    base = pd.Timestamp("2020-01-01")
+    links = pd.DataFrame({"study": ["A", "Z"], "sponsor": ["s", "other"]})
+    out = key_target_history(
+        links,
+        label_entities=np.array(["A"]), label_values=np.array([1.0]),
+        label_times=np.array([base]),
+        query_entities=np.array(["Z"]), query_times=np.array([base + pd.Timedelta(days=5)]),
+    )
+    assert out["hist__n_prior"].iloc[0] == 0
+    assert np.isnan(out["hist__positive_rate"].iloc[0])
+
+
 def test_neighbour_labels_never_include_the_rows_own_label():
     """The leak this family is prone to, pinned directly rather than inferred.
 
