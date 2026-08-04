@@ -52,44 +52,22 @@ seed — which is the root cause of most wrong conclusions in `DESIGN.md`.
 * **`stop` preserves the volume, `terminate` destroys it.** Re-downloading rel-event costs
   ~30 minutes at the ~700 kB/s these pods get, so stop unless the host is bad.
 
-## 1. The open question: does a setting's verdict flip with `n_estimators`?
+## 1. RESOLVED — the sign does flip with `n_estimators`
 
-**This is the one to resume with.** Everything else below depends on the answer.
+Measured on a validated GPU host (AMP off; sanity cell reproduced the CPU baseline 80.92
+vs 80.93), fit set fixed at train+val, only `n_estimators` moving:
 
-Two runners disagree about the same configuration on rel-event / user-ignore, official
-test split, full context, fit on train+val:
-
-| `n_estimators` | plain `(2, None, False)` | categorical `(2, 4, True)` | gap |
+| `n_estimators` | plain | categorical | gap |
 |---:|---:|---:|---:|
-| 1 | 80.27 | 81.77 | **+1.50** |
-| 4 | 80.77 | 77.84 | **−2.93** |
+| 1 | 75.02 | 77.89 | **+2.87** |
+| 2 | 79.65 | 78.70 | -0.95 |
+| 4 | 80.92 | 77.40 | **-3.52** |
+| 8 | 81.03 | 77.97 | -3.06 |
 
-Ruled out already, so do not re-test:
+Both disagreeing runners were right in their own regime. `select_estimators` now defaults
+to `n_estimators`; see `DESIGN.md`.
 
-* **Row chunking.** Cleared directly: `max|Δp| = 1.1e-05`, AUC identical to two decimals,
-  with `offload="auto"` engaged, on both a 128-column and a 161-column feature set. The
-  exactness claim in `DESIGN.md` holds under adversarial test.
-* **Seed noise.** At full context there is no subsampling and results are deterministic —
-  five seeds gave identical numbers, sd 0.00.
-* **Selection noise on a small validation split.** The categorical blocks won 5/5 seeds
-  on validation (+0.39 ± 0.29) and 5/5 on test (+1.26 ± 0.70) at `n_estimators=1`.
-
-**Correction, and this reopens the question.** `n_estimators` was *not* the only variable:
-the +1.50 runner fit on train only (19,239 rows) and the -2.93 runner on train+val
-(21,252). Two variables, which is the error this project keeps repeating. And the first
-GPU attempt at the sweep confidently reported "the sign FLIPS" — an artifact of AMP, since
-every cell in it was distorted.
-
-So the question is still open and must be re-run with **one** variable moving and
-`use_amp=False`: identical fit set, identical features, `n_estimators` in {1, 2, 4, 8}.
-`eval_ensemble_size` already holds the fit set fixed at train+val, so it is the right
-harness; it needs the no-AMP config added.
-
-**Run:** `python -m tabicl.scaling.eval_ensemble_size` — sweeps `{1, 2, 4, 8}` against
-both feature specs with everything else fixed. Run it on a GPU pod with AMP disabled (the harness does this automatically when
-`TABICL_DEVICE` is not `cpu`); each cell is seconds there. No result has been produced yet.
-
-## 2. If the sign does flip: fix the calibration
+## 2. DONE — calibration fixed
 
 `eval_relbench_calibrated` selects configurations at `--select-estimators 1` to keep the
 sweep affordable, then fits the final model at `--n-estimators 4`. If a setting's sign
@@ -119,7 +97,22 @@ unsupported, but the corrections are unfinished.
   conservative choice, but its justification is what is in question.
 * The **calibrated rel-event 78.11** in `STATUS.md`, for the reason in (2).
 
-## 5. Unrun: rel-avito calibration
+## 5. Two numbers still need re-measuring (both need a fresh pod)
+
+Provisioning: `python -m tabicl.scaling.pod_runner create` retries hosts until one passes
+a real `torch.cuda` check — two of five hosts tried were unusable, one silently. Then scp
+a payload of `src/` to `/workspace`, `pip install pandas==2.3.3 relbench scikit-learn
+einops huggingface-hub tqdm psutil`, and set `PYTHONPATH=/workspace/tabicl/src`. Budget
+~10 min for rel-event's dataset and ~20 for rel-avito's at the ~700 kB/s these pods get.
+**Stop the pod in the same turn the work finishes.**
+
+* **rel-event calibrated (currently 78.11)** — selected at `n_estimators=1` and scored at
+  4, which the fixed default no longer permits. Re-run
+  `eval_relbench_calibrated rel-event user-ignore --children 3 --device cuda:0`.
+* **rel-avito 64.46** — measured on GPU with AMP on, so likely understated. Also still the
+  only empty cell in the calibrated column.
+
+### Also unrun: rel-avito calibration
 
 The last empty cell in the calibrated table. It previously reached 24.6 GB on a
 5,000-row context fit and drove the machine to 2 MB available, because the as-of scan
