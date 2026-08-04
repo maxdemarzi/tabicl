@@ -97,22 +97,24 @@ unsupported, but the corrections are unfinished.
   conservative choice, but its justification is what is in question.
 * The **calibrated rel-event 78.11** in `STATUS.md`, for the reason in (2).
 
-## 5. Two numbers still need re-measuring (both need a fresh pod)
+## 5. DONE — both numbers re-measured
 
-Provisioning: `python -m tabicl.scaling.pod_runner create` retries hosts until one passes
-a real `torch.cuda` check — two of five hosts tried were unusable, one silently. Then scp
-a payload of `src/` to `/workspace`, `pip install pandas==2.3.3 relbench scikit-learn
-einops huggingface-hub tqdm psutil`, and set `PYTHONPATH=/workspace/tabicl/src`. Budget
-~10 min for rel-event's dataset and ~20 for rel-avito's at the ~700 kB/s these pods get.
-**Stop the pod in the same turn the work finishes.**
+Calibrated on a verified GPU host, AMP off, selection and scoring at the same
+`n_estimators`, sanity cell reproducing the CPU baseline at 80.93 first:
 
-* **rel-event calibrated (currently 78.11)** — selected at `n_estimators=1` and scored at
-  4, which the fixed default no longer permits. Re-run
-  `eval_relbench_calibrated rel-event user-ignore --children 3 --device cuda:0`.
-* **rel-avito 64.46** — measured on GPU with AMP on, so likely understated. Also still the
-  only empty cell in the calibrated column.
+* **rel-event 78.11** — unchanged. The fix altered the selection *regime* but not the
+  selected *configuration*, so the score is identical. Worth noting what it exposed: at
+  `n_estimators=4` validation still preferred the categorical blocks (81.63 vs 81.40)
+  while test puts them at -3.52. Validation and test genuinely disagree on this task, and
+  no selection rule fixes that.
+* **rel-avito 64.85** — supersedes the AMP-contaminated hand-picked 64.46, chosen on
+  10,000 of 116,598 context rows with `max_columns=None`.
 
-### Also unrun: rel-avito calibration
+The memory guard did its job on the way: it skipped the uncapped spec on rel-event
+(predicted 24.4 GB against an 8 GB budget) while allowing it on rel-avito, where it turned
+out to be the best choice.
+
+### Remaining
 
 The last empty cell in the calibrated table. It previously reached 24.6 GB on a
 5,000-row context fit and drove the machine to 2 MB available, because the as-of scan
