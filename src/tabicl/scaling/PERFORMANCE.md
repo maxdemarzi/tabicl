@@ -61,6 +61,16 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-04 — calibrated graph-context run NOT COMPLETED (slow host)
+`--calibrated` mode is written, committed and ready; the run did not get past setup. The
+host managed ~270 kB/s, so pip took ~25 min and rel-event's 385 MB dataset did not finish
+inside the window. **No number obtained.** Pod terminated rather than left billing.
+
+Re-run on a host with reasonable bandwidth:
+`pod_runner create`, then `eval_graph_context --calibrated --hops 1`. It chooses selection
+method *and* context size on validation and scores test once, which is what the headline
+table requires. Until it produces a number, rel-event stays at 78.11 there.
+
 ### 2026-08-04 — graph context confirmed at 8 seeds: +3.10 (1 hop), +3.37 (2 hops)
 rel-event, RTX 3090, AMP off, `n_estimators=4`, context 5,000 both arms, paired by seed.
 Sanity cell reproduced 80.93 first. Homophily lift +0.2903.
