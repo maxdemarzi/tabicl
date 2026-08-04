@@ -122,9 +122,9 @@ Categorical statistics on the as-of path are opt-in via `top_k_categories` and
 it looked: the −3.21 below is a single measurement on 1,958 test rows, and reseeding the
 context subsample moves absolute scores by 5+ points on this task. A five-seed
 validation comparison gives +0.39 ± 0.29 in the *opposite* direction. Off-by-default
-remains the conservative choice; "not a general win" is provisional. Measured at:
-measured at +1.25 on rel-trial, 0.0 on rel-f1, and −3.21 on rel-event, where they also
-cost 2.3× the model time. The block's price is paid in columns, so it loses on any task
+remains the conservative choice; "not a general win" is provisional. Measured at +1.25
+on rel-trial, 0.0 on rel-f1, and −3.21 on rel-event, where they also cost 2.3× the model
+time. The block's price is paid in columns, so it loses on any task
 where column count is already the binding constraint. Turn it on when a schema's signal
 is genuinely categorical, and verify on a validation split.
 
@@ -156,7 +156,7 @@ columns are published figures from the TabPFN-3 paper's Table 14.
 |---|---:|---:|---:|---:|---:|
 | rel-f1 / driver-top3 | **80.70** | 79.77 | 79.98 | 85.69 | 82.72 |
 | rel-event / user-ignore | 78.11 | 80.81 | 85.38 | 86.18 | 73.70 |
-| rel-avito / user-visits | *running* | 64.46 | 66.68 | 66.18 | 66.76 |
+| rel-avito / user-visits | *not run* | 64.46 | 66.68 | 66.18 | 66.76 |
 | rel-trial / study-outcome | 66.50 | 67.61 | 76.43 | 71.24 | 72.89 |
 
 **Quote the calibrated column.** It is the one produced by a single procedure with every
