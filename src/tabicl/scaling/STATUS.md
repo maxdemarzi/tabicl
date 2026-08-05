@@ -2,9 +2,8 @@
 
 Where this branch stands today. `DESIGN.md` is the history log: derivations, what was
 tried, what failed, and why. `PERFORMANCE.md` is the dated log of every measurement and what changed between runs.
-`TODO.md` is the open work, including one unresolved
-question that a few claims below depend on, and `RESEARCH.md` the candidate directions
-after it. This file is only the present tense.
+`TODO.md` is the open work and `RESEARCH.md` the candidate
+directions, scored by what has since been measured. This file is only the present tense.
 
 ## What the package provides
 
@@ -38,10 +37,17 @@ from tabicl.scaling import (
     temporal_motif_features, typed_temporal_motif_features,
     # context selection
     select_context, prune_features,
+    # graph and label-derived features
+    label_homophily, select_graph_context,
+    neighbour_label_features, key_target_history,
     # 4. test-time compute
     think_predict_proba, ThinkingResult,
 )
 ```
+
+Also, not exported at the top level but part of the measurement discipline:
+`_leakage.permutation_control`, `_leakage.permutation_test`, `_leakage.temporal_control`,
+`_calibrate.calibrate_context_size`, `_calibrate.sweep_configurations`.
 
 ## Configuration
 
@@ -142,47 +148,38 @@ free text and hurts badly. `include_mode` adds the modal value, all-history only
 Fit on `train`+`val`, score the held-out `test` split. Test ROC-AUC x100. Comparison
 columns are published figures from the TabPFN-3 paper's Table 14.
 
-> **Read this table as a per-task maximum, not as a procedure.** Each row is the best of
-> several configurations — `max_columns` on rel-event, join-versus-scan on rel-trial,
-> context size on rel-avito — and those configurations were compared *on the test split*.
-> That is selection on test, and it inflates the column by an unknown amount. The
-> published figures it sits beside are presumably single-configuration results, so the
-> comparison is not like-for-like in our favour.
->
-> `python -m tabicl.scaling.eval_relbench_calibrated <dataset> <task>` runs the honest
-> version: every setting chosen on a validation split, test touched once. Expect lower
-> numbers.
+All numbers below are **calibrated**: every setting chosen on a validation split, test
+touched once, AMP off, selection and scoring at the same `n_estimators`. The earlier
+per-task-maximum table selected its configurations *on test*, ran about a point higher,
+and was not comparable with the published figures; it has been retired.
 
-| task | calibrated | hand-picked | TabPFN-REL | RelGNN | RDBLearn+v3 |
+| task | ours | TabPFN-REL | RelGNN | RDBLearn+v3 | vs best |
 |---|---:|---:|---:|---:|---:|
-| rel-f1 / driver-top3 | **80.70** | 79.77 | 79.98 | 85.69 | 82.72 |
-| rel-event / user-ignore | 78.11 | 80.81 | 85.38 | 86.18 | 73.70 |
-| rel-avito / user-visits | **64.85** | 64.46 † | 66.68 | 66.18 | 66.76 |
-| rel-trial / study-outcome | 66.50 | 67.61 | 76.43 | 71.24 | 72.89 |
+| rel-f1 / driver-top3 | 80.70 | 79.98 | **85.69** | 82.72 | −4.99 |
+| rel-event / user-ignore | 78.11 | 85.38 | **86.18** | 73.70 | −8.07 |
+| rel-avito / user-visits | 64.85 | 66.68 | 66.18 | **66.76** | −1.91 |
+| rel-trial / study-outcome | 69.36 | **76.43** | 71.24 | 72.89 | −7.07 |
 
-† Hand-picked figure, measured on GPU with the default `use_amp=True`. The calibrated
-64.85 supersedes it: AMP off, every setting chosen on validation, and on 8.6% of the
-context (10,000 of 116,598 rows).
+**We win no task.** Ahead of TabPFN-REL on rel-f1 and behind RelGNN there by 5; within 2
+on rel-avito; well behind on rel-event and rel-trial. rel-trial moved 66.50 → 69.36 on
+2026-08-04 via the shared-key track record, and is still last on that task — a narrowed
+gap is not a win. This is a generic flattening pipeline in front of a stock TabICL, with
+no relational machinery in the model and no retraining, measured against systems built for
+relational data.
 
-All four calibrated numbers were produced with AMP disabled, selection and scoring at the
-same `n_estimators`, and the test split touched once.
+**Measurement floor: ±0.6.** Paired-gap sd is 0.29 on rel-event, absolute-score sd 2.28 —
+pairing tightens by ~8x. Differences under ~0.6 are not resolvable, and unpaired
+comparisons cannot resolve five points. Pair everything, and see `PERFORMANCE.md` for what
+changed between runs.
 
 **On GPU, set `use_amp=False` for any accuracy measurement.** The default is `True` and it
 scored 73.61 against CPU's 80.93 on rel-event; `use_amp=False` reproduces CPU exactly. It
 is harmless on well-separated data and expensive exactly where the model is uncertain.
-
-**Quote the calibrated column.** It is the one produced by a single procedure with every
-setting chosen on validation. The hand-picked column selected its configuration on the
-test split, which is worth about a point of inflation (mean 76.06 vs 75.10 over the three
-tasks measured so far) and is not comparable with the published figures beside it.
+`_evalcfg.py` makes fp32 the default for the eval scripts and `--amp` opt-in.
 
 Calibration is better protocol, not a cure: on rel-event it chose the categorical blocks
 on a 0.49 validation margin, and those blocks measure −3.21 on test there. Validation
-splits of 960–2,013 rows are small enough that selection noise is real.
-
-Level with TabPFN-REL on rel-f1, −2.2 on rel-avito, −4.6 on rel-event, −8.8 on
-rel-trial. This is a generic flattening pipeline in front of a stock TabICL, against
-systems built for relational data.
+splits of 825–2,013 rows are small enough that selection noise is real.
 
 ### What moves the number
 
@@ -190,16 +187,42 @@ Ranked by measured AUC contribution, largest first:
 
 | lever | effect |
 |---|---|
-| which relations you traverse | +0.083 |
-| look-back windows | +0.089 on rel-f1; median +0.001 elsewhere |
+| **AMP on/off** | **−7.3 on rel-event** — the largest single effect found; `use_amp=False` |
+| **shared-key track record** | **+5.45 on rel-trial** (sd 0.30, 5/5 seeds); enters the headline |
 | column budget | +3.0 rel-event, 0.0 rel-trial, **−19.5 rel-f1** — task-dependent |
+| graph-neighbour context | +3.10 on rel-event, but validation rejects it 4/5 — unusable |
 | categorical blocks (as-of) | ensemble-dependent: **+2.87 at n_estimators=1, −3.52 at 4** — off by default |
 | context size | rel-avito loses nothing at 8.6%; rel-trial loses 2.74 at 23% — calibrate |
+| neighbour-label features (graph) | −0.74 on rel-event; real but already captured |
 | type-aware motifs | +0.021 |
+| which relations you traverse | +0.083 |
+| look-back windows | +0.089 on rel-f1; median +0.001 elsewhere |
 | the whole WCOJ/FAQ engine | +0.016 |
 
 Choosing *what data enters the features* has consistently beaten *what is computed
-over them*.
+over them* — and the largest genuine gain so far came from admitting a related row's
+**outcome**, which flattening cannot reach at all.
+
+### Label-derived features
+
+`key_target_history` and `neighbour_label_features` build features from *other rows'
+labels* — the one thing flattening structurally cannot do, since it aggregates a related
+row's columns and never its outcome. Both are dangerous: a mistake returns a large
+confident number rather than an exception. Three rules, each learned the hard way:
+
+1. **Apply a resolution horizon.** A label is not knowable at its own prediction time;
+   RelBench's `task.timedelta` is 7 days on rel-event and **365 on rel-trial**. Omitting
+   it inflated a rel-event measurement by 6.4 AUC.
+2. **Gate before building.** Measure each key's standalone AUC and coverage first
+   (`eval_track_record --gate`, no GPU). A key worth less than the pipeline it must
+   improve has no room. That ratio predicted rel-trial working and the graph version not.
+3. **Give counts their own arm.** A "label" feature's *count* often carries the signal:
+   on rel-event `labelled_degree` alone scored 73.2 while the rate scored 67.8. Without a
+   counts-only arm the two are indistinguishable.
+
+Controls live in `_leakage.py`. Use `permutation_control` when a feature's whole content
+is labels, and `permutation_test` when it also encodes structure — judging a graph feature
+against chance calls a sound feature a leak, because degree survives permutation.
 
 ### Memory
 
@@ -246,8 +269,34 @@ Build Tools — clang alone cannot link a CPython extension.
   stage, so it changes nothing end to end. Kept for callers that bypass the manager.
 - **Windows are only supported with a cutoff column.** Without one there is no
   reference point, and the call is rejected rather than silently ignoring them.
+- **Graph-neighbour context is not selectable.** It measures +3.10 to +4.94 over a random
+  context of equal size on rel-event and reproduces across seeds, hops and stratification
+  — but the calibrated protocol rejects it 4 times in 5, and validation rates it ~9 points
+  *below* random while test rates it above. Not a split difference: the standalone
+  neighbour signal is 73.9 val / 74.2 test. Until a selection signal exists that picks it,
+  it cannot be reported. See `RESEARCH.md` item 8.
+- **`key_target_history` counts an entity once per shared key**, so its rate is a
+  membership-weighted average rather than a distinct-entity one. Multi-hop label
+  propagation is not implemented: on rel-event one hop already reaches 7,111 of 8,517
+  eligible users, so two hops is the whole component and the feature goes constant.
 
 ## Tests
 
-`tests/test_scaling.py` — 132 passed, 1 skipped. The skip is the compiled backend when
+`tests/test_scaling.py` — 168 passed, 1 skipped. The skip is the compiled backend when
 it has not been built.
+
+## Running measurements
+
+**Never locally.** `pod_runner.py` drives a RunPod host end to end, and gates it on both
+CUDA-from-Python *and* download bandwidth (5 MB/s floor) before scheduling work — one host
+had a healthy `nvidia-smi` and 270 kB/s, which cost a whole session. Every exit path stops
+the pod unless `--keep` is passed.
+
+```
+python -m tabicl.scaling.pod_runner create      # rejects unusable hosts, up to 8 attempts
+python -m tabicl.scaling.pod_runner terminate   # bills by the second; do not leave it
+```
+
+Before trusting any number from a new host, reproduce a recorded cell **with the runner
+that recorded it** — a near-miss from a different runner proves nothing, since feature
+builds differ between them.

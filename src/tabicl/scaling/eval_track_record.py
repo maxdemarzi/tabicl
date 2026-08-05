@@ -14,9 +14,17 @@ looked like a 74 AUC discovery and turned out to be mostly *degree* -- a count c
 outcome information at all. So the count columns get their own arm here, and the claim
 "outcome history helps" only survives if the full block beats counts-only.
 
+Nothing in `key_target_history` is rel-trial-specific -- it needs a link table, labels,
+timestamps and a horizon -- so the runner takes the dataset and task as arguments. Use
+`--gate` first on a new task: it prints each key's standalone AUC and coverage without
+touching a GPU, and that ratio against the existing pipeline is what predicted the
+difference between this working on rel-trial and the graph version failing on rel-event.
+
 Usage
 -----
-    python -m tabicl.scaling.eval_track_record [--seeds 5] [--no-horizon]
+    python -m tabicl.scaling.eval_track_record [dataset] [task] [--gate]
+    python -m tabicl.scaling.eval_track_record rel-avito user-visits --gate
+    python -m tabicl.scaling.eval_track_record --calibrated --seeds 5
 """
 
 from __future__ import annotations
@@ -39,8 +47,16 @@ from tabicl import TabICLClassifier
 from tabicl.scaling import Table, asof_statistics, key_target_history
 from tabicl.scaling._leakage import permutation_test, temporal_control
 
-WINDOWS = [pd.Timedelta(days=365), pd.Timedelta(days=1095)]
 NOAMP = {k: {"use_amp": False} for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG")}
+
+# Aggregation windows are task-scale, not universal: clinical trials run for years, ad
+# impressions for days. A single default would quietly handicap one task or the other.
+DEFAULT_WINDOWS = {
+    "rel-trial": "365,1095",
+    "rel-avito": "7,30",
+    "rel-event": "30,365",
+    "rel-f1": "365,1095",
+}
 
 
 def _numeric(df: pd.DataFrame) -> np.ndarray:
@@ -53,6 +69,14 @@ def _numeric(df: pd.DataFrame) -> np.ndarray:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("dataset", nargs="?", default="rel-trial")
+    ap.add_argument("task", nargs="?", default="study-outcome")
+    ap.add_argument("--gate", action="store_true",
+                    help="standalone AUC and coverage per key, no GPU. Run this on a new "
+                         "task before building anything: a key worth less than the "
+                         "existing pipeline has no room to help.")
+    ap.add_argument("--window-days", default=None,
+                    help="comma-separated aggregation windows; defaults per dataset")
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--context", type=int, default=10000)
     ap.add_argument("--device", default="cuda:0")
@@ -66,15 +90,18 @@ def main() -> None:
                          "this is.")
     args = ap.parse_args()
 
-    db = get_dataset("rel-trial", download=True).get_db()
-    task = get_task("rel-trial", "study-outcome", download=True)
+    db = get_dataset(args.dataset, download=True).get_db()
+    task = get_task(args.dataset, args.task, download=True)
     key, target, entity = task.entity_col, task.target_col, task.entity_table
     train = task.get_table("train", mask_input_cols=False).df
     test = task.get_table("test", mask_input_cols=False).df
     tcol = next(c for c in train.columns if pd.api.types.is_datetime64_any_dtype(train[c]))
     horizon = None if args.no_horizon else getattr(task, "timedelta", None)
     y, y_te = train[target].to_numpy(), test[target].to_numpy()
-    print(f"horizon={horizon}  train={len(train)} test={len(test)}", flush=True)
+    spec = args.window_days or DEFAULT_WINDOWS.get(args.dataset, "30,365")
+    WINDOWS = [pd.Timedelta(days=int(d)) for d in spec.split(",")]
+    print(f"{args.dataset}/{args.task}  horizon={horizon}  windows={spec}  "
+          f"train={len(train)} test={len(test)}", flush=True)
 
     # --- base features -------------------------------------------------------------------
     ent_df = db.table_dict[entity].df
@@ -95,10 +122,7 @@ def main() -> None:
                                           frame[tcol].to_numpy()).add_prefix(f"{n}__"))
         return pd.concat(blocks, axis=1)
 
-    b_tr = build_base(train)
-    b_te = build_base(test).reindex(columns=b_tr.columns, fill_value=np.nan)
-
-    # --- track record, one block per link table -----------------------------------------
+    # --- which keys does this schema even offer? ----------------------------------------
     link_specs = []
     for name, tbl in db.table_dict.items():
         for fk, pt in (tbl.fkey_col_to_pkey_table or {}).items():
@@ -107,6 +131,43 @@ def main() -> None:
             for other in (tbl.fkey_col_to_pkey_table or {}):
                 if other != fk:
                     link_specs.append((other.replace("_id", ""), tbl.df[[fk, other]], fk, other))
+    print(f"candidate keys: {[s[0] for s in link_specs] or 'NONE'}", flush=True)
+    if not link_specs:
+        print("no table links two entities of this type -- this feature cannot be built "
+              "on this task", flush=True)
+        return
+
+    if args.gate:
+        # Standalone AUC per key, before any base features or GPU work. A key worth less
+        # than the pipeline it must improve has no room; that ratio is what separated
+        # rel-trial (61 against 66.5, worked) from rel-event's graph version (68 against
+        # 83, did not).
+        val = task.get_table("val", mask_input_cols=False).df
+        print(f"\n{'key':<20} {'coverage':>9} {'val AUC':>9} {'test AUC':>9}", flush=True)
+        for short, frame, fk, other in link_specs:
+            row = []
+            for split in (val, test):
+                block = key_target_history(
+                    frame[[fk, other]], label_entities=train[key].to_numpy(),
+                    label_values=y, label_times=train[tcol].to_numpy(),
+                    query_entities=split[key].to_numpy(),
+                    query_times=split[tcol].to_numpy(), label_horizon=horizon,
+                )
+                rate = block["hist__positive_rate"].to_numpy()
+                truth = split[target].to_numpy()
+                cov = float(np.mean(~np.isnan(rate)))
+                filled = np.where(np.isnan(rate), y.mean(), rate)
+                auc = (roc_auc_score(truth, filled) * 100
+                       if len(np.unique(truth)) > 1 else float("nan"))
+                row.append((cov, auc))
+            print(f"{short:<20} {row[0][0]:>9.3f} {row[0][1]:>9.2f} {row[1][1]:>9.2f}",
+                  flush=True)
+        print("\nCompare against the task's existing calibrated number before building.",
+              flush=True)
+        return
+
+    b_tr = build_base(train)
+    b_te = build_base(test).reindex(columns=b_tr.columns, fill_value=np.nan)
 
     def track(entities, times, labels, shift=None):
         stamps = np.asarray(times)
@@ -179,8 +240,10 @@ def main() -> None:
         for seed in range(args.seeds):
             best = None
             print(f"\n-- seed {seed}: selection (validation only) --", flush=True)
+            n_train = len(arms["base"][0])
+            grid = sorted({max(1000, n_train // 4), max(2000, n_train // 2), n_train})
             for name in arms:
-                for size in (3000, 6000, 12000):
+                for size in grid:
                     n = len(arms[name][0])
                     rows = np.random.default_rng(seed).choice(n, size=min(size, n),
                                                               replace=False)
