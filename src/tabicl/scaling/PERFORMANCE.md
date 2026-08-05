@@ -22,7 +22,7 @@ paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model resu
 
 | task | ours | TabPFN-REL | RelGNN | RDBLearn+v3 | vs TabPFN-REL | vs best |
 |---|---:|---:|---:|---:|---:|---:|
-| rel-f1 / driver-top3 | 80.70 | 79.98 | **85.69** | 82.72 | +0.72 | −4.99 |
+| rel-f1 / driver-top3 | 82.48 | 79.98 | **85.69** | 82.72 | +2.50 | −3.21 |
 | rel-event / user-ignore | 78.11 | 85.38 | **86.18** | 73.70 | −7.27 | −8.07 |
 | rel-avito / user-visits | 64.85 | 66.68 | 66.18 | **66.76** | −1.83 | −1.91 |
 | rel-trial / study-outcome | 69.36 | **76.43** | 71.24 | 72.89 | −7.07 | −7.07 |
@@ -65,6 +65,31 @@ five points. Pair everything.
 ---
 
 ## Run log
+
+### 2026-08-04 — rel-f1 80.70 → 82.48, and the cause is a column budget, not a feature
+rel-f1 / driver-top3, L40S, AMP off, 5 calibrated replicates, **all five link tables carry
+timestamps** so `--timed-links-only` changes nothing and the result is causal throughout.
+
+| configuration | calibrated test | val |
+|---|---:|---:|
+| `max_columns=2` (the hardcoded default) | 69.90 ± 2.86 | 68.99 |
+| **`max_columns=None`** | **82.48 ± 0.80** | 87.82 |
+
+**+12.58 from one setting**, and the A/B says the track-record features are almost
+incidental to it: `base` alone scores **82.16**, with `+struct` adding +0.72 (sd 1.34,
+4/5) — barely over the floor. Control 4 passes.
+
+*This is a lever we already knew about and were mis-applying.* "Column budget is a rescue,
+not a default" has been in this file since 2026-08-03, recording −19.5 on rel-f1. The
+runners then hardcoded `max_columns=2` for every task anyway, so every rel-f1 number they
+produced was measured on a base crippled by a setting we had already measured as harmful
+there. The finding was written down and not wired in.
+
+*Caveat, same as rel-trial's.* The previous 80.70 came from `eval_relbench_calibrated`'s
+config space, this from `eval_track_record`'s. Both are calibrated protocols choosing on
+validation and touching test once, so "our best calibrated rel-f1 is now 82.48" is
+defensible; it is not a like-for-like ablation. **Still not a win** — it passes TabPFN-REL
+(79.98) and trails RDBLearn (82.72) and RelGNN (85.69).
 
 ### 2026-08-04 — rel-event, resolved: the 89.48 was untimed links. Case closed.
 Dropping the two link tables that carry no timestamp (`user_friends`, both directions) and

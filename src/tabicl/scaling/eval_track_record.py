@@ -368,6 +368,7 @@ def main() -> None:
             "base": _numeric(b_va),
             "+struct": stack(b_va, t_va, struct_cols),
             "+counts": stack(b_va, t_va, count_cols),
+            "+rate": stack(b_va, t_va, rate_cols),
             "+history": stack(b_va, t_va),
         }.items() if k in arms}
         results = []
