@@ -93,15 +93,34 @@ def main() -> None:
           f"train={len(train)} test={len(test)}", flush=True)
 
     # --- arm 1: Featuretools DFS, with cutoff times ---------------------------------------
+    def ww_safe(df: pd.DataFrame, keep: list) -> pd.DataFrame:
+        """Featuretools types every column through woodwork, which rejects the mixed-type
+        object columns RelBench frames carry. Keep numerics, datetimes and the join keys;
+        cast everything else to string. Dropping is safer than guessing a logical type --
+        DFS aggregates numerics, so a mistyped free-text column contributes nothing anyway.
+        """
+        out = pd.DataFrame(index=df.index)
+        for col in df.columns:
+            s = df[col]
+            if col in keep or pd.api.types.is_numeric_dtype(s) \
+                    or pd.api.types.is_datetime64_any_dtype(s) \
+                    or pd.api.types.is_bool_dtype(s):
+                out[col] = s
+            else:
+                out[col] = s.astype("string")
+        return out
+
     es = ft.EntitySet(id=args.dataset)
-    parent = ent_df.drop_duplicates(subset=[pk]).copy()
-    es = es.add_dataframe(dataframe_name=entity, dataframe=parent, index=pk)
+    parent = ent_df.dropna(subset=[pk]).drop_duplicates(subset=[pk]).reset_index(drop=True)
+    es = es.add_dataframe(dataframe_name=entity, dataframe=ww_safe(parent, [pk]), index=pk)
     for n, fk, tc in kids:
-        child = db.table_dict[n].df.copy()
+        child = db.table_dict[n].df.dropna(subset=[fk, tc]).reset_index(drop=True)
+        child = ww_safe(child, [fk, tc])
         child["_ft_index"] = np.arange(len(child))
         es = es.add_dataframe(dataframe_name=n, dataframe=child, index="_ft_index",
                               time_index=tc)
         es = es.add_relationship(entity, pk, n, fk)
+    print(f"entityset built: {entity} + {[k[0] for k in kids]}", flush=True)
 
     def dfs_features(frame):
         cutoff = pd.DataFrame({"instance_id": frame[key].to_numpy(),
