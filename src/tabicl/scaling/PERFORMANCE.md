@@ -66,6 +66,45 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-04 — rel-event 89.48 WITHDRAWN: the temporal control fails
+The calibrated rel-event number reached **89.48 ± 0.67**, chosen by validation 4/5, which
+would have beaten every published result (RelGNN 86.18, TabPFN-REL 85.38, ICL+MLP 84.02).
+**It is withdrawn. Do not quote it.**
+
+Two defects, found by fixing the first one:
+
+**1. Structure from the future.** The winning arm was `+struct`, built on `n_linked` — a
+count of entities sharing a key — and the first implementation used the link table whole,
+with no time filter. A friendship or event signup formed *after* the prediction cutoff was
+counted. None of the three controls could see this: they move label cutoffs, and this
+column consults no labels. `key_target_history` now takes `link_times` and does an as-of
+degree count. rel-event has two timestamped link tables (`event_interest`,
+`event_attendees`) and two without (`user_friends`, both directions), so that task is only
+partly fixable — the runner now prints which is which and warns that untimed keys give an
+upper bound.
+
+**2. With that fixed, the temporal control fails outright:**
+
+```
+control 2: *** LEAK *** withholding history *improved* the score to 0.8240 from 0.8181
+```
+
+Earlier it passed at *exactly* the tolerance boundary (0.8231 against 0.8231), which was
+already recorded here as "not a clean pass". It is now over. The runner refuses to report
+a lift, which is the behaviour it was built for.
+
+*Read the two together.* The number moved 85.34 → 89.48 as features were added, and the
+control moved from vacuous, to boundary, to failing. The lift and the leak grew together.
+That is the signature this whole control apparatus exists to catch, and it caught it one
+step before the number reached the headline table.
+
+**What is still open, and it is narrow.** `+struct` uses only `n_linked`, while control 2
+tests the *rate* columns which that arm does not contain. Control 3, on the count columns,
+passes. So a structure-only result may yet survive — but it needs a temporal control on
+`n_linked` specifically, and until that exists the arm is untested rather than vindicated.
+Nothing goes in the table on the strength of "the failing control tested a different
+column".
+
 ### 2026-08-04 — rel-event track record: 85.34 calibrated, PROVISIONAL, not in the table
 rel-event / user-ignore, L40S, AMP off, 5 paired seeds then 5 calibrated replicates.
 **Calibrated 85.34 ± 1.48 (range 83.38–86.98) against a standing 78.11**, which would sit

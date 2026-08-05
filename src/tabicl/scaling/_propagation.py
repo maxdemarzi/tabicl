@@ -127,7 +127,10 @@ def key_target_history(
     link.columns = ["entity", "key"]
     if link_times is not None:
         link["link_time"] = np.asarray(link_times)
-        link = link.dropna(subset=["entity", "key"])
+        # A membership whose formation time is unknown is dropped, not treated as having
+        # always existed: `merge_asof` rejects nulls in its key, and the permissive reading
+        # is exactly the future-visible behaviour this argument exists to remove.
+        link = link.dropna(subset=["entity", "key", "link_time"])
         # Earliest formation wins: a membership exists from the first time it is recorded.
         link = link.sort_values("link_time", kind="stable").drop_duplicates(
             subset=["entity", "key"], keep="first")
