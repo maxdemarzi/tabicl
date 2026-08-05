@@ -92,6 +92,11 @@ def main() -> None:
     ap.add_argument("--no-horizon", action="store_true",
                     help="ignore the 365-day resolution window. Wrong, and kept only to "
                          "measure what it is worth.")
+    ap.add_argument("--top-keys", type=int, default=0,
+                    help="keep only the N keys with the highest standalone validation AUC, "
+                         "ranked by the same gate used before building. 0 keeps all. Every "
+                         "key's block is otherwise concatenated indiscriminately, and the "
+                         "gate already measures them as far apart as 53 to 82 on rel-event.")
     ap.add_argument("--max-columns", default="2",
                     help="per-child column budget, or 'none'. NOT a universal default: the "
                          "base sweep measures max_columns=None at +23.38 on rel-f1's "
@@ -171,6 +176,33 @@ def main() -> None:
         if dropped:
             print(f"dropping untimed link tables {dropped}: their structural counts cannot "
                   f"be temporally controlled", flush=True)
+    if args.top_keys and len(link_specs) > args.top_keys:
+        # Rank on VALIDATION, never on test: this is a selection step like any other, and
+        # ranking it on test is the error the calibrated protocol exists to prevent.
+        val_rank = task.get_table("val", mask_input_cols=False).df
+        scored = []
+        for spec in link_specs:
+            short, frame, fk, other, ltc = spec
+            block = key_target_history(
+                frame[[fk, other]], label_entities=train[key].to_numpy(),
+                label_values=y, label_times=train[tcol].to_numpy(),
+                query_entities=val_rank[key].to_numpy(),
+                query_times=val_rank[tcol].to_numpy(), label_horizon=horizon,
+                link_times=frame[ltc].to_numpy() if ltc else None)
+            rate = block["hist__positive_rate"].to_numpy()
+            truth = val_rank[target].to_numpy()
+            filled = np.where(np.isnan(rate), y.mean(), rate)
+            auc = (roc_auc_score(truth, filled) * 100
+                   if len(np.unique(truth)) > 1 else 50.0)
+            # Rank by distance from chance: a strongly *anti*-correlated key is as
+            # informative as a correlated one, and a rate near 50 is the useless case.
+            scored.append((abs(auc - 50.0), auc, spec))
+        scored.sort(key=lambda r: -r[0])
+        print("key ranking on validation: "
+              + ", ".join(f"{s[2][0]} {s[1]:.1f}" for s in scored), flush=True)
+        link_specs = [s[2] for s in scored[: args.top_keys]]
+        print(f"keeping top {args.top_keys}: {[s[0] for s in link_specs]}", flush=True)
+
     timed = [s[0] for s in link_specs if s[4]]
     untimed = [s[0] for s in link_specs if not s[4]]
     print(f"candidate keys: {[s[0] for s in link_specs] or 'NONE'}", flush=True)
