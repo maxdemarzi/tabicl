@@ -66,6 +66,34 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-04 — entity-only baseline: harness does not reproduce it yet, do not quote
+Attempt to reproduce Rel-LLM's LightGBM-on-the-entity-table-alone baseline. Three arms so
+"relations do not help" and "our model is behind" stay separable.
+
+| task | GBDT-entity (ours) | GBDT-entity (published) | TabICL-entity | TabICL-full |
+|---|---:|---:|---:|---:|
+| rel-f1 / driver-top3 | **36.43** | 73.92 | 47.40 | 70.34 |
+| rel-avito / user-visits | **50.68** | 53.05 | 51.77 | 66.17 |
+| rel-trial / study-outcome | — OOM — | 70.09 | — | — |
+
+**The reproduction failed and the bolded column is the evidence.** 36.43 is *below chance*
+— that is a broken arm, not a weak baseline. `entity_only` keeps non-datetime, non-key
+columns of the entity table and factorize-encodes categoricals, which leaves **5 features
+on rel-f1 and 4 on rel-avito**. Their LightGBM plainly sees more. So the comparison that
+prompted all this — their 70.09 on rel-trial against our 69.36 — **still has not been
+made**, and nothing here licenses "we beat LightGBM".
+
+*What the run does support*, since the two TabICL arms differ in one variable and share a
+harness: **relational features are worth +22.94 on rel-f1 and +14.40 on rel-avito** over
+the same model on entity columns alone. That is a genuine ablation of the flattening layer
+and the first direct evidence it pays for itself — but measured against a weak entity arm,
+so read it as "relations help", not as a magnitude.
+
+*Two operational faults.* rel-trial OOMed because **an orphaned process from an earlier run
+still held 32.95 GiB** — the known failure where killing a shell leaves child Python alive;
+check for orphans before scheduling GPU work. And an inline `ssh` command with nested
+quotes failed to parse for the second time today; remote work goes in a script file.
+
 ### 2026-08-04 — rel-event 89.48 WITHDRAWN: the temporal control fails
 The calibrated rel-event number reached **89.48 ± 0.67**, chosen by validation 4/5, which
 would have beaten every published result (RelGNN 86.18, TabPFN-REL 85.38, ICL+MLP 84.02).

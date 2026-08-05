@@ -8,6 +8,16 @@ should happen before it is understood.
 
 `RESEARCH.md` 6e asks for this baseline. It was already published; we simply had not looked.
 
+**Status 2026-08-04: this harness does NOT yet reproduce their baseline, and its
+entity-only arm should not be quoted.** First run gave GBDT-entity **36.43 on rel-f1**
+against their 73.92, and 50.68 on rel-avito against their 53.05 — from **5 and 4 features
+respectively**. Something below chance on rel-f1 is a broken arm, not a weak baseline:
+`entity_only` keeps only non-datetime, non-key columns of the entity table and
+factorize-encodes categoricals, which for `drivers` leaves almost nothing. Their LightGBM
+evidently sees more than that. Until the entity-only arm reproduces their published
+numbers, the interesting comparison (their 70.09 on rel-trial against our 69.36) cannot be
+made here, and any "we beat LightGBM by N" read off this file is measuring my bug.
+
 Three arms, chosen to separate two explanations that a two-arm comparison confounds:
 
   * **GBDT, entity table only** — their baseline. No relations at all.
