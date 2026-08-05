@@ -158,6 +158,14 @@ def key_target_history(
     # alike, the count feature is carrying structure rather than label timing, and no
     # leakage question arises for it -- a distinction that decided whether a rel-event
     # result was reportable.
+    #
+    # **It carries its own caveat, and it is not a label one.** The link table is used
+    # whole, with no time filter, because most link tables carry no timestamp. Where a
+    # membership *was* formed after the query's cutoff, this counts it -- structure from
+    # the future. The temporal control does not detect this: that control moves label
+    # cutoffs, and this quantity does not consult labels. On a task whose links are
+    # timestamped, filter them before calling; on one whose links are not, any lift from
+    # this column is an upper bound. rel-event is the latter.
     sizes = link.groupby("key")["entity"].size()
     linked = (expanded.assign(n=expanded["key"].map(sizes).fillna(1) - 1)
               .groupby("row")["n"].sum())

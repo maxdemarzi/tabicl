@@ -362,6 +362,100 @@ Test: at equal context size, ego-graph neighbours versus random versus k-NN. Pai
 multi-seed. If neighbour-context beats random on a task with label homophily and not on
 one without, the mechanism is confirmed rather than merely observed.
 
+## 8b. Rel-LLM — prior work that solves item 8's blocker, and rebuts our framing
+
+*"Large Language Models are Good Relational Learners"*, Fang Wu, Vijay Prakash Dwivedi,
+Jure Leskovec. [arXiv 2506.05725](https://arxiv.org/abs/2506.05725),
+[smiles724/Rel-LLM](https://github.com/smiles724/Rel-LLM). Leskovec's group — the same
+group behind RelBench, so the protocol is theirs and the comparison is direct.
+
+**Their pipeline:** build a heterogeneous entity graph from the tables → sample a
+**temporal-aware subgraph at each prediction time** → encode with a GNN (GraphSAGE) →
+project the embeddings into the LLM's space and serialise as JSON prompts → decode with a
+**frozen** Llama-3.1, optionally with soft prompting. Framed as retrieval-augmented
+generation over a database. Reported: all 7 RelBench datasets and 30 tasks, ~+2 AUROC over
+RDL and over an "ICL+MLP" baseline, and a zero-shot "Rel-Zero" variant.
+
+Base LLM is **Llama-3.2-1B** — small, not a frontier model — and scaling to 3B gives only
+modest gains.
+
+### Their Table 1, restricted to our four tasks (test AUROC)
+
+| task | LightGBM | RDL | ICL | ICL+MLP | Rel-Zero | Rel-LLM | **ours** |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| rel-f1 / driver-top3 | 73.92 | 75.54 | **88.47** | 87.36 | 70.64 | 82.22 | 80.70 |
+| rel-event / user-ignore | 79.93 | 81.62 | 78.55 | **84.02** | 61.32 | 83.74 | 78.11 |
+| rel-avito / user-visits | 53.05 | 66.20 | 60.28 | 64.98 | 56.17 | **67.01** | 64.85 |
+| rel-trial / study-outcome | **70.09** | 68.60 | 55.72 | 68.38 | 59.02 | 71.04 | 69.36 |
+| *average, all 11 tasks* | 63.66 | 75.83 | 69.63 | 76.83 | 63.42 | **77.82** | — |
+
+**Five things worth acting on.**
+
+**1. LightGBM on the entity table alone scores 70.09 on rel-trial. We score 69.36.** Their
+LightGBM baseline uses *only the single entity table* — no relational features at all. Our
+entire relational pipeline, plus the track record that was today's best result, does not
+beat it. Worse, our A/B `base` arm was 63.82, so on this task the flattening machinery may
+be *costing* us against a plain GBDT on raw columns. This is the baseline `RESEARCH 6e`
+asks for, already published, and it should be reproduced locally before any further work
+on rel-trial. It is the most important number in this file.
+
+**2. ICL scores 88.47 on rel-f1 — the best result in their table, beating Rel-LLM's own
+82.22.** ICL (Wydmuch et al. 2024) is in-context learning over serialised tabular rows,
+which is the closest published method to what we do, and it beats us there by 7.8. On
+rel-trial the same method collapses to 55.72. That spread is the finding: in-context
+methods on relational data are wildly task-dependent, which is our own experience stated
+by someone else.
+
+**3. Their comparison column is not ours.** We quote TabPFN-REL / RelGNN / RDBLearn from
+the TabPFN-3 report's Table 14; they quote LightGBM / RDL / ICL from RelBench. Both are
+legitimate and they disagree substantially — on rel-trial we cite TabPFN-REL at 76.43,
+while nothing in their table exceeds 71.04. `PERFORMANCE.md` should say which source each
+comparison number comes from, because "state of the art" differs by source.
+
+**4. rel-event's validation/test gap is a property of the task, not our bug.** RDL goes
+**91.70 val → 81.62 test**; LightGBM 87.96 → 79.93. We spent real effort on rel-event's
+val/test disagreement treating it as something we had introduced. Everyone has it.
+
+**5. ICL is unstable across document-generation settings** (their Figure 2), which
+independently corroborates our ±0.6 floor work and the 9.1-point spread we measured on
+random context selection. Their answer is that a trained GNN encoder is more robust than
+prompt construction — a direct argument against the retrieval-flavoured directions here.
+
+*Honest note on the README:* it advertises "Rel-Zero performs competitively without
+labels". The paper's own number is 63.42 average against LightGBM's 63.66 and RDL's 75.83.
+The paper states this plainly; the README oversells it.
+
+**Three things this is worth to us, in descending order.**
+
+**1. It solves item 8's blocker, and we should copy the mechanism rather than the model.**
+Our graph-neighbour context died on a static `user_friends` graph and an unselectable
+validation signal; `PERFORMANCE.md` records the static-graph caveat as an upper bound we
+never removed. *Temporal-aware subgraph sampling at each prediction time* is exactly the
+missing piece, and it is item 9 already. That it works for them is evidence the idea is
+sound and our implementation was the problem.
+
+**2. Their "ICL+MLP" baseline is the closest published thing to what we do**, and they
+beat it by ~2. Extracting that baseline's construction and per-task numbers is the
+cheapest available check on whether our pipeline is competitive or merely plausible —
+more informative than another lever on our own four tasks.
+
+**3. It undercuts a claim these documents lean on.** We describe ourselves as "a generic
+flattening pipeline in front of a stock TabICL, against systems built for relational
+data", which frames trailing RelGNN as acceptable. Rel-LLM is a *foundation model* system
+that keeps the GNN and beats the GNN baselines. So the honest contrast is not
+"foundation model vs relational system" but **"how do you give a foundation model the
+structure — a learned GNN encoder, or flattened columns?"** They chose the encoder. We
+chose columns, which needs no training at all; that is our actual differentiator and it is
+narrower and more interesting than the framing we have been using.
+
+**What not to copy.** They need a Llama-3.1 and a trained GNN encoder per dataset. We
+train nothing. If we land within a few points with zero training, that is a result worth
+stating precisely — and it only means anything against their numbers, not ours.
+
+**Also a rebuke on coverage.** They report 30 tasks; we report 4. Several conclusions here
+are single-task, and rel-trial's +5.45 versus rel-event's +1.33-over-counts already shows
+how badly one task generalises to another.
+
 ## 9. Time-respecting propagation — the causally sound form of 6b
 
 A path only carries influence if timestamps increase along it. "Positives reachable by a

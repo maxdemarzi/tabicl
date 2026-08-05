@@ -307,14 +307,16 @@ def main() -> None:
                     print(f"  {name:<9} context={size:<6} val={v:.2f}", flush=True)
                     if best is None or v > best[0]:
                         best = (v, name, size)
-            _, name, size = best
+            val_auc, name, size = best
             n = len(arms[name][0])
             rows = np.random.default_rng(seed).choice(n, size=min(size, n), replace=False)
             auc = score(arms[name][0], arms[name][1], rows, seed)
-            results.append((auc, name, size))
-            print(f"  chosen {name} context={size} -> TEST {auc:.2f}", flush=True)
+            results.append((auc, name, size, val_auc))
+            print(f"  chosen {name} context={size} -> VAL {val_auc:.2f}  TEST {auc:.2f}",
+                  flush=True)
 
         aucs = np.array([r[0] for r in results])
+        vals = np.array([r[3] for r in results])
         chose = [r[1] for r in results]
         if all(c == "+counts" for c in chose):
             print("\n*** WARNING: validation chose the counts-only arm, but the controls "
@@ -325,6 +327,11 @@ def main() -> None:
         print(f"\n{args.dataset}/{args.task}  CALIBRATED TEST ROC-AUC x100 = {aucs.mean():.2f} "
               f"+- {aucs.std(ddof=1) if len(aucs) > 1 else 0:.2f} over {len(aucs)} "
               f"replicates (range {aucs.min():.2f}-{aucs.max():.2f})", flush=True)
+        # Machine-readable line so a table can be assembled across tasks without re-running.
+        print(f"TABLEROW\t{args.dataset}/{args.task}\t{len(train)}\t{len(val)}\t{len(test)}"
+              f"\t{vals.mean():.2f}\t{vals.std(ddof=1) if len(vals) > 1 else 0:.2f}"
+              f"\t{aucs.mean():.2f}\t{aucs.std(ddof=1) if len(aucs) > 1 else 0:.2f}"
+              f"\t{max(set(chose), key=chose.count)}", flush=True)
         print(f"validation chose: {chose}; sizes {[r[2] for r in results]}", flush=True)
         print(f"reference: {REFERENCE.get(args.dataset, 'see PERFORMANCE.md')}", flush=True)
         return
