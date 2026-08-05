@@ -104,11 +104,39 @@ def main() -> None:
             if pt == entity and t.time_col][:3]
 
     def entity_only(frame):
+        """Entity-table features, built to be a *fair* baseline rather than a weak one.
+
+        The first version scored below chance on rel-f1 by doing two things wrong, and both
+        are worth stating because they are the obvious way to write this:
+
+        * it **dropped every datetime**, discarding a driver's date of birth entirely, when
+          the informative quantity is age at the cutoff — a number, not a timestamp;
+        * it **factorize-encoded free text**. `forename`, `surname` and `url` are unique per
+          driver, so factorizing turns them into arbitrary row ids. A GBDT will happily
+          split on those and memorise the training set, which is how a baseline lands
+          *below* chance rather than merely low.
+        """
         base = frame.merge(ent_df, left_on=key, right_on=pk, how="left")
         drop = {target, key, pk, tcol}
-        cols = [c for c in base.columns
-                if c not in drop and not pd.api.types.is_datetime64_any_dtype(base[c])]
-        return base[cols].reset_index(drop=True)
+        out = pd.DataFrame(index=range(len(base)))
+        cutoff = pd.to_datetime(base[tcol]) if tcol in base else None
+        for col in base.columns:
+            if col in drop:
+                continue
+            series = base[col]
+            if pd.api.types.is_datetime64_any_dtype(series):
+                if cutoff is not None:      # age at the cutoff, in days
+                    out[f"{col}__age"] = (cutoff - pd.to_datetime(series)).dt.days
+                continue
+            if pd.api.types.is_numeric_dtype(series):
+                out[col] = series.to_numpy()
+                continue
+            # Near-unique object columns are identifiers, not categories: keep only those
+            # a category actually repeats in.
+            nunique = series.nunique(dropna=True)
+            if nunique <= max(2, min(1000, len(base) // 20)):
+                out[col] = pd.factorize(series)[0]
+        return out.reset_index(drop=True)
 
     def with_relations(frame):
         blocks = [entity_only(frame)]
