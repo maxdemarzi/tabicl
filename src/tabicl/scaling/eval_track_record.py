@@ -261,6 +261,24 @@ def main() -> None:
                                        shifts=shifts)
     print(f"  {temporal_counts!r}", flush=True)
 
+    # And on the structural column, which is the arm validation actually keeps choosing.
+    # Controls 1-3 all test columns the `+struct` arm does not contain, so passing them
+    # says nothing about it -- reporting a struct-only result on their strength would be
+    # the same mistake as reporting a counts-only result on a rate-only control.
+    def struct_only_score(shift=None):
+        block = track(test[key].to_numpy(), test[tcol].to_numpy(), y, shift=shift)
+        deg = block[[c for c in block.columns if c.endswith("n_linked")]].sum(axis=1)
+        return roc_auc_score(y_te, deg.to_numpy())
+
+    print("control 4: temporal, on the STRUCTURAL column (n_linked)", flush=True)
+    temporal_struct = temporal_control(lambda days: struct_only_score(shift=days),
+                                       shifts=shifts)
+    print(f"  {temporal_struct!r}", flush=True)
+    if not temporal_struct.passed:
+        print("  *** n_linked reaches past the cutoff. Where a link table carries no "
+              "timestamp this is expected and unfixable -- exclude those keys rather than "
+              "reporting the arm.", flush=True)
+
     # And the question that decides whether the counts are even a label feature: pure
     # structural degree consults no labels at all, so if it scores alike there is no
     # leakage question to answer.
@@ -270,10 +288,21 @@ def main() -> None:
           f"{roc_auc_score(y_te, struct) * 100:.2f}", flush=True)
     print(f"  resolved-label counts alone:         "
           f"{roc_auc_score(y_te, prior) * 100:.2f}", flush=True)
-    if not (perm.passed and temporal.passed and temporal_counts.passed):
-        print("\nCONTROLS FAILED -- not measuring a lift on features that leak", flush=True)
+    # Each arm is gated by the controls that test *its own* columns, so one failing family
+    # does not block a clean one -- and, more importantly, a passing family cannot vouch
+    # for an arm it never touched.
+    ok = {"base": True,
+          "+struct": temporal_struct.passed,
+          "+counts": temporal_counts.passed,
+          "+history": perm.passed and temporal.passed and temporal_counts.passed
+                      and temporal_struct.passed}
+    print(f"\narm eligibility: {ok}", flush=True)
+    if not any(v for k, v in ok.items() if k != "base"):
+        print("CONTROLS FAILED for every feature arm -- nothing to measure", flush=True)
         return
-    print("controls passed\n", flush=True)
+    for name, passed in ok.items():
+        if not passed:
+            print(f"  {name} is EXCLUDED from selection: its own controls failed", flush=True)
 
     # --- three arms ----------------------------------------------------------------------
     def stack(base, block, cols=None):
@@ -287,6 +316,9 @@ def main() -> None:
         "+counts": (stack(b_tr, t_tr, count_cols), stack(b_te, t_te, count_cols)),
         "+history": (stack(b_tr, t_tr), stack(b_te, t_te)),
     }
+    # An arm whose own controls failed is not offered to validation at all. Selection
+    # cannot be allowed to pick a leaking arm and have the protocol launder it.
+    arms = {k: v for k, v in arms.items() if ok.get(k, True)}
     print(f"{arms['base'][0].shape[1]} base -> {arms['+history'][0].shape[1]} with history, "
           f"{len(arms['base'][0])} train rows, context={args.context}", flush=True)
 
@@ -301,12 +333,12 @@ def main() -> None:
         y_va = val[target].to_numpy()
         b_va = build_base(val).reindex(columns=b_tr.columns, fill_value=np.nan)
         t_va = track(val[key].to_numpy(), val[tcol].to_numpy(), y)
-        val_arms = {
+        val_arms = {k: v for k, v in {
             "base": _numeric(b_va),
             "+struct": stack(b_va, t_va, struct_cols),
             "+counts": stack(b_va, t_va, count_cols),
             "+history": stack(b_va, t_va),
-        }
+        }.items() if k in arms}
         results = []
         for seed in range(args.seeds):
             best = None
@@ -351,8 +383,8 @@ def main() -> None:
         print(f"reference: {REFERENCE.get(args.dataset, 'see PERFORMANCE.md')}", flush=True)
         return
 
-    print(f"\n{'seed':>5} {'base':>9} {'+struct':>9} {'+counts':>9} {'+history':>9} "
-          f"{'hist-base':>10} {'hist-cnt':>9} {'cnt-str':>8}", flush=True)
+    header = "".join(f"{name:>10}" for name in arms)
+    print(f"\n{'seed':>5}{header}", flush=True)
     results = {k: [] for k in arms}
     for seed in range(args.seeds):
         rng = np.random.default_rng(seed)
@@ -361,17 +393,18 @@ def main() -> None:
         t0 = time.perf_counter()
         for name, (X, Xe) in arms.items():
             results[name].append(score(X, Xe, rows, seed))
-        a, s, c, h = (results[k][-1] for k in ("base", "+struct", "+counts", "+history"))
-        print(f"{seed:>5} {a:>9.2f} {s:>9.2f} {c:>9.2f} {h:>9.2f} {h - a:>+10.2f} "
-              f"{h - c:>+9.2f} {c - s:>+8.2f}   ({time.perf_counter() - t0:.0f}s)", flush=True)
+        cells = "".join(f"{results[name][-1]:>10.2f}" for name in arms)
+        print(f"{seed:>5}{cells}   ({time.perf_counter() - t0:.0f}s)", flush=True)
 
-    over_base = np.array(results["+history"]) - np.array(results["base"])
-    over_counts = np.array(results["+history"]) - np.array(results["+counts"])
-    counts_over_struct = np.array(results["+counts"]) - np.array(results["+struct"])
-    for label, g in (("history over base", over_base),
-                     ("history over counts", over_counts),
-                     ("counts over pure structure", counts_over_struct)):
-        print(f"{label}: mean {g.mean():+.2f} sd "
+    # Every contrast that exists, paired by seed. Naming both sides keeps a reader from
+    # attributing a gap to the wrong difference, which is this project's recurring error.
+    pairs = [("+history", "base"), ("+history", "+counts"), ("+counts", "+struct"),
+             ("+struct", "base"), ("+history", "+struct")]
+    for hi, lo in pairs:
+        if hi not in results or lo not in results:
+            continue
+        g = np.array(results[hi]) - np.array(results[lo])
+        print(f"{hi} over {lo}: mean {g.mean():+.2f} sd "
               f"{g.std(ddof=1) if len(g) > 1 else 0:.2f} over {len(g)} seeds, "
               f"{(g > 0).sum()}/{len(g)} positive", flush=True)
     print(f"base mean {np.mean(results['base']):.2f}, "
