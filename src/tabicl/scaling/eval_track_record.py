@@ -316,6 +316,7 @@ def main() -> None:
     ok = {"base": True,
           "+struct": temporal_struct.passed,
           "+counts": temporal_counts.passed,
+          "+rate": perm.passed and temporal.passed and temporal_counts.passed,
           "+history": perm.passed and temporal.passed and temporal_counts.passed
                       and temporal_struct.passed}
     print(f"\narm eligibility: {ok}", flush=True)
@@ -332,10 +333,17 @@ def main() -> None:
         return _numeric(pd.concat([base.reset_index(drop=True),
                                    chosen.reset_index(drop=True)], axis=1))
 
+    # `+rate` is the label-history block *without* the structural column: n_prior,
+    # n_positive, positive_rate. It is the composition that produced rel-trial's 69.36,
+    # before n_linked existed. Keeping it separate matters -- folding n_linked into
+    # `+history` meant a control failing on the structural column excluded an arm that
+    # never contained it, which is a two-variable comparison wearing a verdict's clothing.
+    rate_cols = [c for c in t_tr.columns if not c.endswith("n_linked")]
     arms = {
         "base": (_numeric(b_tr), _numeric(b_te)),
         "+struct": (stack(b_tr, t_tr, struct_cols), stack(b_te, t_te, struct_cols)),
         "+counts": (stack(b_tr, t_tr, count_cols), stack(b_te, t_te, count_cols)),
+        "+rate": (stack(b_tr, t_tr, rate_cols), stack(b_te, t_te, rate_cols)),
         "+history": (stack(b_tr, t_tr), stack(b_te, t_te)),
     }
     # An arm whose own controls failed is not offered to validation at all. Selection
