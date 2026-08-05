@@ -77,6 +77,18 @@ def main() -> None:
     args = ap.parse_args()
 
     import featuretools as ft
+    import torch
+
+    # Never fit on CPU while a GPU is present. CPU fits were measured at 300-900s against
+    # ~13s on GPU, so ten of them will not finish inside any sane timeout -- and when a run
+    # then crawls, the slowness gets blamed on whatever else is new. This is a guard rather
+    # than a default because the mistake is invisible: the run works, it is simply 30x
+    # slower, and nothing in the output says why.
+    if args.device.startswith("cpu") and torch.cuda.is_available():
+        raise SystemExit(
+            "refusing to run on CPU while CUDA is available. TabICL fits are ~30x slower "
+            "on CPU and the run will time out. Drop --device cpu, or pass --allow-cpu if "
+            "you genuinely mean it.")
 
     db = get_dataset(args.dataset, download=True).get_db()
     task = get_task(args.dataset, args.task, download=True)
