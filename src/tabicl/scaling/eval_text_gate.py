@@ -84,6 +84,27 @@ def main() -> None:
 
     candidates = [c for c in ent_df.columns
                   if c not in (pk, target) and _is_texty(ent_df[c], len(ent_df))]
+
+    # Child tables too. The first version of this gate looked only at the entity table and
+    # concluded rel-f1 and rel-avito "cannot benefit from 6f" -- but rel-avito's search
+    # queries live in SearchInfo, not UserInfo, and an entity's text is mostly in the rows
+    # that point AT it. Aggregated by concatenation here, ignoring time, which makes any
+    # signal an UPPER BOUND: the built version must aggregate as-of the cutoff.
+    for name, tbl in db.table_dict.items():
+        fkeys = [fk for fk, pt in (tbl.fkey_col_to_pkey_table or {}).items()
+                 if pt == entity]
+        if not fkeys:
+            continue
+        fk = fkeys[0]
+        for col in tbl.df.columns:
+            if col == fk or not _is_texty(tbl.df[col], len(tbl.df)):
+                continue
+            agg = (tbl.df[[fk, col]].dropna().astype({col: str})
+                   .groupby(fk)[col].apply(lambda s: " ".join(s.head(20))))
+            label = f"{name}.{col}"
+            for split_name, frame in merged.items():
+                frame[label] = frame[key].map(agg)
+            candidates.append(label)
     print(f"{args.dataset}/{args.task}: entity table {entity}, "
           f"{len(ent_df.columns)} columns, {len(candidates)} look like free text", flush=True)
     if not candidates:
