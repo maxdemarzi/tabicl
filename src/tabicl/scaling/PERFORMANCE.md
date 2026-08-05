@@ -66,6 +66,38 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-05 — per-key selection: no gain, and a near-miss worth recording
+`RESEARCH` item 12. Every key's block was concatenated indiscriminately, so this ranks keys
+by standalone validation AUC and keeps the top *k*. Calibrated, 5 replicates.
+
+| task | keys kept | **val** | test |
+|---|---|---:|---:|
+| rel-avito | top 1 | 69.52 | **66.21 ± 0.53** |
+| rel-avito | top 2 | 70.78 | 65.51 ± 0.16 |
+| rel-avito | **all 4** | **77.37** | 65.54 ± 0.11 |
+| rel-trial | top 1 | 64.86 | 65.24 ± 1.79 |
+| rel-trial | top 2 | 65.38 | 66.91 ± 0.88 |
+| rel-trial | top 3 | 65.97 | 68.85 ± 1.12 |
+| rel-trial | **all 5** | **66.77** | 69.27 ± 0.86 |
+
+**No gain, and the reason is the whole point.** On rel-avito, top-1 scores **66.21** — better
+than all-keys, and 0.55 from RDBLearn's 66.76, the closest this project has come to a win.
+It is not ours to claim: **validation ranks the subsets in the opposite order** (77.37 for
+all keys against 69.52 for top-1), so the honest procedure keeps all four and returns 65.54.
+The 66.21 is reachable only by reading test.
+
+Had `k` been picked the way it is tempting to pick it — run all three, quote the best — this
+file would now claim rel-avito 66.21 and a near-win. That is the same test-selection that
+inflated the retired per-task-maximum table by about a point, arriving by a new route.
+
+On rel-trial both columns rise monotonically with *k* and agree, so validation keeps all
+five keys and the entry is unchanged at 69.36. Selection is consistent there; it just has
+nothing to add.
+
+*What it does establish:* concatenating every key is already the right call on both tasks,
+and the weak keys are not diluting the strong ones the way the categorical-blocks result
+suggested they might. That hypothesis is now measured rather than assumed.
+
 ### 2026-08-05 — rel-event at 12 replicates: 81.76 ± 2.95, and the entry firms up
 The standing rel-event number carried sd 3.01 over 5 replicates, making its gain over the
 old 78.11 about two standard errors — the weakest thing in the table. Twelve replicates,
