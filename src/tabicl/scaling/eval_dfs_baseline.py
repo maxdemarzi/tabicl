@@ -110,25 +110,49 @@ def main() -> None:
                 out[col] = s.astype("string")
         return out
 
+    def add(es_, name, df, index, time_index=None):
+        """Initialise woodwork explicitly before handing the frame over.
+
+        `add_dataframe` raised WoodworkNotInitError on ingestion, and cleaning dtypes did
+        not help: woodwork's accessor is not attaching at all, which is a pandas-version
+        incompatibility rather than anything about the data. Calling `.ww.init` directly and
+        passing the initialised frame bypasses featuretools' own inference path.
+        """
+        df = df.copy()
+        try:
+            df.ww.init(index=index, time_index=time_index)
+            return es_.add_dataframe(dataframe_name=name, dataframe=df)
+        except Exception:
+            return es_.add_dataframe(dataframe_name=name, dataframe=df,
+                                     index=index, time_index=time_index)
+
     es = ft.EntitySet(id=args.dataset)
     parent = ent_df.dropna(subset=[pk]).drop_duplicates(subset=[pk]).reset_index(drop=True)
-    es = es.add_dataframe(dataframe_name=entity, dataframe=ww_safe(parent, [pk]), index=pk)
+    es = add(es, entity, ww_safe(parent, [pk]), pk)
     for n, fk, tc in kids:
         child = db.table_dict[n].df.dropna(subset=[fk, tc]).reset_index(drop=True)
         child = ww_safe(child, [fk, tc])
         child["_ft_index"] = np.arange(len(child))
-        es = es.add_dataframe(dataframe_name=n, dataframe=child, index="_ft_index",
-                              time_index=tc)
+        es = add(es, n, child, "_ft_index", tc)
         es = es.add_relationship(entity, pk, n, fk)
     print(f"entityset built: {entity} + {[k[0] for k in kids]}", flush=True)
 
     def dfs_features(frame):
         cutoff = pd.DataFrame({"instance_id": frame[key].to_numpy(),
                                "time": frame[tcol].to_numpy()})
+        # Tuned rather than minimal, so a DFS loss cannot be dismissed as an unfair
+        # baseline. Beyond the five statistics our own layer computes, DFS gets the
+        # primitives it is actually known for: num_unique and mode (categorical structure
+        # we only added late and off by default), trend and time_since_last (temporal shape
+        # our fixed windows cannot express), and skew. Windowed equivalents come free from
+        # its cutoff-time machinery.
         fm, _ = ft.dfs(entityset=es, target_dataframe_name=entity,
                        cutoff_time=cutoff, max_depth=args.max_depth,
-                       agg_primitives=["count", "sum", "mean", "std", "min", "max"],
-                       trans_primitives=[], verbose=False, n_jobs=1)
+                       agg_primitives=["count", "sum", "mean", "std", "min", "max",
+                                       "num_unique", "mode", "skew", "trend",
+                                       "time_since_last", "avg_time_between"],
+                       trans_primitives=["month", "year", "weekday"],
+                       verbose=False, n_jobs=1)
         fm = fm.reset_index(drop=True)
         return fm.select_dtypes(include=[np.number, "object", "category"])
 
