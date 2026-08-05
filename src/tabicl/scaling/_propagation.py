@@ -101,8 +101,14 @@ def key_target_history(
     -------
     pd.DataFrame
         One row per query, in input order: ``{prefix}n_prior``, ``{prefix}n_positive``,
-        ``{prefix}positive_rate``. The rate is NaN where no prior outcome is visible, never
-        0.0, so "no track record" is distinguishable from "a uniformly bad one".
+        ``{prefix}positive_rate``, ``{prefix}n_linked``. The rate is NaN where no prior
+        outcome is visible, never 0.0, so "no track record" is distinguishable from "a
+        uniformly bad one".
+
+        ``n_linked`` counts entities sharing a key **without consulting labels at all**.
+        Keep it separate in any comparison: on rel-event most of what looked like a
+        label-history gain turned out to be this, and a run that mixes the two cannot tell
+        the difference.
 
     Notes
     -----
@@ -126,10 +132,12 @@ def key_target_history(
                            "ready": ready.to_numpy(),
                            "y": np.asarray(label_values, dtype=np.float64)})
 
-    columns = [f"{prefix}n_prior", f"{prefix}n_positive", f"{prefix}positive_rate"]
+    columns = [f"{prefix}n_prior", f"{prefix}n_positive", f"{prefix}positive_rate",
+               f"{prefix}n_linked"]
     out = pd.DataFrame({columns[0]: np.zeros(len(query_entities), dtype=np.int64),
                         columns[1]: np.full(len(query_entities), np.nan),
-                        columns[2]: np.full(len(query_entities), np.nan)})
+                        columns[2]: np.full(len(query_entities), np.nan),
+                        columns[3]: np.zeros(len(query_entities), dtype=np.int64)})
 
     per_key = link.merge(events, on="entity", how="inner")
     if not len(per_key):
@@ -144,6 +152,16 @@ def key_target_history(
     expanded = queries.merge(link, on="entity", how="inner")
     if not len(expanded):
         return out
+
+    # Pure structural degree: how many other entities share a key, with labels playing no
+    # part whatsoever. This exists to be *compared against* ``n_prior``. If the two score
+    # alike, the count feature is carrying structure rather than label timing, and no
+    # leakage question arises for it -- a distinction that decided whether a rel-event
+    # result was reportable.
+    sizes = link.groupby("key")["entity"].size()
+    linked = (expanded.assign(n=expanded["key"].map(sizes).fillna(1) - 1)
+              .groupby("row")["n"].sum())
+    out.loc[linked.index.to_numpy(), columns[3]] = linked.to_numpy().astype(np.int64)
     matched = pd.merge_asof(
         expanded.sort_values("cutoff", kind="stable"),
         per_key[["key", "ready", "cum_y", "cum_n"]].sort_values("ready", kind="stable"),

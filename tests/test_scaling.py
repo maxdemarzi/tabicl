@@ -2137,6 +2137,30 @@ def test_key_history_respects_the_resolution_horizon():
     assert naive["hist__positive_rate"].iloc[0] == 1.0
 
 
+def test_key_history_structural_degree_ignores_labels_entirely():
+    """`n_linked` must be label-free, or it cannot serve as the leak-free comparison.
+
+    Two studies share a sponsor; only one has an outcome, and it is outside the window.
+    The label-derived counts are therefore 0 while the structural count is not.
+    """
+    from tabicl.scaling import key_target_history
+
+    base = pd.Timestamp("2020-01-01")
+    day = pd.Timedelta(days=1)
+    links = pd.DataFrame({"study": ["A", "B"], "sponsor": ["s", "s"]})
+    kw = dict(links=links, label_entities=np.array(["A"]),
+              label_times=np.array([base]), query_entities=np.array(["B"]),
+              query_times=np.array([base + 10 * day]), label_horizon=365 * day)
+
+    out = key_target_history(label_values=np.array([1.0]), **kw)
+    assert out["hist__n_prior"].iloc[0] == 0, "the only outcome is still unresolved"
+    assert out["hist__n_linked"].iloc[0] == 1, "but the sponsor link exists regardless"
+
+    # Flipping the label must not move the structural count by even one.
+    flipped = key_target_history(label_values=np.array([0.0]), **kw)
+    assert flipped["hist__n_linked"].iloc[0] == out["hist__n_linked"].iloc[0]
+
+
 def test_key_history_gives_nan_not_zero_for_no_track_record():
     from tabicl.scaling import key_target_history
 

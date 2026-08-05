@@ -198,6 +198,7 @@ def main() -> None:
     t_tr = track(train[key].to_numpy(), train[tcol].to_numpy(), y)
     t_te = track(test[key].to_numpy(), test[tcol].to_numpy(), y)
     count_cols = [c for c in t_tr.columns if c.endswith("n_prior")]
+    struct_cols = [c for c in t_tr.columns if c.endswith("n_linked")]
     print(f"track-record blocks: {list(t_tr.columns)}", flush=True)
 
     # --- controls, before any comparison -------------------------------------------------
@@ -230,7 +231,31 @@ def main() -> None:
                   "so a pass proves nothing", flush=True)
     temporal = temporal_control(lambda days: rate_only_score(y, shift=days), shifts=shifts)
     print(f"  {temporal!r}", flush=True)
-    if not (perm.passed and temporal.passed):
+
+    # The counts arm needs its own temporal control, and it is the one a permutation test
+    # cannot cover: counts do not depend on label *values*, so shuffling leaves them
+    # unchanged. Reporting a counts-only result on the strength of a rate-only control --
+    # which is what happened on rel-event first time round -- controls nothing.
+    def count_only_score(shift=None):
+        block = track(test[key].to_numpy(), test[tcol].to_numpy(), y, shift=shift)
+        counts = block[[c for c in block.columns if c.endswith("n_prior")]].sum(axis=1)
+        return roc_auc_score(y_te, counts.to_numpy())
+
+    print("control 3: temporal, on the COUNT columns", flush=True)
+    temporal_counts = temporal_control(lambda days: count_only_score(shift=days),
+                                       shifts=shifts)
+    print(f"  {temporal_counts!r}", flush=True)
+
+    # And the question that decides whether the counts are even a label feature: pure
+    # structural degree consults no labels at all, so if it scores alike there is no
+    # leakage question to answer.
+    struct = t_te[struct_cols].sum(axis=1).to_numpy()
+    prior = t_te[count_cols].sum(axis=1).to_numpy()
+    print(f"  structural degree alone (no labels): "
+          f"{roc_auc_score(y_te, struct) * 100:.2f}", flush=True)
+    print(f"  resolved-label counts alone:         "
+          f"{roc_auc_score(y_te, prior) * 100:.2f}", flush=True)
+    if not (perm.passed and temporal.passed and temporal_counts.passed):
         print("\nCONTROLS FAILED -- not measuring a lift on features that leak", flush=True)
         return
     print("controls passed\n", flush=True)
@@ -243,6 +268,7 @@ def main() -> None:
 
     arms = {
         "base": (_numeric(b_tr), _numeric(b_te)),
+        "+struct": (stack(b_tr, t_tr, struct_cols), stack(b_te, t_te, struct_cols)),
         "+counts": (stack(b_tr, t_tr, count_cols), stack(b_te, t_te, count_cols)),
         "+history": (stack(b_tr, t_tr), stack(b_te, t_te)),
     }
@@ -262,6 +288,7 @@ def main() -> None:
         t_va = track(val[key].to_numpy(), val[tcol].to_numpy(), y)
         val_arms = {
             "base": _numeric(b_va),
+            "+struct": stack(b_va, t_va, struct_cols),
             "+counts": stack(b_va, t_va, count_cols),
             "+history": stack(b_va, t_va),
         }
@@ -302,8 +329,8 @@ def main() -> None:
         print(f"reference: {REFERENCE.get(args.dataset, 'see PERFORMANCE.md')}", flush=True)
         return
 
-    print(f"\n{'seed':>5} {'base':>9} {'+counts':>9} {'+history':>9} "
-          f"{'hist-base':>10} {'hist-cnt':>9}", flush=True)
+    print(f"\n{'seed':>5} {'base':>9} {'+struct':>9} {'+counts':>9} {'+history':>9} "
+          f"{'hist-base':>10} {'hist-cnt':>9} {'cnt-str':>8}", flush=True)
     results = {k: [] for k in arms}
     for seed in range(args.seeds):
         rng = np.random.default_rng(seed)
@@ -312,13 +339,16 @@ def main() -> None:
         t0 = time.perf_counter()
         for name, (X, Xe) in arms.items():
             results[name].append(score(X, Xe, rows, seed))
-        a, c, h = (results[k][-1] for k in ("base", "+counts", "+history"))
-        print(f"{seed:>5} {a:>9.2f} {c:>9.2f} {h:>9.2f} {h - a:>+10.2f} {h - c:>+9.2f}   "
-              f"({time.perf_counter() - t0:.0f}s)", flush=True)
+        a, s, c, h = (results[k][-1] for k in ("base", "+struct", "+counts", "+history"))
+        print(f"{seed:>5} {a:>9.2f} {s:>9.2f} {c:>9.2f} {h:>9.2f} {h - a:>+10.2f} "
+              f"{h - c:>+9.2f} {c - s:>+8.2f}   ({time.perf_counter() - t0:.0f}s)", flush=True)
 
     over_base = np.array(results["+history"]) - np.array(results["base"])
     over_counts = np.array(results["+history"]) - np.array(results["+counts"])
-    for label, g in (("history over base", over_base), ("history over counts", over_counts)):
+    counts_over_struct = np.array(results["+counts"]) - np.array(results["+struct"])
+    for label, g in (("history over base", over_base),
+                     ("history over counts", over_counts),
+                     ("counts over pure structure", counts_over_struct)):
         print(f"{label}: mean {g.mean():+.2f} sd "
               f"{g.std(ddof=1) if len(g) > 1 else 0:.2f} over {len(g)} seeds, "
               f"{(g > 0).sum()}/{len(g)} positive", flush=True)
