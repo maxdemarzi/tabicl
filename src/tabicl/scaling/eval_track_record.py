@@ -260,7 +260,8 @@ def main() -> None:
     # would let test vocabulary and IDF weights inform the representation -- a leak that
     # produces a large confident number rather than an error, which is this family's
     # signature failure.
-    text_cols, text_models = [], {}
+    text_cols, text_models, child_text = [], {}, []
+    child_series = None
     if args.text:
         from sklearn.feature_extraction.text import TfidfVectorizer
         from sklearn.decomposition import TruncatedSVD
@@ -268,13 +269,56 @@ def main() -> None:
 
         ent_text = db.table_dict[entity].df
         merged_tr = train.merge(ent_text, left_on=key, right_on=pk, how="left")
-        for col in ent_text.columns:
-            if col in (pk, target) or not pd.api.types.is_object_dtype(ent_text[col]):
+
+        # Child-table text, aggregated AS OF each row's cutoff. The gate found
+        # `eligibilities.criteria` at 63.95 with full coverage -- as strong as the best
+        # entity column and not otherwise used. It concatenated without regard to time,
+        # so its number was an upper bound; here only rows dated at or before the cutoff
+        # contribute. Ignoring that is what inflated rel-event's structural result by 8.
+        child_text = []
+        for cname, ctbl in db.table_dict.items():
+            cfk = next((fk for fk, pt in (ctbl.fkey_col_to_pkey_table or {}).items()
+                        if pt == entity), None)
+            if cfk is None or not ctbl.time_col:
                 continue
-            series = ent_text[col].dropna().astype(str)
-            if len(series) < 20 or series.str.len().mean() < 15:
-                continue
+            for col in ctbl.df.columns:
+                if col in (cfk, ctbl.time_col):
+                    continue
+                s = ctbl.df[col]
+                if not pd.api.types.is_object_dtype(s):
+                    continue
+                nn = s.dropna().astype(str)
+                if len(nn) < 20 or nn.str.len().mean() < 15:
+                    continue
+                child_text.append((f"{cname}.{col}", cname, cfk, col, ctbl.time_col))
+        if child_text:
+            print(f"child text columns: {[c[0] for c in child_text]}", flush=True)
+
+        def child_series(frame, spec):
+            _, cname, cfk, col, ctc = spec
+            src = db.table_dict[cname].df[[cfk, ctc, col]].dropna(subset=[cfk, col])
+            q = pd.DataFrame({"_row": np.arange(len(frame)),
+                              cfk: frame[key].to_numpy(),
+                              "_cut": frame[tcol].to_numpy()})
+            j = q.merge(src, on=cfk, how="left")
+            j = j[j[ctc].isna() | (j[ctc] <= j["_cut"])]
+            agg = (j.dropna(subset=[col]).astype({col: str})
+                   .groupby("_row")[col].apply(lambda v: " ".join(v.head(20))))
+            out = pd.Series("", index=range(len(frame)), dtype=object)
+            out.loc[agg.index] = agg.to_numpy()
+            return out
+
+        for spec in child_text:
+            merged_tr[spec[0]] = child_series(train, spec).to_numpy()
+        entity_texty = [c for c in ent_text.columns
+                        if c not in (pk, target)
+                        and pd.api.types.is_object_dtype(ent_text[c])
+                        and len(ent_text[c].dropna()) >= 20
+                        and ent_text[c].dropna().astype(str).str.len().mean() >= 15]
+        for col in entity_texty + [c[0] for c in child_text]:
             texts = merged_tr[col].fillna("").astype(str)
+            if texts.str.len().sum() == 0:
+                continue
             # Components must fit the column's own vocabulary; a fixed 64 killed
             # biospec_retention outright at 11 features.
             try:
@@ -298,6 +342,9 @@ def main() -> None:
         if not text_cols:
             return pd.DataFrame(index=range(len(frame)))
         merged = frame.merge(db.table_dict[entity].df, left_on=key, right_on=pk, how="left")
+        for spec in child_text:
+            if spec[0] in text_cols:
+                merged[spec[0]] = child_series(frame, spec).to_numpy()
         blocks = []
         for col in text_cols:
             emb = text_models[col].transform(merged[col].fillna("").astype(str))
