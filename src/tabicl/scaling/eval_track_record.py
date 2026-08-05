@@ -67,11 +67,36 @@ REFERENCE = {
 }
 
 
-def _numeric(df: pd.DataFrame) -> np.ndarray:
+_CATEGORY_MAPS: dict = {}
+
+
+def _numeric(df: pd.DataFrame, fit: bool = False, tag: str = "") -> np.ndarray:
+    """Encode a feature frame, with categorical codes CONSISTENT ACROSS SPLITS.
+
+    The previous version called ``pd.factorize`` on each frame independently. Factorize
+    assigns codes by order of first appearance, so the same category received *different
+    integers in train and in test* -- a value coded 3 for fitting could be 7 at prediction
+    time. Every categorical column was therefore not merely arbitrarily ordered but
+    inconsistently ordered, which is worse: the model learns a mapping that does not hold
+    where it is applied.
+
+    Categories are now learned on the fitting frame and reused. Unseen values encode to -1,
+    which is a distinguishable "not in training" rather than a collision with a real code.
+    """
     out = df.copy()
+    # Key by the frame's own column set, so two arms with different columns cannot share a
+    # map and no caller has to remember to pass a distinct tag.
+    tag = tag or str(hash(tuple(df.columns)))
     for col in out.columns:
-        if not pd.api.types.is_numeric_dtype(out[col]):
-            out[col] = pd.factorize(out[col])[0]
+        if pd.api.types.is_numeric_dtype(out[col]):
+            continue
+        keyed = f"{tag}:{col}"
+        if fit or keyed not in _CATEGORY_MAPS:
+            codes, uniques = pd.factorize(out[col])
+            _CATEGORY_MAPS[keyed] = {v: i for i, v in enumerate(uniques)}
+            out[col] = codes
+        else:
+            out[col] = out[col].map(_CATEGORY_MAPS[keyed]).fillna(-1)
     return np.nan_to_num(out.to_numpy(dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
 
 
@@ -471,10 +496,11 @@ def main() -> None:
             print(f"  {name} is EXCLUDED from selection: its own controls failed", flush=True)
 
     # --- three arms ----------------------------------------------------------------------
-    def stack(base, block, cols=None):
+    def stack(base, block, cols=None, fit=False, tag=""):
         chosen = block if cols is None else block[cols]
         return _numeric(pd.concat([base.reset_index(drop=True),
-                                   chosen.reset_index(drop=True)], axis=1))
+                                   chosen.reset_index(drop=True)], axis=1),
+                        fit=fit, tag=tag or "stack")
 
     # `+rate` is the label-history block *without* the structural column: n_prior,
     # n_positive, positive_rate. It is the composition that produced rel-trial's 69.36,
@@ -482,9 +508,12 @@ def main() -> None:
     # `+history` meant a control failing on the structural column excluded an arm that
     # never contained it, which is a two-variable comparison wearing a verdict's clothing.
     rate_cols = [c for c in t_tr.columns if not c.endswith("n_linked")]
+    # Each arm fits its category map on TRAIN and reuses it for val/test, keyed by arm so
+    # two arms with different column sets cannot share a stale map.
     arms = {
-        "base": (_numeric(b_tr), _numeric(b_te)),
-        "+struct": (stack(b_tr, t_tr, struct_cols), stack(b_te, t_te, struct_cols)),
+        "base": (_numeric(b_tr, fit=True, tag="base"), _numeric(b_te, tag="base")),
+        "+struct": (stack(b_tr, t_tr, struct_cols, fit=True, tag="struct"),
+                    stack(b_te, t_te, struct_cols, tag="struct")),
         **({"+text": (stack(b_tr, x_tr), stack(b_te, x_te)),
             "+text+rate": (stack(pd.concat([b_tr.reset_index(drop=True),
                                             x_tr.reset_index(drop=True)], axis=1),
