@@ -20,12 +20,19 @@ RelBench, official protocol. Test ROC-AUC x100. Comparison columns are the publi
 figures from the TabPFN-3 technical report's Table 14 (arXiv 2605.13986); RelGNN is the
 paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model result.
 
-| task | ours | TabPFN-REL | RelGNN | RDBLearn+v3 | vs TabPFN-REL | vs best |
-|---|---:|---:|---:|---:|---:|---:|
-| rel-f1 / driver-top3 | 81.98 | 79.98 | **85.69** | 82.72 | +2.00 | −3.71 |
-| rel-event / user-ignore | 80.98 | 85.38 | **86.18** | 73.70 | −4.40 | −5.20 |
-| rel-avito / user-visits | 65.54 | 66.68 | 66.18 | **66.76** | −1.14 | −1.22 |
-| rel-trial / study-outcome | 72.26 | **76.43** | 71.24 | 72.89 | −4.17 | −4.17 |
+| task | ours | DFS † | TabPFN-REL | RelGNN | RDBLearn+v3 | vs TabPFN-REL | vs best |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| rel-f1 / driver-top3 | 81.98 | *pending* | 79.98 | **85.69** | 82.72 | +2.00 | −3.71 |
+| rel-event / user-ignore | 80.98 | *pending* | 85.38 | **86.18** | 73.70 | −4.40 | −5.20 |
+| rel-avito / user-visits | 65.54 | *pending* | 66.68 | 66.18 | **66.76** | −1.14 | −1.22 |
+| rel-trial / study-outcome | 72.26 | *pending* | **76.43** | 71.24 | 72.89 | −4.17 | −4.17 |
+
+† **DFS is measured here, not published.** Deep Feature Synthesis (Featuretools) run over the
+same tables with per-row cutoff times and scored by **the same TabICL, same context, same
+seeds** — only the feature builder differs. Every other column is a published figure from
+another system with its own model, so DFS is the one entry that isolates *our aggregation*
+from *our model*. It is the baseline the phrase "a generic flattening pipeline" has been
+implicitly claiming parity with since this file began; `RESEARCH.md` 6e.
 
 Bold marks the best result per task. **None of them are ours** — we lead TabPFN-REL on
 rel-f1 but trail RelGNN there by 5, and trail everywhere else. Ours gets bolded when it
