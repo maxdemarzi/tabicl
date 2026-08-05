@@ -62,6 +62,7 @@ def key_target_history(
     query_entities: np.ndarray,
     query_times: np.ndarray,
     label_horizon: Optional[pd.Timedelta] = None,
+    link_times: Optional[np.ndarray] = None,
     prefix: str = "hist__",
 ) -> pd.DataFrame:
     """Track record among earlier rows sharing a key: "how did this sponsor's trials go?"
@@ -122,8 +123,16 @@ def key_target_history(
     there -- which is exactly why it must not be left to that coincidence.
     """
     entity_col, key_col = links.columns[:2]
-    link = links[[entity_col, key_col]].dropna().drop_duplicates()
+    link = links[[entity_col, key_col]].copy()
     link.columns = ["entity", "key"]
+    if link_times is not None:
+        link["link_time"] = np.asarray(link_times)
+        link = link.dropna(subset=["entity", "key"])
+        # Earliest formation wins: a membership exists from the first time it is recorded.
+        link = link.sort_values("link_time", kind="stable").drop_duplicates(
+            subset=["entity", "key"], keep="first")
+    else:
+        link = link.dropna().drop_duplicates()
 
     ready = pd.Series(np.asarray(label_times))
     if label_horizon is not None:
@@ -142,6 +151,12 @@ def key_target_history(
     per_key = link.merge(events, on="entity", how="inner")
     if not len(per_key):
         return out
+    if link_times is not None:
+        # A neighbour's outcome is usable only once *both* facts are true: the outcome has
+        # resolved, and the membership that connects it to this query already existed.
+        # Taking the later of the two makes one as-of scan enforce both.
+        per_key["ready"] = np.maximum(per_key["ready"].to_numpy(),
+                                      per_key["link_time"].to_numpy())
     per_key = per_key.sort_values("ready", kind="stable")
     per_key["cum_y"] = per_key.groupby("key")["y"].cumsum()
     per_key["cum_n"] = per_key.groupby("key").cumcount() + 1
@@ -166,9 +181,27 @@ def key_target_history(
     # cutoffs, and this quantity does not consult labels. On a task whose links are
     # timestamped, filter them before calling; on one whose links are not, any lift from
     # this column is an upper bound. rel-event is the latter.
-    sizes = link.groupby("key")["entity"].size()
-    linked = (expanded.assign(n=expanded["key"].map(sizes).fillna(1) - 1)
-              .groupby("row")["n"].sum())
+    if link_times is None:
+        sizes = link.groupby("key")["entity"].size()
+        linked = (expanded.assign(n=expanded["key"].map(sizes).fillna(1) - 1)
+                  .groupby("row")["n"].sum())
+    else:
+        # As-of degree: how many memberships of this key had formed by the cutoff. Without
+        # this the column counts memberships created *after* the prediction time, which on
+        # rel-event is worth several points of entirely spurious lift.
+        ordered = link.sort_values("link_time", kind="stable")
+        ordered["cum"] = ordered.groupby("key").cumcount() + 1
+        asof = pd.merge_asof(
+            expanded.sort_values("cutoff", kind="stable"),
+            ordered[["key", "link_time", "cum"]].sort_values("link_time", kind="stable"),
+            left_on="cutoff", right_on="link_time", by="key",
+            direction="backward", allow_exact_matches=True,
+        )
+        # The query's own membership is inside that count whenever it had formed, and a
+        # row must not count itself as one of its own neighbours.
+        own = asof["link_time_x"].notna() & (asof["link_time_x"] <= asof["cutoff"])
+        asof["n"] = (asof["cum"].fillna(0) - own.astype(float)).clip(lower=0)
+        linked = asof.groupby("row")["n"].sum()
     out.loc[linked.index.to_numpy(), columns[3]] = linked.to_numpy().astype(np.int64)
     matched = pd.merge_asof(
         expanded.sort_values("cutoff", kind="stable"),

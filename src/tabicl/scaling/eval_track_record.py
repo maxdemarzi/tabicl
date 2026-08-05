@@ -92,6 +92,10 @@ def main() -> None:
     ap.add_argument("--no-horizon", action="store_true",
                     help="ignore the 365-day resolution window. Wrong, and kept only to "
                          "measure what it is worth.")
+    ap.add_argument("--static-links", action="store_true",
+                    help="ignore link-table timestamps, counting memberships that formed "
+                         "after the cutoff. Wrong; kept to measure what the causal "
+                         "filtering is worth, which on rel-event is the whole result.")
     ap.add_argument("--calibrated", action="store_true",
                     help="choose the arm and the context size on validation, then score "
                          "test once. A paired A/B is not eligible for the headline table; "
@@ -142,8 +146,17 @@ def main() -> None:
                     # (rel-event has `event` twice, rel-f1 `raceId` three times) and an
                     # unqualified prefix silently collides the blocks on concat.
                     short = f"{name}_{other}".replace("_id", "").replace("_ID", "")
-                    link_specs.append((short, tbl.df[[fk, other]], fk, other))
+                    tc = tbl.time_col if not args.static_links else None
+                    cols = [fk, other] + ([tc] if tc else [])
+                    link_specs.append((short, tbl.df[cols], fk, other, tc))
+    timed = [s[0] for s in link_specs if s[4]]
+    untimed = [s[0] for s in link_specs if not s[4]]
     print(f"candidate keys: {[s[0] for s in link_specs] or 'NONE'}", flush=True)
+    print(f"  link tables WITH timestamps (causal): {timed or 'none'}", flush=True)
+    if untimed:
+        print(f"  link tables WITHOUT timestamps: {untimed} -- memberships formed after a "
+              f"cutoff are visible to it, so any lift from those keys is an UPPER BOUND",
+              flush=True)
     if not link_specs:
         print("no table links two entities of this type -- this feature cannot be built "
               "on this task", flush=True)
@@ -156,7 +169,7 @@ def main() -> None:
         # 83, did not).
         val = task.get_table("val", mask_input_cols=False).df
         print(f"\n{'key':<20} {'coverage':>9} {'val AUC':>9} {'test AUC':>9}", flush=True)
-        for short, frame, fk, other in link_specs:
+        for short, frame, fk, other, ltc in link_specs:
             row = []
             for split in (val, test):
                 block = key_target_history(
@@ -164,6 +177,7 @@ def main() -> None:
                     label_values=y, label_times=train[tcol].to_numpy(),
                     query_entities=split[key].to_numpy(),
                     query_times=split[tcol].to_numpy(), label_horizon=horizon,
+                    link_times=frame[ltc].to_numpy() if ltc else None,
                 )
                 rate = block["hist__positive_rate"].to_numpy()
                 truth = split[target].to_numpy()
@@ -186,12 +200,13 @@ def main() -> None:
         if shift:
             stamps = stamps - pd.Timedelta(days=shift)
         blocks = []
-        for short, frame, fk, other in link_specs:
+        for short, frame, fk, other, ltc in link_specs:
             blocks.append(key_target_history(
                 frame[[fk, other]], label_entities=train[key].to_numpy(),
                 label_values=labels, label_times=train[tcol].to_numpy(),
                 query_entities=entities, query_times=stamps,
                 label_horizon=horizon, prefix=f"{short}__",
+                link_times=frame[ltc].to_numpy() if ltc else None,
             ))
         return pd.concat(blocks, axis=1) if blocks else pd.DataFrame(index=range(len(entities)))
 
