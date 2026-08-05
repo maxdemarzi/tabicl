@@ -25,7 +25,7 @@ paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model resu
 | rel-f1 / driver-top3 | 82.48 | 79.98 | **85.69** | 82.72 | +2.50 | −3.21 |
 | rel-event / user-ignore | 81.76 | 85.38 | **86.18** | 73.70 | −3.62 | −4.42 |
 | rel-avito / user-visits | 65.61 | 66.68 | 66.18 | **66.76** | −1.07 | −1.15 |
-| rel-trial / study-outcome | 69.36 | **76.43** | 71.24 | 72.89 | −7.07 | −7.07 |
+| rel-trial / study-outcome | 70.36 | **76.43** | 71.24 | 72.89 | −6.07 | −6.07 |
 
 Bold marks the best result per task. **None of them are ours** — we lead TabPFN-REL on
 rel-f1 but trail RelGNN there by 5, and trail everywhere else. Ours gets bolded when it
@@ -65,6 +65,42 @@ five points. Pair everything.
 ---
 
 ## Run log
+
+### 2026-08-05 — text pays off on rel-trial: 69.36 → 70.36, and it is complementary
+TF-IDF + SVD over the entity table's free-text columns, vectoriser fitted on **train only**,
+as its own arm. rel-trial, 5 seeds, base features identical across arms.
+
+| arm | A/B mean |
+|---|---:|
+| base | 63.82 |
+| `+counts` | 64.68 |
+| `+text` | 68.25 |
+| `+rate` (outcome history) | 69.27 |
+| **`+text+rate`** | **71.70** |
+
+**Text and outcome history are complementary, not redundant** — the question the four-arm
+design existed to answer. Text alone is worth **+4.43** over base, and still **+2.43** on
+top of the outcome history. Two different kinds of signal, and the pipeline had neither
+until today.
+
+**Calibrated: 70.36 ± 1.74**, validation choosing `+text+rate` 3/5 and `+rate` 2/5 — a
+**+1.00** gain over 69.36, above the ±0.6 floor. rel-trial is now 0.88 from RelGNN's 71.24.
+
+### 2026-08-05 — rel-event: the gate said no, running it anyway made things worse
+rel-event's single text column scored **67.74 standalone against an 81.76 pipeline** — a
+14-point deficit, where rel-trial's best column was 5.3 below its pipeline. The gate rule
+is "near or above"; this was neither, and it was run regardless.
+
+**Offering the text arm on rel-event produced a calibrated 79.56 ± 1.04 against 81.76
+without it, with validation choosing `+text` 5/5** on a validation score of 88.39 against a
+test of 79.56. Adding an arm to the config space made the protocol *worse*, because
+validation on 2,013 rows preferred it and test did not.
+
+**rel-event keeps 81.76 and text is not offered there.** That decision rests on the gate,
+which rejected the column before any of this ran — not on having seen the test number,
+which would be exactly the test-selection this file keeps catching. The useful lesson is
+that the gate is not merely a time-saver: **an arm that fails it can actively cost you**, by
+being available for validation to pick.
 
 ### 2026-08-05 — text gate: rel-trial is worth building, and my rel-f1 claim was wrong
 TF-IDF + SVD + logistic per text column, standalone, no GPU.
