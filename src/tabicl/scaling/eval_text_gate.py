@@ -102,8 +102,24 @@ def main() -> None:
             agg = (tbl.df[[fk, col]].dropna().astype({col: str})
                    .groupby(fk)[col].apply(lambda s: " ".join(s.head(20))))
             label = f"{name}.{col}"
+            coverage = {}
             for split_name, frame in merged.items():
-                frame[label] = frame[key].map(agg)
+                # Align dtypes before mapping. A silent dtype mismatch between the task
+                # table's key and the child table's foreign key maps every row to NaN,
+                # which produces empty text, constant predictions, and a test AUC of
+                # *exactly* 50.00 -- which is what the first version of this gate reported
+                # for all 18 rel-trial child columns while validation appeared to vary.
+                keys = frame[key]
+                mapped = keys.map(agg)
+                if mapped.notna().mean() == 0 and len(agg):
+                    mapped = keys.astype(agg.index.dtype, errors="ignore").map(agg)
+                frame[label] = mapped
+                coverage[split_name] = float(mapped.notna().mean())
+            if min(coverage.values()) == 0.0:
+                print(f"  skipping {label}: coverage {coverage} -- a split with no rows "
+                      f"cannot be scored, and scoring it anyway returns exactly 50.00",
+                      flush=True)
+                continue
             candidates.append(label)
     print(f"{args.dataset}/{args.task}: entity table {entity}, "
           f"{len(ent_df.columns)} columns, {len(candidates)} look like free text", flush=True)
@@ -135,8 +151,10 @@ def main() -> None:
         except Exception as exc:              # noqa: BLE001 - report, do not abort the sweep
             print(f"{col:<32} failed: {str(exc)[:50]}", flush=True)
             continue
+        flag = "  <-- SUSPECT: exactly chance means constant predictions, not weak signal" \
+            if abs(aucs[1] - 50.0) < 1e-9 else ""
         print(f"{col:<32} {coverage:>9.3f} "
-              f"{merged['train'][col].nunique():>8} {aucs[0]:>9.2f} {aucs[1]:>9.2f}",
+              f"{merged['train'][col].nunique():>8} {aucs[0]:>9.2f} {aucs[1]:>9.2f}{flag}",
               flush=True)
 
     print(f"\nOur calibrated number on this task: "
