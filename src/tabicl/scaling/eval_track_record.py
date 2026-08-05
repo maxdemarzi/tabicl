@@ -129,6 +129,10 @@ def main() -> None:
                          "text content, and on rel-trial four columns score 60.2-64.1 "
                          "standalone against a 69.36 pipeline.")
     ap.add_argument("--text-components", type=int, default=32)
+    ap.add_argument("--text-rows", type=int, default=20,
+                    help="child rows per entity contributing text, most recent first. Was a "
+                         "hardcoded head(20) in dataframe order, so the feature depended on "
+                         "storage order rather than on time.")
     ap.add_argument("--top-keys", type=int, default=0,
                     help="keep only the N keys with the highest standalone validation AUC, "
                          "ranked by the same gate used before building. 0 keeps all. Every "
@@ -336,8 +340,13 @@ def main() -> None:
                               "_cut": frame[tcol].to_numpy()})
             j = q.merge(src, on=cfk, how="left")
             j = j[j[ctc].isna() | (j[ctc] <= j["_cut"])]
+            # Most RECENT rows, not the first twenty in dataframe order. The cap is a cost
+            # control, but taking "whichever pandas happened to store first" made the
+            # feature depend on storage order -- and where an entity has more rows than the
+            # cap, recency is the only defensible tie-break for an as-of feature.
+            j = j.sort_values(ctc, kind="stable", na_position="first")
             agg = (j.dropna(subset=[col]).astype({col: str})
-                   .groupby("_row")[col].apply(lambda v: " ".join(v.head(20))))
+                   .groupby("_row")[col].apply(lambda v: " ".join(v.tail(args.text_rows))))
             out = pd.Series("", index=range(len(frame)), dtype=object)
             out.loc[agg.index] = agg.to_numpy()
             return out
