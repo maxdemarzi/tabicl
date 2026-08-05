@@ -23,9 +23,9 @@ paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model resu
 | task | ours | TabPFN-REL | RelGNN | RDBLearn+v3 | vs TabPFN-REL | vs best |
 |---|---:|---:|---:|---:|---:|---:|
 | rel-f1 / driver-top3 | 81.98 | 79.98 | **85.69** | 82.72 | +2.00 | −3.71 |
-| rel-event / user-ignore | 80.16 | 85.38 | **86.18** | 73.70 | −5.22 | −6.02 |
+| rel-event / user-ignore | 80.98 | 85.38 | **86.18** | 73.70 | −4.40 | −5.20 |
 | rel-avito / user-visits | 65.54 | 66.68 | 66.18 | **66.76** | −1.14 | −1.22 |
-| rel-trial / study-outcome | 72.32 | **76.43** | 71.24 | 72.89 | −4.11 | −4.11 |
+| rel-trial / study-outcome | 72.26 | **76.43** | 71.24 | 72.89 | −4.17 | −4.17 |
 
 Bold marks the best result per task. **None of them are ours** — we lead TabPFN-REL on
 rel-f1 but trail RelGNN there by 5, and trail everywhere else. Ours gets bolded when it
@@ -65,6 +65,30 @@ five points. Pair everything.
 ---
 
 ## Run log
+
+### 2026-08-05 — settled at 12 replicates: rel-event's drop was noise, rel-trial's gain is real
+Both post-fix numbers were 5-replicate figures compared against 12-replicate predecessors,
+which is a two-variable comparison — a replicate count is a variable.
+
+| task | pre-fix | post-fix, 5 reps | post-fix, **12 reps** | verdict |
+|---|---:|---:|---:|---|
+| rel-event | 81.76 (12) | 80.16 ± 1.98 | **80.98 ± 2.07** | −0.78 at ~1.3 SE — **not significant** |
+| rel-trial | 71.50 (8) | 72.32 ± 0.94 | **72.26 ± 0.64** | +0.76 at ~4 SE — **real** |
+
+**rel-event's −1.60 was noise**, and would have gone into the log as a regression caused by
+the encoder fix. Its replicates span 76.67–85.46 — nearly nine points — so five of them
+cannot resolve a 1.6 difference, and the honest conclusion is that fixing the categorical
+codes left rel-event unchanged.
+
+**rel-trial's gain holds** and the spread tightens to 0.64. At 72.26 it is **0.63 from
+RDBLearn (72.89)** and clear of RelGNN.
+
+*On text, a softer correction than the last entry.* Across 12 replicates rel-trial's
+validation chose `+rate` 9 times, `+text+rate` 2 and `+text` once. So text is not worthless
+post-fix — it is selected occasionally — but it is no longer the default choice, and the
+previous entry's "not selected at all" was itself a 5-replicate over-reading. The measured
+position: **text is a marginal, sometimes-selected feature on rel-trial, not the +2.14
+headline it appeared to be.**
 
 ### 2026-08-05 — categorical codes were inconsistent across splits; all four re-measured
 `_numeric` called `pd.factorize` on each frame independently, and factorize codes by order
