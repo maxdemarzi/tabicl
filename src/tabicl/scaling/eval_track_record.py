@@ -117,6 +117,13 @@ def main() -> None:
     ap.add_argument("--no-horizon", action="store_true",
                     help="ignore the 365-day resolution window. Wrong, and kept only to "
                          "measure what it is worth.")
+    ap.add_argument("--cv-folds", type=int, default=0,
+                    help="select on k-fold CV over train instead of the single validation "
+                         "split. 0 keeps the current behaviour. The val splits here are "
+                         "588-2013 rows and have twice blocked a real gain: child count was "
+                         "undecidable (0.61 spread across every setting) and per-key "
+                         "selection ranked options opposite to test. Selection noise, not "
+                         "feature quality, is the binding constraint.")
     ap.add_argument("--resample", type=int, default=1,
                     help="average predictions over N independent context draws. 1 is the "
                          "existing behaviour exactly. Attacks the variance that dominates "
@@ -601,10 +608,38 @@ def main() -> None:
             "+rate": stack(b_va, t_va, rate_cols),
             "+history": stack(b_va, t_va),
         }.items() if k in arms}
+        def cv_score(name, size, seed):
+            """Selection criterion from k-fold CV over train, instead of one small split.
+
+            Each fold fits on a subsample of the other folds and scores the held-out one, so
+            every training row contributes to the criterion. A 960-row validation split
+            cannot resolve a 0.6-point difference; k folds over 12,000 rows can. Test is
+            still touched exactly once, after selection -- this changes only *what the
+            selection listens to*, not how many times the answer is consulted.
+            """
+            X, _ = arms[name]
+            n = len(X)
+            rng = np.random.default_rng(seed)
+            order = rng.permutation(n)
+            folds = np.array_split(order, args.cv_folds)
+            scores = []
+            for f in folds:
+                rest = np.setdiff1d(order, f, assume_unique=False)
+                take = rng.choice(rest, size=min(size, len(rest)), replace=False)
+                clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
+                                       random_state=seed,
+                                       inference_config=NOAMP).fit(X[take], y[take])
+                if len(np.unique(y[f])) < 2:
+                    continue
+                scores.append(roc_auc_score(y[f], clf.predict_proba(X[f])[:, 1]) * 100)
+            return float(np.mean(scores)) if scores else 0.0
+
         results = []
         for seed in range(args.seeds):
             best = None
-            print(f"\n-- seed {seed}: selection (validation only) --", flush=True)
+            criterion = f"{args.cv_folds}-fold CV over train" if args.cv_folds \
+                else "validation only"
+            print(f"\n-- seed {seed}: selection ({criterion}) --", flush=True)
             # Capped at --context, not at the training-set size: rel-avito has 86,619 rows
             # and a grid scaled to that asks for contexts an L40S will not fit, so the run
             # dies rather than reporting a smaller honest number.
@@ -615,8 +650,10 @@ def main() -> None:
                     n = len(arms[name][0])
                     rows = np.random.default_rng(seed).choice(n, size=min(size, n),
                                                               replace=False)
-                    v = score(arms[name][0], val_arms[name], rows, seed, truth=y_va)
-                    print(f"  {name:<9} context={size:<6} val={v:.2f}", flush=True)
+                    v = (cv_score(name, size, seed) if args.cv_folds
+                         else score(arms[name][0], val_arms[name], rows, seed, truth=y_va))
+                    print(f"  {name:<9} context={size:<6} "
+                          f"{'cv' if args.cv_folds else 'val'}={v:.2f}", flush=True)
                     if best is None or v > best[0]:
                         best = (v, name, size)
             val_auc, name, size = best
