@@ -58,6 +58,14 @@ DEFAULT_WINDOWS = {
     "rel-f1": "365,1095",
 }
 
+# Printed beside a result so it is never read against the wrong task's numbers.
+REFERENCE = {
+    "rel-trial": "ours 69.36, TabPFN-REL 76.43, RelGNN 71.24, RDBLearn 72.89",
+    "rel-event": "ours 78.11, TabPFN-REL 85.38, RelGNN 86.18, RDBLearn 73.70",
+    "rel-avito": "ours 64.85, TabPFN-REL 66.68, RelGNN 66.18, RDBLearn 66.76",
+    "rel-f1": "ours 80.70, TabPFN-REL 79.98, RelGNN 85.69, RDBLearn 82.72",
+}
+
 
 def _numeric(df: pd.DataFrame) -> np.ndarray:
     out = df.copy()
@@ -193,17 +201,34 @@ def main() -> None:
     print(f"track-record blocks: {list(t_tr.columns)}", flush=True)
 
     # --- controls, before any comparison -------------------------------------------------
-    def rate_only_score(labels, shift=None):
+    def rate_block(labels, shift=None):
         block = track(test[key].to_numpy(), test[tcol].to_numpy(), labels, shift=shift)
-        rate = block[[c for c in block.columns if c.endswith("positive_rate")]].mean(axis=1)
+        return block[[c for c in block.columns if c.endswith("positive_rate")]].mean(axis=1)
+
+    def rate_only_score(labels, shift=None):
+        rate = rate_block(labels, shift=shift)
         return roc_auc_score(y_te, rate.fillna(np.nanmean(labels)).to_numpy())
 
     print("\ncontrol 1: permutation (null = permuted distribution)", flush=True)
     perm = permutation_test(rate_only_score, y, n_permutations=5, n_sigma=3.0)
     print(f"  {perm!r}", flush=True)
-    print("control 2: temporal", flush=True)
-    temporal = temporal_control(lambda days: rate_only_score(y, shift=days),
-                                shifts=(0.0, 180.0, 365.0))
+
+    # Shifts must be scaled to the task, not fixed in days. A shift far larger than the
+    # task's own time span removes *every* usable label, the feature goes constant, and
+    # the control passes at exactly 0.5 having tested nothing -- which is what a hardcoded
+    # 180/365 days did on rel-event, whose horizon is 7 days. Coverage is printed so a
+    # vacuous pass is visible rather than reassuring.
+    span_days = float((train[tcol].max() - train[tcol].min()) / pd.Timedelta(days=1))
+    shifts = (0.0, round(0.05 * span_days), round(0.15 * span_days))
+    print(f"control 2: temporal (span {span_days:.0f}d, shifts {shifts[1:]}d)", flush=True)
+    base_cov = float(rate_block(y).notna().mean())
+    for s in shifts[1:]:
+        cov = float(rate_block(y, shift=s).notna().mean())
+        print(f"  coverage at -{s:.0f}d: {cov:.3f} (unshifted {base_cov:.3f})", flush=True)
+        if base_cov > 0 and cov < 0.1 * base_cov:
+            print("  *** control is VACUOUS at this shift -- nearly all labels removed, "
+                  "so a pass proves nothing", flush=True)
+    temporal = temporal_control(lambda days: rate_only_score(y, shift=days), shifts=shifts)
     print(f"  {temporal!r}", flush=True)
     if not (perm.passed and temporal.passed):
         print("\nCONTROLS FAILED -- not measuring a lift on features that leak", flush=True)
@@ -264,12 +289,17 @@ def main() -> None:
 
         aucs = np.array([r[0] for r in results])
         chose = [r[1] for r in results]
-        print(f"\nrel-trial/study-outcome  CALIBRATED TEST ROC-AUC x100 = {aucs.mean():.2f} "
+        if all(c == "+counts" for c in chose):
+            print("\n*** WARNING: validation chose the counts-only arm, but the controls "
+                  "above were run on the positive-rate columns. The reported arm is "
+                  "UNCONTROLLED -- a permutation test is meaningless for counts (they do "
+                  "not depend on label values), so what this needs is a temporal control "
+                  "on the count columns specifically.", flush=True)
+        print(f"\n{args.dataset}/{args.task}  CALIBRATED TEST ROC-AUC x100 = {aucs.mean():.2f} "
               f"+- {aucs.std(ddof=1) if len(aucs) > 1 else 0:.2f} over {len(aucs)} "
               f"replicates (range {aucs.min():.2f}-{aucs.max():.2f})", flush=True)
         print(f"validation chose: {chose}; sizes {[r[2] for r in results]}", flush=True)
-        print("reference: our previous calibrated 66.50, TabPFN-REL 76.43, "
-              "RelGNN 71.24, RDBLearn 72.89", flush=True)
+        print(f"reference: {REFERENCE.get(args.dataset, 'see PERFORMANCE.md')}", flush=True)
         return
 
     print(f"\n{'seed':>5} {'base':>9} {'+counts':>9} {'+history':>9} "
@@ -294,7 +324,7 @@ def main() -> None:
               f"{(g > 0).sum()}/{len(g)} positive", flush=True)
     print(f"base mean {np.mean(results['base']):.2f}, "
           f"+history mean {np.mean(results['+history']):.2f}  "
-          f"(calibrated reference 66.50, TabPFN-REL 76.43)", flush=True)
+          f"({REFERENCE.get(args.dataset, 'see PERFORMANCE.md')})", flush=True)
     print("NOTE: the +-0.6 floor applies.", flush=True)
 
 

@@ -107,7 +107,7 @@ Two aggregation paths, same `Table` spec:
 
 | | `flatten_relational` | `asof_statistics` |
 |---|---|---|
-| cost | `|child| x rows sharing a key` | `O(n log n)` |
+| cost | `\|child\| x rows sharing a key` | `O(n log n)` |
 | types | numeric + categorical (nunique, mode) | numeric; categorical when opted in |
 | windows | supported | supported, nearly free (prefix differences) |
 | depth-2 | yes, unique entity keys only | no |

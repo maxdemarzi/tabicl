@@ -66,6 +66,42 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-04 — rel-event track record: 85.34 calibrated, PROVISIONAL, not in the table
+rel-event / user-ignore, L40S, AMP off, 5 paired seeds then 5 calibrated replicates.
+**Calibrated 85.34 ± 1.48 (range 83.38–86.98) against a standing 78.11**, which would sit
+level with TabPFN-REL (85.38) and just under RelGNN (86.18). It is **not** in the headline
+table, for a reason that is nobody's fault but mine:
+
+**The controls tested the wrong arm.** Both the permutation and temporal controls were run
+on the `positive_rate` columns, and validation chose the **counts-only** arm 5/5. The
+reported number therefore rests on an uncontrolled feature. A permutation test is
+meaningless for counts — they do not depend on label *values*, so shuffling changes
+nothing — which means the missing check is specifically a temporal control on the count
+columns. Until that runs, this stays out.
+
+Transfer gate first, which is why only rel-event was built:
+
+| task | best key | coverage | standalone test AUC | vs our calibrated | built? |
+|---|---|---:|---:|---|---|
+| rel-avito | LocationID | 0.892 | 58.90 | below 64.85 | no |
+| rel-f1 | constructorId | 0.971 | 72.72 | below 80.70 | no |
+| rel-event | event co-attendance | 0.956 | **82.32** | above 78.11 | yes |
+
+A/B, base features identical: **+4.70 over base** (sd 1.60, 5/5) but **only +1.33 over
+counts-only** (sd 0.72, 5/5). So unlike rel-trial — where outcome history beat counts by
++4.59 — most of rel-event's gain is *connectivity*, not outcome content. Same degree
+phenomenon that made the graph-context result look better than it was, caught this time by
+the arm that exists to catch it.
+
+**Two control defects found and fixed, both mine.** The temporal control originally used
+hardcoded 180/365-day shifts. rel-event's horizon is 7 days and its span 147, so the shift
+removed every usable label, the feature went constant, and the control "passed" at exactly
+0.5000 having tested nothing. Shifts are now a fraction of the task's own span, and
+coverage is printed at each so a vacuous pass is visible. With that fixed the control
+passes **at exactly the tolerance boundary** — withholding 22 days *improved* the score by
+0.005 against a 0.005 tolerance. That is not a clean pass either, and it is a second reason
+this number is provisional.
+
 ### 2026-08-04 — shared-key track record on rel-trial: +5.45, and it enters the table
 rel-trial / study-outcome, L40S, AMP off, `n_estimators=4`, 5 paired seeds, base features
 identical in every arm. **The first result in this project to change the headline table:
