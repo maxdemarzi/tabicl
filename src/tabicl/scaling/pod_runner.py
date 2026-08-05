@@ -180,16 +180,22 @@ def main() -> int:
         # like a fresh pod. Repeated failures also escalate to SECURE, since a community
         # datacentre with broken drivers stays broken for the whole retry loop.
         bad_hosts: set[str] = set()
+        wasted = 0
         for attempt in range(1, 13):
-            if len(bad_hosts) >= 2 and CLOUDS[0] != "SECURE":
+            # Escalate on WASTED ATTEMPTS, not on distinct bad hosts. One persistently
+            # broken machine can dominate a community pool: a run once burned all twelve
+            # attempts against a single IP, correctly refusing to reuse it and never
+            # escalating, because "two distinct bad hosts" was never reached.
+            if wasted >= 3 and CLOUDS[0] != "SECURE":
                 CLOUDS.reverse()
-                print(f"  {len(bad_hosts)} bad hosts on {CLOUDS[-1]} -- escalating to "
-                      f"{CLOUDS[0]}", flush=True)
+                print(f"  {wasted} wasted attempts ({len(bad_hosts)} bad host(s)) -- "
+                      f"escalating to {CLOUDS[0]}", flush=True)
             pod = find_pod() or create()
             pod, target = wait_ready(pod["id"])
             if target[0] in bad_hosts:
                 print(f"attempt {attempt}: {target[0]} already rejected -- skipping",
                       flush=True)
+                wasted += 1
                 runpod.terminate_pod(pod["id"])
                 time.sleep(5)
                 continue
@@ -200,6 +206,7 @@ def main() -> int:
                 return 0
             print(f"  rejected: {why} -- terminating and taking another host", flush=True)
             bad_hosts.add(target[0])
+            wasted += 1
             runpod.terminate_pod(pod["id"])
             time.sleep(10)
         raise SystemExit(f"no usable host after 12 attempts; rejected {sorted(bad_hosts)}")
