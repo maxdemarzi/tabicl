@@ -158,6 +158,36 @@ mean/std) and **recency-ordered fixed windows** for temporal many-to-many -- "la
 events" is the one case where a literal array is right, because the order is principled
 rather than arbitrary.
 
+### 6f. Text columns — RESOLVED MYSTERY, and probably the largest thing we ignore
+
+**Their LightGBM baseline embeds text. Ours throws it away.** Two attempts to reproduce
+RelBench's entity-only baseline landed 31 points short on rel-f1 (42.49 against 73.92) and
+10.5 short on rel-trial. Reading `examples/lightgbm_entity.py` explains it: the baseline
+merges the task table with the entity table exactly as we do, but then builds a
+`torch_frame.data.Dataset` with `col_to_stype` from `get_stype_proposal` **and a
+`TextEmbedderConfig`**. Free-text columns become embeddings.
+
+Our pipeline drops them. `_numeric()` factorises non-numeric columns into arbitrary
+integers, and `eval_entity_baseline` explicitly excludes near-unique object columns as
+"identifiers" — which is right if the alternative is factorising them into row ids, and
+badly wrong if the alternative is embedding them.
+
+**Why this is probably the biggest single gap left.** rel-trial is our worst task (−7.07)
+and its studies carry descriptions, eligibility criteria and intervention text; TabPFN-REL
+reaches 76.43 there against our 69.36. The one lever we have never pulled is the one whose
+content we discard entirely. It also reframes the DFS comparison in 6e: DFS aggregates
+columns, and neither it nor we do anything with text.
+
+**Do this before any further feature family.** Concretely: identify text columns via
+`get_stype_proposal`, embed them with the same sentence encoder RelBench uses, and append
+to the feature block — one variable, gated by standalone AUC per column as usual. The
+`eval_entity_baseline` harness already isolates model from features and can measure it.
+
+*Corollary:* the "LightGBM entity-only beats us" framing in earlier entries was never
+apples-to-apples. It is not "raw columns beat your relational pipeline" — it is "text
+embeddings beat a pipeline that ignores text". That is a more useful statement and a more
+actionable one.
+
 ### 6e. Benchmark against Deep Feature Synthesis — the missing baseline
 
 `STATUS.md` now positions the relational layer against DFS (Kanter & Veeramachaneni 2015 /

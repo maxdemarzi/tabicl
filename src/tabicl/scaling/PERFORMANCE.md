@@ -66,6 +66,26 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-05 — why the LightGBM baseline could not be reproduced: it embeds text
+Read `examples/lightgbm_entity.py` in the RelBench repo rather than guessing a third time.
+The baseline merges task and entity tables exactly as we do, then builds a
+`torch_frame.data.Dataset` with `col_to_stype` from `get_stype_proposal` **and a
+`TextEmbedderConfig`**. Free-text columns are embedded.
+
+**Ours discards them.** `_numeric()` factorises non-numeric columns into arbitrary integers,
+and `eval_entity_baseline` excludes near-unique object columns as identifiers — correct if
+the alternative is factorising them into row ids, wrong if the alternative is embedding.
+That is the 31-point rel-f1 gap, and two reproduction attempts could never have closed it.
+
+**The earlier framing was wrong and is withdrawn.** "A LightGBM on the entity table alone
+beats our whole relational pipeline" is not the finding. The finding is **"text embeddings
+beat a pipeline that ignores text"** — a different claim, and an actionable one. Every entry
+above that leans on the entity-only comparison should be read with this correction.
+
+*This is now the largest untried lever*, and it points at our worst task: rel-trial is
+−7.07, its studies carry descriptions, eligibility criteria and intervention text, and
+TabPFN-REL reaches 76.43 there. See `RESEARCH.md` 6f.
+
 ### 2026-08-05 — per-key selection: no gain, and a near-miss worth recording
 `RESEARCH` item 12. Every key's block was concatenated indiscriminately, so this ranks keys
 by standalone validation AUC and keeps the top *k*. Calibrated, 5 replicates.
