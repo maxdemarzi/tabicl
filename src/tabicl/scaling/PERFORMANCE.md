@@ -66,6 +66,33 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-05 — text representation size: 32 is right, and the encoder question is closed
+rel-trial, calibrated, only the SVD component count moving.
+
+| components | val | test |
+|---:|---:|---:|
+| 16 | 67.33 | 71.27 ± 0.84 |
+| **32** | **67.88** | **71.50 ± 0.38** |
+| 64 | 67.41 | 70.91 ± 0.80 |
+| 128 | 67.15 | 68.92 ± 0.85 |
+
+**Validation and test agree on 32**, so the standing configuration was right and is now
+chosen rather than assumed. 16/32/64 span 0.59 — at the floor — while 128 loses 2.6.
+
+**This closes the sentence-encoder question without building one.** More representational
+capacity does not help here; past 64 it actively hurts. A transformer embedding supplies
+precisely what is already in surplus, so the expected gain is negative, and the plan to try
+`all-MiniLM-L6-v2` is dropped rather than deferred. Gate-before-building applied to our own
+pipeline — one cycle instead of a model download, a new code path and a day.
+
+*The 128 drop is the ensemble-diversity effect again* — third sighting today, after the
+categorical blocks and the `n_estimators=16` selection flip. A wider feature block costs
+something independent of whether the extra columns carry signal. That is now a reliable
+enough pattern to predict with, not merely to observe.
+
+*Infrastructure:* host blacklisting worked first time — one CUDA rejection, then a usable
+host, against eight consecutive failures on the same machine in the previous cycle.
+
 ### 2026-08-05 — child text lifts rel-trial to 71.50, past RelGNN, and as-of filtering proves itself
 Child-table text aggregated **as of each row's cutoff**, 8 calibrated replicates.
 
