@@ -117,6 +117,12 @@ def main() -> None:
     ap.add_argument("--no-horizon", action="store_true",
                     help="ignore the 365-day resolution window. Wrong, and kept only to "
                          "measure what it is worth.")
+    ap.add_argument("--resample", type=int, default=1,
+                    help="average predictions over N independent context draws. 1 is the "
+                         "existing behaviour exactly. Attacks the variance that dominates "
+                         "these tasks: rel-event's replicates span 10.8 points on the "
+                         "context draw alone. Distinct from --n-estimators, which varies "
+                         "the model seed at a fixed context and measured at nothing.")
     ap.add_argument("--children", type=int, default=3,
                     help="how many timestamped child tables to aggregate. The default of 3 "
                          "was never chosen -- it is a hardcoded slice, and the tables it "
@@ -551,10 +557,32 @@ def main() -> None:
           f"context={args.context}", flush=True)
 
     def score(X, Xe, rows, seed, truth=None):
-        clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
-                               random_state=seed, inference_config=NOAMP).fit(X[rows], y[rows])
+        """Fit and score, optionally averaging predictions over several context draws.
+
+        `RESEARCH` item 10. The largest measured weakness on this branch is not bias but
+        variance from *which rows land in the context*: rel-event's calibrated replicates
+        span 10.8 points and rel-avito's random arm spanned 9.1. Averaging probabilities
+        over independent draws attacks that directly.
+
+        It is not `n_estimators`, which varies the model seed at a **fixed** context and was
+        measured at nothing on every task -- the ensembling that matters here is over the
+        context, which is the thing that actually moves.
+        """
         target_y = y_te if truth is None else truth
-        return roc_auc_score(target_y, clf.predict_proba(Xe)[:, 1]) * 100
+        draws = max(1, args.resample)
+        n = len(X)
+        probs = None
+        for d in range(draws):
+            # Draw d=0 is exactly the unresampled behaviour, so --resample 1 reproduces
+            # every earlier number and the comparison stays single-variable.
+            take = rows if d == 0 else np.random.default_rng(
+                seed * 1000 + d).choice(n, size=len(rows), replace=False)
+            clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
+                                   random_state=seed,
+                                   inference_config=NOAMP).fit(X[take], y[take])
+            p = clf.predict_proba(Xe)[:, 1]
+            probs = p if probs is None else probs + p
+        return roc_auc_score(target_y, probs / draws) * 100
 
     if args.calibrated:
         val = task.get_table("val", mask_input_cols=False).df
