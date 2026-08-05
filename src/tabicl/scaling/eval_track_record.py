@@ -92,6 +92,12 @@ def main() -> None:
     ap.add_argument("--no-horizon", action="store_true",
                     help="ignore the 365-day resolution window. Wrong, and kept only to "
                          "measure what it is worth.")
+    ap.add_argument("--text", action="store_true",
+                    help="add a TF-IDF + SVD embedding of the entity table's free-text "
+                         "columns as its own arm. RESEARCH 6f: our pipeline has never used "
+                         "text content, and on rel-trial four columns score 60.2-64.1 "
+                         "standalone against a 69.36 pipeline.")
+    ap.add_argument("--text-components", type=int, default=32)
     ap.add_argument("--top-keys", type=int, default=0,
                     help="keep only the N keys with the highest standalone validation AUC, "
                          "ranked by the same gate used before building. 0 keeps all. Every "
@@ -249,6 +255,58 @@ def main() -> None:
     b_tr = build_base(train)
     b_te = build_base(test).reindex(columns=b_tr.columns, fill_value=np.nan)
 
+    # --- text block (RESEARCH 6f) --------------------------------------------------------
+    # Fitted on TRAIN ONLY and applied to val/test. Fitting the vectoriser on all splits
+    # would let test vocabulary and IDF weights inform the representation -- a leak that
+    # produces a large confident number rather than an error, which is this family's
+    # signature failure.
+    text_cols, text_models = [], {}
+    if args.text:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.decomposition import TruncatedSVD
+        from sklearn.pipeline import make_pipeline
+
+        ent_text = db.table_dict[entity].df
+        merged_tr = train.merge(ent_text, left_on=key, right_on=pk, how="left")
+        for col in ent_text.columns:
+            if col in (pk, target) or not pd.api.types.is_object_dtype(ent_text[col]):
+                continue
+            series = ent_text[col].dropna().astype(str)
+            if len(series) < 20 or series.str.len().mean() < 15:
+                continue
+            texts = merged_tr[col].fillna("").astype(str)
+            # Components must fit the column's own vocabulary; a fixed 64 killed
+            # biospec_retention outright at 11 features.
+            try:
+                vec = TfidfVectorizer(sublinear_tf=True, min_df=3, max_features=50000,
+                                      ngram_range=(1, 2), strip_accents="unicode")
+                n_feat = vec.fit(texts).transform(texts[:1]).shape[1]
+                k = int(min(args.text_components, max(2, n_feat - 1)))
+                model = make_pipeline(
+                    TfidfVectorizer(sublinear_tf=True, min_df=3, max_features=50000,
+                                    ngram_range=(1, 2), strip_accents="unicode"),
+                    TruncatedSVD(n_components=k, random_state=0))
+                model.fit(texts)
+            except Exception as exc:          # noqa: BLE001
+                print(f"  text column {col} skipped: {str(exc)[:60]}", flush=True)
+                continue
+            text_cols.append(col)
+            text_models[col] = model
+        print(f"text columns embedded: {text_cols or 'none'}", flush=True)
+
+    def text_block(frame):
+        if not text_cols:
+            return pd.DataFrame(index=range(len(frame)))
+        merged = frame.merge(db.table_dict[entity].df, left_on=key, right_on=pk, how="left")
+        blocks = []
+        for col in text_cols:
+            emb = text_models[col].transform(merged[col].fillna("").astype(str))
+            blocks.append(pd.DataFrame(
+                emb, columns=[f"txt_{col}_{i}" for i in range(emb.shape[1])]))
+        return pd.concat(blocks, axis=1)
+
+    x_tr, x_te = text_block(train), text_block(test)
+
     def track(entities, times, labels, shift=None):
         stamps = np.asarray(times)
         if shift:
@@ -345,7 +403,13 @@ def main() -> None:
     # Each arm is gated by the controls that test *its own* columns, so one failing family
     # does not block a clean one -- and, more importantly, a passing family cannot vouch
     # for an arm it never touched.
+    # Text arms are gated by the label-derived controls only where they include label
+    # features. A pure text embedding derives from entity columns, not from any label, so
+    # the permutation and temporal controls have nothing to say about it -- and a control
+    # that cannot make a feature's value move cannot clear it either.
     ok = {"base": True,
+          "+text": True,
+          "+text+rate": perm.passed and temporal.passed and temporal_counts.passed,
           "+struct": temporal_struct.passed,
           "+counts": temporal_counts.passed,
           "+rate": perm.passed and temporal.passed and temporal_counts.passed,
@@ -374,6 +438,13 @@ def main() -> None:
     arms = {
         "base": (_numeric(b_tr), _numeric(b_te)),
         "+struct": (stack(b_tr, t_tr, struct_cols), stack(b_te, t_te, struct_cols)),
+        **({"+text": (stack(b_tr, x_tr), stack(b_te, x_te)),
+            "+text+rate": (stack(pd.concat([b_tr.reset_index(drop=True),
+                                            x_tr.reset_index(drop=True)], axis=1),
+                                 t_tr, rate_cols),
+                           stack(pd.concat([b_te.reset_index(drop=True),
+                                            x_te.reset_index(drop=True)], axis=1),
+                                 t_te, rate_cols))} if text_cols else {}),
         "+counts": (stack(b_tr, t_tr, count_cols), stack(b_te, t_te, count_cols)),
         "+rate": (stack(b_tr, t_tr, rate_cols), stack(b_te, t_te, rate_cols)),
         "+history": (stack(b_tr, t_tr), stack(b_te, t_te)),
@@ -396,8 +467,13 @@ def main() -> None:
         y_va = val[target].to_numpy()
         b_va = build_base(val).reindex(columns=b_tr.columns, fill_value=np.nan)
         t_va = track(val[key].to_numpy(), val[tcol].to_numpy(), y)
+        x_va = text_block(val)
         val_arms = {k: v for k, v in {
             "base": _numeric(b_va),
+            "+text": stack(b_va, x_va),
+            "+text+rate": stack(pd.concat([b_va.reset_index(drop=True),
+                                           x_va.reset_index(drop=True)], axis=1),
+                                t_va, rate_cols),
             "+struct": stack(b_va, t_va, struct_cols),
             "+counts": stack(b_va, t_va, count_cols),
             "+rate": stack(b_va, t_va, rate_cols),
