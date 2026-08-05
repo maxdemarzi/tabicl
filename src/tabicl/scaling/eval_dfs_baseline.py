@@ -120,8 +120,10 @@ def main() -> None:
         """
         df = df.copy()
         try:
-            df.ww.init(index=index, time_index=time_index)
-            return es_.add_dataframe(dataframe_name=name, dataframe=df)
+            # An initialised woodwork frame carries its own name, and add_dataframe then
+            # rejects `dataframe_name` -- so the name goes into ww.init, not the call.
+            df.ww.init(index=index, time_index=time_index, name=name)
+            return es_.add_dataframe(dataframe=df)
         except Exception:
             return es_.add_dataframe(dataframe_name=name, dataframe=df,
                                      index=index, time_index=time_index)
