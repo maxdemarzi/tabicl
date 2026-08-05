@@ -141,6 +141,42 @@ because counts are invertible. `min_category_share` skips columns whose codebook
 capture too little mass; without that gate the block emits near-constant columns for
 free text and hurts badly. `include_mode` adds the modal value, all-history only.
 
+## Relation to Deep Feature Synthesis
+
+The relational layer is DFS-shaped, and saying so is the honest framing: Deep Feature
+Synthesis (Kanter & Veeramachaneni, IEEE DSAA 2015; implemented in Featuretools) is the
+standard automated approach to exactly this problem — apply aggregation primitives across
+foreign-key paths, recursively, to some depth. `flatten_relational` does the same thing.
+What differs:
+
+| | DFS / Featuretools | here |
+|---|---|---|
+| aggregation | primitives applied per level (`COUNT`, `MEAN`, `STD`, `MODE`, `NUM_UNIQUE`, …) | factorized sufficient statistics (`count/sum/sumsq/min/max`), `mean`/`std` derived at the root |
+| nesting | stacked primitives, e.g. `MEAN(sessions.SUM(txns.amount))` | statistics compose, so a depth-2 mean is the **true** mean, not a mean of means |
+| time | `cutoff_time` per row, `training_window` | per-row cutoff as an `O(n log n)` prefix scan; windows as prefix differences, nearly free |
+| algebra | fixed primitive set | semirings — `SUM_PRODUCT`, `MIN_PLUS`, `MAX_PLUS`, `BOOLEAN` — one scan, laws checkable |
+| joins | tree-shaped foreign-key paths | plus a compiled WCOJ for **cyclic** patterns (triangles, typed motifs) |
+| width | feature count grows sharply with depth | explicit `max_columns` budget, target-free so it cannot leak |
+| the target | **never used** | `key_target_history` uses *other rows'* labels, with a resolution horizon and negative controls |
+
+**The last row is the one that matters.** DFS deliberately never touches the target, and
+that is precisely the ceiling: on rel-trial, admitting other rows' outcomes was worth
+**+5.45**, more than every structural lever in this package combined. The rows above it
+are engineering — exactness, cost, cyclic patterns; the row below the line is the only
+thing that has moved a headline number.
+
+The mean-of-means distinction is a real correctness difference, not a preference. Stacked
+primitives compute a mean over groups of a per-group statistic, which does not equal the
+overall statistic when group sizes vary. Sufficient statistics compose to the exact
+root-level quantity. Both are legitimate features; only one is the number you probably
+meant.
+
+**Not benchmarked against DFS.** This comparison is analytical, not measured — "a generic
+flattening pipeline" is currently a self-description. Running Featuretools over the same
+four tasks and the same protocol would establish whether this layer beats the standard
+automated approach or merely differs from it, and it is the most useful missing baseline
+in the project. Until then, no claim of superiority over DFS is being made here.
+
 ## Measured results
 
 ### RelBench, official protocol

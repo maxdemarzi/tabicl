@@ -130,7 +130,11 @@ def main() -> None:
                 continue
             for other in (tbl.fkey_col_to_pkey_table or {}):
                 if other != fk:
-                    link_specs.append((other.replace("_id", ""), tbl.df[[fk, other]], fk, other))
+                    # Qualify by table: the same key name appears in several link tables
+                    # (rel-event has `event` twice, rel-f1 `raceId` three times) and an
+                    # unqualified prefix silently collides the blocks on concat.
+                    short = f"{name}_{other}".replace("_id", "").replace("_ID", "")
+                    link_specs.append((short, tbl.df[[fk, other]], fk, other))
     print(f"candidate keys: {[s[0] for s in link_specs] or 'NONE'}", flush=True)
     if not link_specs:
         print("no table links two entities of this type -- this feature cannot be built "

@@ -158,6 +158,24 @@ mean/std) and **recency-ordered fixed windows** for temporal many-to-many -- "la
 events" is the one case where a literal array is right, because the order is principled
 rather than arbitrary.
 
+### 6e. Benchmark against Deep Feature Synthesis — the missing baseline
+
+`STATUS.md` now positions the relational layer against DFS (Kanter & Veeramachaneni 2015 /
+Featuretools) analytically: sufficient statistics that compose exactly rather than stacked
+primitives, as-of cutoffs as a prefix scan, semirings, a compiled WCOJ for cyclic patterns,
+an explicit column budget — and, the only one that has moved a number, use of *other rows'
+labels*, which DFS deliberately never does.
+
+**None of that is measured.** "A generic flattening pipeline in front of a stock TabICL" is
+a self-description appearing throughout these documents, and it is doing real rhetorical
+work — it is what makes trailing RelGNN sound acceptable. Running Featuretools over the
+same four tasks under the same calibrated protocol would turn it into a fact. Two outcomes,
+both worth having: this layer beats DFS and the engineering is justified, or it does not
+and the honest framing becomes "DFS plus label features plus a foundation model", which is
+still a result and a much cheaper thing to maintain.
+
+Cheap to run and the highest information-per-hour item currently open.
+
 ### 6d. Shared-key track record — DONE, +5.45, and the first change to the headline table
 
 **rel-trial 66.50 → 69.36 calibrated, chosen by validation in 5/5 replicates.** Outcome
