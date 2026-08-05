@@ -92,6 +92,11 @@ def main() -> None:
     ap.add_argument("--no-horizon", action="store_true",
                     help="ignore the 365-day resolution window. Wrong, and kept only to "
                          "measure what it is worth.")
+    ap.add_argument("--max-columns", default="2",
+                    help="per-child column budget, or 'none'. NOT a universal default: the "
+                         "base sweep measures max_columns=None at +23.38 on rel-f1's "
+                         "validation split against the 2 hardcoded here, while rel-event "
+                         "loses 1.36 by the same change. Set it per task.")
     ap.add_argument("--timed-links-only", action="store_true",
                     help="use only link tables that carry a timestamp. Required for a "
                          "reportable structural result: an untimed table's degree is "
@@ -115,6 +120,7 @@ def main() -> None:
     tcol = next(c for c in train.columns if pd.api.types.is_datetime64_any_dtype(train[c]))
     horizon = None if args.no_horizon else getattr(task, "timedelta", None)
     y, y_te = train[target].to_numpy(), test[target].to_numpy()
+    max_cols = None if str(args.max_columns).lower() in ("none", "null", "") else int(args.max_columns)
     spec = args.window_days or DEFAULT_WINDOWS.get(args.dataset, "30,365")
     WINDOWS = [pd.Timedelta(days=int(d)) for d in spec.split(",")]
     print(f"{args.dataset}/{args.task}  horizon={horizon}  windows={spec}  "
@@ -134,7 +140,8 @@ def main() -> None:
                 if c not in drop and not pd.api.types.is_datetime64_any_dtype(base[c])]
         blocks = [base[cols].reset_index(drop=True)]
         for n, fk, tc in kids:
-            t = Table(db.table_dict[n].df, fk, n, time_column=tc, windows=WINDOWS, max_columns=2)
+            t = Table(db.table_dict[n].df, fk, n, time_column=tc, windows=WINDOWS,
+                      max_columns=max_cols)
             blocks.append(asof_statistics(t, frame[key].to_numpy(),
                                           frame[tcol].to_numpy()).add_prefix(f"{n}__"))
         return pd.concat(blocks, axis=1)
