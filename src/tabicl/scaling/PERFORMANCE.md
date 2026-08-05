@@ -23,7 +23,7 @@ paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model resu
 | task | ours | TabPFN-REL | RelGNN | RDBLearn+v3 | vs TabPFN-REL | vs best |
 |---|---:|---:|---:|---:|---:|---:|
 | rel-f1 / driver-top3 | 82.48 | 79.98 | **85.69** | 82.72 | +2.50 | −3.21 |
-| rel-event / user-ignore | 81.22 | 85.38 | **86.18** | 73.70 | −4.16 | −4.96 |
+| rel-event / user-ignore | 81.76 | 85.38 | **86.18** | 73.70 | −3.62 | −4.42 |
 | rel-avito / user-visits | 65.61 | 66.68 | 66.18 | **66.76** | −1.07 | −1.15 |
 | rel-trial / study-outcome | 69.36 | **76.43** | 71.24 | 72.89 | −7.07 | −7.07 |
 
@@ -65,6 +65,24 @@ five points. Pair everything.
 ---
 
 ## Run log
+
+### 2026-08-05 — rel-event at 12 replicates: 81.76 ± 2.95, and the entry firms up
+The standing rel-event number carried sd 3.01 over 5 replicates, making its gain over the
+old 78.11 about two standard errors — the weakest thing in the table. Twelve replicates,
+`max_columns=2`, timed links only:
+
+**81.76 ± 2.95, range 75.31–86.11, `+struct` chosen 10/12.** Standard error 0.85, so the
++3.65 over 78.11 is **~4.3 SE** rather than ~2. The entry survives scrutiny.
+
+*But read the range, not the mean.* Individual replicates span **10.8 points**, from 75.31
+to 86.11 — the same replicate lottery that made the original graph-context result look
+better than it was. The mean over 12 is trustworthy; any single run of this configuration
+is not, and a 5-replicate version of this number could have landed anywhere in a 3-point
+band. This is why the table quotes replicate means and why 5 was too few.
+
+*The `max_columns=None` arm did not finish* even at 5400 s — it builds 2000 features on
+19,239 rows. The two settings were a tie at 5 replicates (81.22 against 80.76), so the
+cheaper one is quoted and nothing is lost but a confirmation.
 
 ### 2026-08-05 — context size: nothing either, once the controls are correct
 Calibrated, 5 replicates, only the context cap moving.
