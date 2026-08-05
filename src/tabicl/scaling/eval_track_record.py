@@ -423,9 +423,9 @@ def main() -> None:
         print(f"{hi} over {lo}: mean {g.mean():+.2f} sd "
               f"{g.std(ddof=1) if len(g) > 1 else 0:.2f} over {len(g)} seeds, "
               f"{(g > 0).sum()}/{len(g)} positive", flush=True)
-    print(f"base mean {np.mean(results['base']):.2f}, "
-          f"+history mean {np.mean(results['+history']):.2f}  "
-          f"({REFERENCE.get(args.dataset, 'see PERFORMANCE.md')})", flush=True)
+    means = ", ".join(f"{k} {np.mean(v):.2f}" for k, v in results.items())
+    print(f"means: {means}  ({REFERENCE.get(args.dataset, 'see PERFORMANCE.md')})",
+          flush=True)
     print("NOTE: the +-0.6 floor applies.", flush=True)
 
 

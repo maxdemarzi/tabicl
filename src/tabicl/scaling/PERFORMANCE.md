@@ -66,6 +66,47 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-04 — rel-event, resolved: the 89.48 was untimed links. Case closed.
+Dropping the two link tables that carry no timestamp (`user_friends`, both directions) and
+keeping only `event_interest` and `event_attendees`:
+
+| configuration | calibrated test | validation chose |
+|---|---:|---|
+| all link tables (untimed included) | 89.48 ± 0.67 | `+struct` 4/5 |
+| **timed link tables only** | **81.53 ± 3.01** | **`base` 3/5**, `+struct` 2/5 |
+
+**−7.95, and the selection rule stops choosing the feature at all.** The A/B agrees:
+`+struct over base` is **+1.16 (sd 1.82, 2/3 seeds)**, inside the floor. So the whole
+apparent gain was counting friendships that formed *after* the prediction time. Nothing
+about graph structure on rel-event is reportable, and 78.11 stands.
+
+*Why the controls did not catch this on their own, which is the transferable part.* Control
+4 (temporal on `n_linked`) **passed** — because an untimed table's degree does not change
+when the cutoff is shifted, so it contributes nothing for a temporal control to detect. The
+control was not wrong, it was **blind**, and a blind control passing looks exactly like a
+clean one. The fix is structural rather than statistical: `--timed-links-only` excludes
+what cannot be tested. *A control can only clear a feature whose value it can make move.*
+
+### 2026-08-04 — rel-trial base sweep: nothing clears the floor
+Validation only, 3 seeds, one knob at a time from a fixed reference
+(`max_columns=2`, 3 children, 30/365-day windows, `n_estimators=4`, val 61.74).
+
+| knob | best | Δ |
+|---|---|---:|
+| `max_columns` | 2 / 4 / 8 / None **all 61.74** | 0.00 |
+| `n_estimators` | 1 → 61.77 | +0.04 |
+| child tables | 10 → 62.28 | +0.54 |
+| windows | 365/1095 → 61.92 | +0.19 |
+
+**Best overall +0.54, under the ±0.6 floor — a tie.** The base pipeline is not being held
+back by any of these settings on rel-trial, so the gap to a published entity-only baseline
+is not a tuning problem.
+
+*One genuine finding:* `max_columns` is a **no-op on this task** — identical to four
+decimal places at every value, 134 features throughout — because rel-trial's child tables
+have at most two usable columns anyway. The earlier "column budget: 0.0 on rel-trial" entry
+was recording that the knob does nothing here, not that the budget is harmless.
+
 ### 2026-08-04 — entity-only baseline, second attempt: still not reproduced. Stop guessing.
 Fixed the two obvious defects — datetimes now become *age at the cutoff* rather than being
 dropped, and near-unique object columns (`forename`, `surname`, `url`) are excluded instead
