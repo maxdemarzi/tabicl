@@ -66,6 +66,28 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-05 — ensemble size: nothing, on the two tasks closest to a win
+Calibrated, 5 replicates, `max_columns=None`, timed links only, only `n_estimators` moving.
+
+| task | 4 | 8 | 16 |
+|---|---:|---:|---:|
+| rel-avito | 65.54 ± 0.11 | 65.57 ± 0.13 | *timed out at 3000 s* |
+| rel-f1 | 82.48 ± 0.80 | 82.73 ± 0.52 | 82.66 ± 0.41 |
+
+**Every difference is inside the ±0.6 floor**, so 4 stands as the default and the cheaper
+setting wins. This was worth checking rather than assuming: every number on this branch was
+produced at 4, TabICL's own default is 8, and on rel-event plain features gained six points
+going 1 → 8. That gain does not generalise to these tasks.
+
+*One real signal in it:* at `n_estimators=16` on rel-f1, validation switched to `base` 5/5
+where 4 and 8 chose `+struct` — the same ensemble-diversity effect that flipped the
+categorical-blocks verdict. A wider feature set costs diversity, and a larger ensemble
+makes that cost visible in the selection rather than in the score.
+
+*The rel-avito 16 cell is missing, not zero* — it exceeded the 3000 s timeout on 86,619
+training rows. Not retried, because 4 → 8 moved 0.03 and there is no reason to expect 16 to
+behave differently.
+
 ### Table 1 — entity classification, one uniform procedure, val and test
 Every row from the same protocol: arm × context size chosen on **validation**, test scored
 **once**, 5 replicates, AMP off, timed link tables only, each arm gated by controls on its
