@@ -66,6 +66,26 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-05 — context size: nothing either, once the controls are correct
+Calibrated, 5 replicates, only the context cap moving.
+
+| task | 2,500 | 5,000 | 10,000 | 20,000 | 40,000 |
+|---|---:|---:|---:|---:|---:|
+| rel-avito (86,619 train) | 65.34 ± 0.24 | 65.44 ± 0.28 | 65.54 ± 0.11 | 65.54 ± 0.19 | — |
+| rel-trial (11,994 train) | — | — | 69.27 ± 0.86 | 69.35 ± 0.96 | 69.35 ± 0.96 |
+
+**Total range 0.20 on rel-avito and 0.08 on rel-trial — both inside the ±0.6 floor.** The
+rel-avito curve is monotone increasing, which is the shape that tempts one to keep going,
+but 8× the context buys 0.20. rel-trial's 20,000 and 40,000 cells are *identical* because
+both exceed its 11,994 training rows; that is a consistency check on the harness, not two
+measurements.
+
+Together with the ensemble sweep above, **the two remaining generic levers are exhausted**:
+neither ensemble size nor context size moves these tasks. What has moved numbers on this
+branch is task-specific — outcome history on rel-trial (+5.45) and the column budget on
+rel-f1 (+12.58) — which is the same lesson as "column budget is a rescue, not a default",
+arrived at from the opposite direction.
+
 ### 2026-08-05 — ensemble size: nothing, on the two tasks closest to a win
 Calibrated, 5 replicates, `max_columns=None`, timed links only, only `n_estimators` moving.
 
