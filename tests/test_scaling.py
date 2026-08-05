@@ -2091,6 +2091,35 @@ def test_graph_context_two_hops_reaches_further_than_one():
     assert set(two.tolist()) == {0, 1}
 
 
+def test_two_hop_cutoff_excludes_grandchildren_dated_after_the_entity_cutoff():
+    """The existing two-hop test cannot catch this, and the leak it misses was live.
+
+    `test_two_hop_cutoff_propagates` dates every grandchild identically to its parent, so
+    excluding a grandchild is indistinguishable from excluding its parent. Here the parent
+    order is comfortably before the cutoff and one of its two items is after it: only a
+    deadline that actually reaches the grandchild level can tell the difference.
+    """
+    from tabicl.scaling import Table, flatten_relational
+
+    entities = pd.DataFrame({"user": [1], "ts": [pd.Timestamp("2026-01-10")]})
+    orders = pd.DataFrame({"oid": [10], "user": [1], "ots": [pd.Timestamp("2026-01-05")]})
+    items = pd.DataFrame({
+        "oid": [10, 10],
+        "price": [2.0, 1000.0],
+        "its": [pd.Timestamp("2026-01-05"), pd.Timestamp("2026-02-01")],  # second is after
+    })
+
+    item_tbl = Table(items, "oid", "item", time_column="its")
+    order_tbl = Table(orders, "user", "ord", time_column="ots",
+                      primary_key="oid", children=[item_tbl])
+    out = flatten_relational(entities, "user", [order_tbl], cutoff_column="ts")
+
+    count = next(c for c in out.columns if c.endswith("item__count"))
+    assert out[count].iloc[0] == 1, "a grandchild dated after the cutoff was counted"
+    mean = next(c for c in out.columns if c.endswith("price__mean"))
+    assert out[mean].iloc[0] == pytest.approx(2.0), "the post-cutoff price leaked into mean"
+
+
 def test_key_history_subtracts_the_rows_own_outcome_rather_than_dropping_it():
     """Self-exclusion must remove one observation, not a key's whole accumulated history."""
     from tabicl.scaling import key_target_history

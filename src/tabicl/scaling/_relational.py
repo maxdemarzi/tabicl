@@ -316,7 +316,19 @@ def _aggregate_by_row(child: Table, anchor: pd.DataFrame, n_rows: int) -> pd.Dat
     Cost: the join is |child| x (rows sharing a key), which is the price of
     per-row-correct features.
     """
-    df, nested_stats = _resolve(child, None)
+    # Propagate the entity's cutoff into the grandchild fold. Passing None here left
+    # `_resolve`'s cutoff_by_key machinery unreachable from the only root entry point, so
+    # every level below depth 1 was aggregated with NO deadline: a grandchild recorded
+    # after the entity's prediction time still contributed. The docstrings on `_resolve`
+    # and in DESIGN.md asserted propagation that did not occur, and the existing two-hop
+    # test could not see it because its fixture dates every grandchild identically to its
+    # parent -- which makes grandchild leakage indistinguishable from parent filtering.
+    cutoff_by_key = None
+    if "__cutoff" in anchor.columns and child.children:
+        # One deadline per key. A key appearing at several cutoffs takes the earliest, so
+        # the nested fold can never be more permissive than the strictest row that uses it.
+        cutoff_by_key = anchor.groupby("__key")["__cutoff"].min()
+    df, nested_stats = _resolve(child, cutoff_by_key)
 
     estimated = _estimate_pairs(child, anchor)
     if estimated > MAX_JOIN_PAIRS:
