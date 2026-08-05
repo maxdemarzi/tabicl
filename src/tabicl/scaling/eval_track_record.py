@@ -92,6 +92,11 @@ def main() -> None:
     ap.add_argument("--no-horizon", action="store_true",
                     help="ignore the 365-day resolution window. Wrong, and kept only to "
                          "measure what it is worth.")
+    ap.add_argument("--timed-links-only", action="store_true",
+                    help="use only link tables that carry a timestamp. Required for a "
+                         "reportable structural result: an untimed table's degree is "
+                         "constant under a cutoff shift, so the temporal control cannot "
+                         "see it and passing proves nothing about it.")
     ap.add_argument("--static-links", action="store_true",
                     help="ignore link-table timestamps, counting memberships that formed "
                          "after the cutoff. Wrong; kept to measure what the causal "
@@ -149,6 +154,16 @@ def main() -> None:
                     tc = tbl.time_col if not args.static_links else None
                     cols = [fk, other] + ([tc] if tc else [])
                     link_specs.append((short, tbl.df[cols], fk, other, tc))
+    if args.timed_links_only:
+        # Control 4 is BLIND to untimed link tables: with no time filter their n_linked
+        # does not change when the cutoff is shifted, so it contributes nothing for the
+        # control to detect and a pass says nothing about them. Dropping them is what makes
+        # a structure-only result defensible rather than merely untested.
+        dropped = [s[0] for s in link_specs if not s[4]]
+        link_specs = [s for s in link_specs if s[4]]
+        if dropped:
+            print(f"dropping untimed link tables {dropped}: their structural counts cannot "
+                  f"be temporally controlled", flush=True)
     timed = [s[0] for s in link_specs if s[4]]
     untimed = [s[0] for s in link_specs if not s[4]]
     print(f"candidate keys: {[s[0] for s in link_specs] or 'NONE'}", flush=True)
@@ -319,8 +334,9 @@ def main() -> None:
     # An arm whose own controls failed is not offered to validation at all. Selection
     # cannot be allowed to pick a leaking arm and have the protocol launder it.
     arms = {k: v for k, v in arms.items() if ok.get(k, True)}
-    print(f"{arms['base'][0].shape[1]} base -> {arms['+history'][0].shape[1]} with history, "
-          f"{len(arms['base'][0])} train rows, context={args.context}", flush=True)
+    widths = ", ".join(f"{k} {v[0].shape[1]}" for k, v in arms.items())
+    print(f"feature widths: {widths}; {len(arms['base'][0])} train rows, "
+          f"context={args.context}", flush=True)
 
     def score(X, Xe, rows, seed, truth=None):
         clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
