@@ -25,7 +25,7 @@ paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model resu
 | rel-f1 / driver-top3 | 82.48 | 79.98 | **85.69** | 82.72 | +2.50 | −3.21 |
 | rel-event / user-ignore | 81.76 | 85.38 | **86.18** | 73.70 | −3.62 | −4.42 |
 | rel-avito / user-visits | 65.61 | 66.68 | 66.18 | **66.76** | −1.07 | −1.15 |
-| rel-trial / study-outcome | 70.36 | **76.43** | 71.24 | 72.89 | −6.07 | −6.07 |
+| rel-trial / study-outcome | 70.26 | **76.43** | 71.24 | 72.89 | −6.17 | −6.17 |
 
 Bold marks the best result per task. **None of them are ours** — we lead TabPFN-REL on
 rel-f1 but trail RelGNN there by 5, and trail everywhere else. Ours gets bolded when it
@@ -65,6 +65,32 @@ five points. Pair everything.
 ---
 
 ## Run log
+
+### 2026-08-05 — rel-trial at 12 replicates: 70.26 ± 1.38, and a child column is being missed
+Twelve replicates give **70.26 ± 1.38** against 70.36 ± 1.74 on five — consistent and
+tighter. Validation chose `+text+rate` 7/12 and `+rate` 5/12. The entry holds at 70.26.
+
+**The repaired child-table gate found a column we are not using.** After fixing the
+all-NaN mapping, the surviving child columns score honestly, and one is as strong as the
+best entity column:
+
+| column | source | coverage | test AUC |
+|---|---|---:|---:|
+| `official_title` | entity | 0.995 | 64.10 |
+| **`eligibilities.criteria`** | **child** | **1.000** | **63.95** |
+| `detailed_descriptions` | entity | 0.621 | 62.88 |
+| `brief_title` | entity | 1.000 | 60.77 |
+
+`eligibilities.criteria` is full-coverage, as strong as anything in the entity table, and
+**not in the `+text` arm**, which embeds entity columns only. Extending the text block to
+child tables is the obvious next step — with as-of aggregation, since the gate concatenates
+without regard to time and its number is therefore an upper bound.
+
+*The gate fix earned itself twice over.* The phantom columns are gone (they were the
+zero-coverage ones), and the remaining scores are plausible rather than suspiciously tidy.
+
+**rel-avito and rel-f1 confirmed to have no text columns at all**, entity or child, so 6f
+cannot help them and that door is closed on a working gate rather than a broken one.
 
 ### 2026-08-05 — text pays off on rel-trial: 69.36 → 70.36, and it is complementary
 TF-IDF + SVD over the entity table's free-text columns, vectoriser fitted on **train only**,
