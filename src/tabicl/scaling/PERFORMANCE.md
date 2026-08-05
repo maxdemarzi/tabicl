@@ -23,8 +23,8 @@ paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model resu
 | task | ours | TabPFN-REL | RelGNN | RDBLearn+v3 | vs TabPFN-REL | vs best |
 |---|---:|---:|---:|---:|---:|---:|
 | rel-f1 / driver-top3 | 82.48 | 79.98 | **85.69** | 82.72 | +2.50 | −3.21 |
-| rel-event / user-ignore | 78.11 | 85.38 | **86.18** | 73.70 | −7.27 | −8.07 |
-| rel-avito / user-visits | 64.85 | 66.68 | 66.18 | **66.76** | −1.83 | −1.91 |
+| rel-event / user-ignore | 81.22 | 85.38 | **86.18** | 73.70 | −4.16 | −4.96 |
+| rel-avito / user-visits | 65.61 | 66.68 | 66.18 | **66.76** | −1.07 | −1.15 |
 | rel-trial / study-outcome | 69.36 | **76.43** | 71.24 | 72.89 | −7.07 | −7.07 |
 
 Bold marks the best result per task. **None of them are ours** — we lead TabPFN-REL on
@@ -65,6 +65,48 @@ five points. Pair everything.
 ---
 
 ## Run log
+
+### Table 1 — entity classification, one uniform procedure, val and test
+Every row from the same protocol: arm × context size chosen on **validation**, test scored
+**once**, 5 replicates, AMP off, timed link tables only, each arm gated by controls on its
+own columns. Comparable *with each other*, which the per-task history below is not.
+
+| dataset / task | train | val | test | val AUROC | test AUROC | arm chosen | `max_columns` |
+|---|---:|---:|---:|---:|---:|---|---|
+| rel-f1 / driver-top3 | 1,353 | 588 | 726 | 87.82 ± 0.06 | **82.48 ± 0.80** | `+struct` 3/5 | None |
+| rel-trial / study-outcome | 11,994 | 960 | 825 | 66.77 ± 0.23 | **69.27 ± 0.86** | `+rate` 5/5 | 2 |
+| rel-event / user-ignore | 19,239 | 2,013 | 1,958 | 82.16 ± 0.69 | **81.22 ± 3.01** | `+struct` 3/5 | None |
+| rel-avito / user-visits | 86,619 | 29,979 | 36,129 | 77.37 ± 0.50 | **65.54 ± 0.11** | `+struct` 5/5 | None |
+
+**Read the val/test columns together — they disagree in both directions and by a lot.**
+rel-f1 loses 5.3 from validation to test, rel-avito loses **11.8**, and rel-trial *gains*
+2.5. Validation splits of 588–2,013 rows cannot support fine selection, and Rel-LLM's own
+Table 1 shows the same pattern (their RDL goes 91.70 val → 81.62 test on rel-event), so
+this is a property of the benchmark rather than of our protocol.
+
+*Excluded arms are visible in the runs and matter:* `+history` is excluded everywhere
+except rel-avito, `+struct` is excluded on rel-trial, `+rate` on rel-event. Each exclusion
+is a control failing on that arm's own columns, and each was a number that would otherwise
+have been selectable.
+
+### 2026-08-04 — rel-trial 69.36 CONFIRMED, and rel-event/rel-avito enter at causal values
+**rel-trial reproduces: 69.27 ± 0.86, `+rate` chosen 5/5**, against the original 69.36 —
+a gap of 0.09, far inside the floor. The A/B repeats the original finding exactly: base
+63.82, `+counts` 64.68, `+rate` **69.27**. The earlier scare was mine: folding `n_linked`
+into `+history` made control 4 exclude an arm that never contained that column. The `+rate`
+arm restores the original composition and passes controls 1–3.
+
+**rel-event 78.11 → 81.22 ± 3.01** and **rel-avito 64.85 → 65.61 ± 0.20**, both with timed
+link tables only and all reported arms controlled. Two honest qualifications: rel-event's
+spread is 3.01, so its standard error is ~1.35 and the +3.11 is roughly two of them — real
+but not comfortable; and rel-avito's +0.76 is barely over the ±0.6 floor. Both come from
+`eval_track_record`'s pipeline rather than the one that produced the previous figures, so
+they are "our best calibrated number", not like-for-like ablations.
+
+*The column budget did not transfer.* `max_columns=None` is worth +12.58 on rel-f1, and on
+rel-avito it changes nothing measurable (65.54 against 65.61 at 2) while on rel-event it is
+inside the noise (81.22 against 80.76). One task, one lever — exactly what
+"column budget is a rescue, not a default" said, now with a number attached on all four.
 
 ### 2026-08-04 — rel-f1 80.70 → 82.48, and the cause is a column budget, not a feature
 rel-f1 / driver-top3, L40S, AMP off, 5 calibrated replicates, **all five link tables carry
