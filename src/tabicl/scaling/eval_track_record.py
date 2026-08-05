@@ -117,6 +117,12 @@ def main() -> None:
     ap.add_argument("--no-horizon", action="store_true",
                     help="ignore the 365-day resolution window. Wrong, and kept only to "
                          "measure what it is worth.")
+    ap.add_argument("--children", type=int, default=3,
+                    help="how many timestamped child tables to aggregate. The default of 3 "
+                         "was never chosen -- it is a hardcoded slice, and the tables it "
+                         "keeps are whichever come first in dictionary order, out of ten on "
+                         "rel-trial. The base sweep says breadth matters: one child costs 30 "
+                         "points on rel-event and 8 on rel-avito. 0 means all.")
     ap.add_argument("--text", action="store_true",
                     help="add a TF-IDF + SVD embedding of the entity table's free-text "
                          "columns as its own arm. RESEARCH 6f: our pipeline has never used "
@@ -165,9 +171,12 @@ def main() -> None:
     # --- base features -------------------------------------------------------------------
     ent_df = db.table_dict[entity].df
     pk = db.table_dict[entity].pkey_col
-    kids = [(n, fk, t.time_col) for n, t in db.table_dict.items()
-            for fk, pt in (t.fkey_col_to_pkey_table or {}).items()
-            if pt == entity and t.time_col][:3]
+    all_kids = [(n, fk, t.time_col) for n, t in db.table_dict.items()
+                for fk, pt in (t.fkey_col_to_pkey_table or {}).items()
+                if pt == entity and t.time_col]
+    kids = all_kids if args.children <= 0 else all_kids[: args.children]
+    print(f"child tables: using {len(kids)} of {len(all_kids)} available "
+          f"{[k[0] for k in kids]}", flush=True)
 
     def build_base(frame):
         base = frame.merge(ent_df, left_on=key, right_on=pk, how="left")
