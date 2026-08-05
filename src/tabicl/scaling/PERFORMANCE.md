@@ -22,10 +22,10 @@ paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model resu
 
 | task | ours | TabPFN-REL | RelGNN | RDBLearn+v3 | vs TabPFN-REL | vs best |
 |---|---:|---:|---:|---:|---:|---:|
-| rel-f1 / driver-top3 | 82.48 | 79.98 | **85.69** | 82.72 | +2.50 | −3.21 |
-| rel-event / user-ignore | 81.76 | 85.38 | **86.18** | 73.70 | −3.62 | −4.42 |
-| rel-avito / user-visits | 65.61 | 66.68 | 66.18 | **66.76** | −1.07 | −1.15 |
-| rel-trial / study-outcome | 71.50 | **76.43** | 71.24 | 72.89 | −4.93 | −4.93 |
+| rel-f1 / driver-top3 | 81.98 | 79.98 | **85.69** | 82.72 | +2.00 | −3.71 |
+| rel-event / user-ignore | 80.16 | 85.38 | **86.18** | 73.70 | −5.22 | −6.02 |
+| rel-avito / user-visits | 65.54 | 66.68 | 66.18 | **66.76** | −1.14 | −1.22 |
+| rel-trial / study-outcome | 72.32 | **76.43** | 71.24 | 72.89 | −4.11 | −4.11 |
 
 Bold marks the best result per task. **None of them are ours** — we lead TabPFN-REL on
 rel-f1 but trail RelGNN there by 5, and trail everywhere else. Ours gets bolded when it
@@ -65,6 +65,35 @@ five points. Pair everything.
 ---
 
 ## Run log
+
+### 2026-08-05 — categorical codes were inconsistent across splits; all four re-measured
+`_numeric` called `pd.factorize` on each frame independently, and factorize codes by order
+of first appearance — so **the same category got different integers in train and test**. Not
+merely arbitrarily ordered but *inconsistently* ordered: the model learned a mapping that did
+not hold where it was applied. Categories are now fitted on train and reused, unseen values
+encoding to −1. Every number in the table was previously taken through this.
+
+| task | broken codes | fixed | Δ |
+|---|---:|---:|---:|
+| rel-f1 | 82.48 | 81.98 ± 0.87 | −0.50 (tie) |
+| **rel-trial** | 71.50 | **72.32 ± 0.94** | **+0.82** |
+| rel-event | 81.76 | 80.16 ± 1.98 | −1.60 |
+| rel-avito | 65.61 | 65.54 ± 0.11 | −0.07 (tie) |
+
+**rel-trial gains 0.82 and is now 0.57 from RDBLearn (72.89)**, comfortably past RelGNN.
+
+**The interesting part is what it did to selection.** rel-trial's validation now chooses
+`+rate` **5/5**, having chosen `+text+rate` 8/8 before. Fixing the encoding made the plain
+relational features good enough that **text no longer earns its place** — so today's text
+result was partly compensating for a defect elsewhere in the pipeline. The +2.14 attributed
+to text on 2026-08-05 should be read as "+2.14 given a broken categorical encoder", and the
+honest current statement is that text is not selected on rel-trial at all.
+
+*Two caveats, both against my own numbers.* rel-event's −1.60 compares 5 replicates against
+12, and its sd is 1.98, so that gap is about 1.8 standard errors and not established;
+it needs 12 replicates before the drop is believed. And every "gain" recorded earlier today
+was measured through the broken encoder, so the *sizes* of those gains are not reliable even
+where their direction was.
 
 ### 2026-08-05 — text representation size: 32 is right, and the encoder question is closed
 rel-trial, calibrated, only the SVD component count moving.
