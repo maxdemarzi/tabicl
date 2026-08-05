@@ -66,6 +66,36 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-05 — text gate: rel-trial is worth building, and my rel-f1 claim was wrong
+TF-IDF + SVD + logistic per text column, standalone, no GPU.
+
+| task | text columns | best column (test) | ours |
+|---|---:|---|---:|
+| rel-trial | 8 | `official_title` **64.10**, `detailed_descriptions` 62.88, `brief_title` 60.77, `brief_summaries` 60.20 | 69.36 |
+| rel-event | 1 | `location` 67.74 | 81.76 |
+| rel-f1 | **0** | — | 82.48 |
+| rel-avito | **0** | — | 65.61 |
+
+**Correction to the previous entry.** I wrote that text embedding explains the 31-point
+rel-f1 gap against RelBench's LightGBM baseline. **It does not: rel-f1's entity table has no
+free-text columns.** Its seven columns are ids, short names and a date. Whatever their
+baseline does better there, it is torch_frame's *categorical* stype handling — proper
+categorical encoding rather than my factorised integers — not embeddings. The same applies
+to rel-avito, also zero text columns. The general claim "we ignore text" stands; the
+specific attribution of rel-f1's gap to it was wrong and is withdrawn.
+
+**rel-trial is worth building.** Four columns score 60.2–64.1 standalone against a pipeline
+at 69.36. That ratio is the same one that justified the shared-key track record — its keys
+gave 60–61 against a 66.50 pipeline and went on to add **+5.45** — and unlike those keys,
+text is a genuinely different kind of signal rather than more aggregation of the same rows.
+
+*Two cautions carried into the build.* `official_title` and `brief_title` are near-unique
+(11,829 and 11,933 distinct over 11,994 rows), so they sit close to the identifier trap the
+gate is meant to exclude; they pass only because their tokens repeat even when the strings
+do not, and a leak here would look like a strong result. And `biospec_retention` failed
+outright — 11 features against 64 SVD components — which is a reminder to fit the encoder to
+the column rather than apply one setting everywhere.
+
 ### 2026-08-05 — why the LightGBM baseline could not be reproduced: it embeds text
 Read `examples/lightgbm_entity.py` in the RelBench repo rather than guessing a third time.
 The baseline merges task and entity tables exactly as we do, then builds a
