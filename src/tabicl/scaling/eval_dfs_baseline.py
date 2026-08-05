@@ -53,12 +53,15 @@ def _numeric(df: pd.DataFrame, cats: dict, fit: bool) -> np.ndarray:
     for col in out.columns:
         if pd.api.types.is_numeric_dtype(out[col]):
             continue
+        # DFS returns pandas Categorical columns, and assigning the -1 unseen-value sentinel
+        # into one raises rather than widening. Cast out of Categorical first.
+        series = out[col].astype(object)
         if fit:
-            codes, uniques = pd.factorize(out[col])
+            codes, uniques = pd.factorize(series)
             cats[col] = {v: i for i, v in enumerate(uniques)}
             out[col] = codes
         else:
-            out[col] = out[col].map(cats.get(col, {})).fillna(-1)
+            out[col] = series.map(cats.get(col, {})).fillna(-1)
     return np.nan_to_num(out.to_numpy(dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
 
 

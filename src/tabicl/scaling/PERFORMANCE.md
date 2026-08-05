@@ -73,6 +73,32 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-05 — child-table cap: a point available on test, declined on validation
+Every runner sliced `kids[:3]` — three child tables by dictionary order. **Only rel-trial is
+affected**: the other three have exactly 3 child tables, and removing the cap reproduced
+rel-f1 at 81.98 and rel-event at 80.16 to the decimal.
+
+| children | **val** | test |
+|---:|---:|---:|
+| **3 (kept)** | **68.65** | 72.32 ± 0.94 |
+| 6 | 68.59 | **73.19 ± 0.42** |
+| 8 | 68.16 | 72.33 ± 0.97 |
+| all 10 | 68.04 | 72.91 ± 0.74 |
+
+**73.19 would have put rel-trial above RDBLearn (72.89). It is declined.** Validation ranks
+3 first and 6 second, separated by 0.06 — noise — so the honest procedure keeps 3 and the
+0.87 on test is only reachable by looking at the answer. This is the second time today a
+near-table-changing number has been available by test-selection, after rel-avito's 66.21.
+
+*The more useful observation is that validation spans 0.61 across all four settings.* It has
+essentially **no power to choose child count on this task** — 960 validation rows cannot
+resolve differences this size. So the right conclusion is not "3 is better than 6" but
+"this decision cannot be made on our validation split", and 3 is kept because it is the
+incumbent and the cheapest, not because it won.
+
+*The cap was still worth removing:* `--children` is configurable now, and used-vs-available
+prints on every run, so the next task with ten child tables will not silently use three.
+
 ### 2026-08-05 — settled at 12 replicates: rel-event's drop was noise, rel-trial's gain is real
 Both post-fix numbers were 5-replicate figures compared against 12-replicate predecessors,
 which is a two-variable comparison — a replicate count is a variable.
