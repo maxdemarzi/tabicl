@@ -117,6 +117,11 @@ def main() -> None:
     ap.add_argument("--no-horizon", action="store_true",
                     help="ignore the 365-day resolution window. Wrong, and kept only to "
                          "measure what it is worth.")
+    ap.add_argument("--stratify-context", action="store_true",
+                    help="draw each resampled context in proportion to the training class "
+                         "balance. Only meaningful with --resample > 1: it removes the "
+                         "class-balance wobble between draws, which is noise added to the "
+                         "quantity resampling exists to average down.")
     ap.add_argument("--cv-folds", type=int, default=0,
                     help="select on k-fold CV over train instead of the single validation "
                          "split. 0 keeps the current behaviour. The val splits here are "
@@ -582,8 +587,24 @@ def main() -> None:
         for d in range(draws):
             # Draw d=0 is exactly the unresampled behaviour, so --resample 1 reproduces
             # every earlier number and the comparison stays single-variable.
-            take = rows if d == 0 else np.random.default_rng(
-                seed * 1000 + d).choice(n, size=len(rows), replace=False)
+            if d == 0:
+                take = rows
+            elif args.stratify_context:
+                # Draw each class in proportion to its share of the training set. A uniform
+                # draw lets class balance wander between draws, which is noise added to the
+                # very quantity resampling exists to average down -- and an accidentally
+                # skewed context is not hypothetical here: the graph-context arm once built
+                # one at a 0.02 positive rate against a 0.163 base rate.
+                r = np.random.default_rng(seed * 1000 + d)
+                parts = []
+                for cls in np.unique(y):
+                    pool = np.flatnonzero(y == cls)
+                    want = int(round(len(rows) * len(pool) / n))
+                    parts.append(r.choice(pool, size=min(want, len(pool)), replace=False))
+                take = np.concatenate(parts)
+            else:
+                take = np.random.default_rng(seed * 1000 + d).choice(
+                    n, size=len(rows), replace=False)
             clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
                                    random_state=seed,
                                    inference_config=NOAMP).fit(X[take], y[take])
