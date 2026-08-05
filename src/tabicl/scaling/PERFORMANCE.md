@@ -66,6 +66,35 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-04 — entity-only baseline, second attempt: still not reproduced. Stop guessing.
+Fixed the two obvious defects — datetimes now become *age at the cutoff* rather than being
+dropped, and near-unique object columns (`forename`, `surname`, `url`) are excluded instead
+of factorised into arbitrary row ids. It improved and still does not reproduce:
+
+| task | GBDT-entity, attempt 1 | attempt 2 | published | still short by |
+|---|---:|---:|---:|---:|
+| rel-f1 | 36.43 | 42.49 | 73.92 | **31.4** |
+| rel-avito | 50.68 | 50.68 | 53.05 | 2.4 |
+| rel-trial | OOM | 59.61 | 70.09 | **10.5** |
+
+**Two attempts is enough to stop guessing at their feature construction.** The remaining
+gap is too large to be tuning; their "entity features" almost certainly are not what this
+harness builds from `db.table_dict[entity]`. Either read RelBench's own baseline code or
+drop the comparison — do not publish a third guess, and do not quote our +30 over it.
+
+*What the run does establish*, one variable apart inside one harness:
+
+| task | relations are worth | our model over GBDT, same features |
+|---|---:|---:|
+| rel-f1 | **+19.80** | +10.41 |
+| rel-avito | **+14.40** | +1.08 |
+| rel-trial | **+1.74** | +1.11 |
+
+The flattening layer pays for itself — and **barely at all on rel-trial (+1.74)**, which is
+exactly the task where a published entity-only baseline is said to beat us. That is
+consistent with the relational features being near-useless there rather than with our
+model being weak, and it is why the base sweep matters more than another feature family.
+
 ### 2026-08-04 — entity-only baseline: harness does not reproduce it yet, do not quote
 Attempt to reproduce Rel-LLM's LightGBM-on-the-entity-table-alone baseline. Three arms so
 "relations do not help" and "our model is behind" stay separable.
