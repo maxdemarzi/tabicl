@@ -384,12 +384,10 @@ def main() -> None:
         aucs = np.array([r[0] for r in results])
         vals = np.array([r[3] for r in results])
         chose = [r[1] for r in results]
-        if all(c == "+counts" for c in chose):
-            print("\n*** WARNING: validation chose the counts-only arm, but the controls "
-                  "above were run on the positive-rate columns. The reported arm is "
-                  "UNCONTROLLED -- a permutation test is meaningless for counts (they do "
-                  "not depend on label values), so what this needs is a temporal control "
-                  "on the count columns specifically.", flush=True)
+        # (The old warning here said a counts-only choice was uncontrolled. That was true
+        # before controls 3 and 4 existed; now every arm is gated by a control on its own
+        # columns and an ineligible arm is never offered to validation, so the warning
+        # fired on results that *were* controlled. A warning that cries wolf gets ignored.)
         print(f"\n{args.dataset}/{args.task}  CALIBRATED TEST ROC-AUC x100 = {aucs.mean():.2f} "
               f"+- {aucs.std(ddof=1) if len(aucs) > 1 else 0:.2f} over {len(aucs)} "
               f"replicates (range {aucs.min():.2f}-{aucs.max():.2f})", flush=True)
