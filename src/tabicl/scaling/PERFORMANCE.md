@@ -25,7 +25,7 @@ paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model resu
 | rel-f1 / driver-top3 | 82.48 | 79.98 | **85.69** | 82.72 | +2.50 | −3.21 |
 | rel-event / user-ignore | 81.76 | 85.38 | **86.18** | 73.70 | −3.62 | −4.42 |
 | rel-avito / user-visits | 65.61 | 66.68 | 66.18 | **66.76** | −1.07 | −1.15 |
-| rel-trial / study-outcome | 70.26 | **76.43** | 71.24 | 72.89 | −6.17 | −6.17 |
+| rel-trial / study-outcome | 71.50 | **76.43** | 71.24 | 72.89 | −4.93 | −4.93 |
 
 Bold marks the best result per task. **None of them are ours** — we lead TabPFN-REL on
 rel-f1 but trail RelGNN there by 5, and trail everywhere else. Ours gets bolded when it
@@ -65,6 +65,29 @@ five points. Pair everything.
 ---
 
 ## Run log
+
+### 2026-08-05 — child text lifts rel-trial to 71.50, past RelGNN, and as-of filtering proves itself
+Child-table text aggregated **as of each row's cutoff**, 8 calibrated replicates.
+
+**71.50 ± 0.38, `+text+rate` chosen 8/8** — up from 70.26, and past **RelGNN's 71.24**. The
+first published system this project has overtaken on any task. Still short of RDBLearn
+(72.89) and TabPFN-REL (76.43), so rel-trial is not won.
+
+A/B, base features identical: base 63.82, `+counts` 64.68, `+rate` 69.27, `+text` **69.68**
+(was 68.25 with entity text only), `+text+rate` **71.41**. Child text adds +1.43 to the text
+arm, and text and outcome history remain complementary.
+
+**The as-of filter did visible work, and this is the part worth keeping.** Of 26 candidate
+child text columns, only `designs.*` and `eligibilities.*` survived. Every `outcomes.*` and
+`outcome_analyses.*` column **emptied out entirely** — a trial's outcome text is written
+after it finishes, so at prediction time none of it exists.
+
+Those are exactly the columns the naive gate scored highest: `outcomes.title` at 63.23,
+`outcomes.description` at 61.85. Reading them would have meant predicting a trial's outcome
+from the write-up of its outcome. The gate had no way to see it, because it concatenated
+without regard to time; the as-of filter removed them without anyone having to notice. That
+is the structural-over-procedural principle working as intended — the leak was made
+impossible rather than tested for.
 
 ### 2026-08-05 — rel-trial at 12 replicates: 70.26 ± 1.38, and a child column is being missed
 Twelve replicates give **70.26 ± 1.38** against 70.36 ± 1.74 on five — consistent and
