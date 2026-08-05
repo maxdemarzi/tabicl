@@ -359,8 +359,11 @@ def main() -> None:
         for seed in range(args.seeds):
             best = None
             print(f"\n-- seed {seed}: selection (validation only) --", flush=True)
-            n_train = len(arms["base"][0])
-            grid = sorted({max(1000, n_train // 4), max(2000, n_train // 2), n_train})
+            # Capped at --context, not at the training-set size: rel-avito has 86,619 rows
+            # and a grid scaled to that asks for contexts an L40S will not fit, so the run
+            # dies rather than reporting a smaller honest number.
+            cap = min(len(arms["base"][0]), args.context)
+            grid = sorted({max(1000, cap // 4), max(2000, cap // 2), cap})
             for name in arms:
                 for size in grid:
                     n = len(arms[name][0])
