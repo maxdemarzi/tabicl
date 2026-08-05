@@ -174,18 +174,35 @@ def main() -> int:
     auth()
 
     if args.action == "create":
-        for attempt in range(1, 9):
+        # Rejected hosts are remembered. Without this the loop happily takes eight pods
+        # from the same broken machine: one run hit 60.249.37.148 eight times in a row,
+        # every one with CUDA unusable, because a fresh pod on a bad host looks exactly
+        # like a fresh pod. Repeated failures also escalate to SECURE, since a community
+        # datacentre with broken drivers stays broken for the whole retry loop.
+        bad_hosts: set[str] = set()
+        for attempt in range(1, 13):
+            if len(bad_hosts) >= 2 and CLOUDS[0] != "SECURE":
+                CLOUDS.reverse()
+                print(f"  {len(bad_hosts)} bad hosts on {CLOUDS[-1]} -- escalating to "
+                      f"{CLOUDS[0]}", flush=True)
             pod = find_pod() or create()
             pod, target = wait_ready(pod["id"])
+            if target[0] in bad_hosts:
+                print(f"attempt {attempt}: {target[0]} already rejected -- skipping",
+                      flush=True)
+                runpod.terminate_pod(pod["id"])
+                time.sleep(5)
+                continue
             print(f"attempt {attempt}: ssh ready root@{target[0]} -p {target[1]}", flush=True)
             usable, why = probe_host(target)
             if usable:
                 print(f"USABLE ({why})  ssh root@{target[0]} -p {target[1]}", flush=True)
                 return 0
             print(f"  rejected: {why} -- terminating and taking another host", flush=True)
+            bad_hosts.add(target[0])
             runpod.terminate_pod(pod["id"])
             time.sleep(10)
-        raise SystemExit("no usable host after 8 attempts")
+        raise SystemExit(f"no usable host after 12 attempts; rejected {sorted(bad_hosts)}")
 
     pod = find_pod()
     if not pod:
