@@ -176,10 +176,23 @@ a large random context every replicate. So recency joins graph-neighbour context
 resampling, child count and per-key selection on the list of effects that are real on test
 and not selectable — the fifth.
 
-*(Two flaws in that run, both mine. It omitted `--timed-links-only`, which the standing
-80.98 requires, so its 78.72 is not comparable to the table. And the output filter dropped
-the per-configuration `val=` lines, leaving no way to see how far behind the recency
-configurations scored. Re-running with both fixed.)*
+*(Two flaws in that run, both mine. It omitted `--timed-links-only`, so its 78.72 includes
+rel-event's two **untimed** `user_friends` link tables and the `+struct` arm it selected is
+an upper bound rather than a causal result — not comparable to the standing 80.98. And the
+output filter dropped the per-configuration `val=` lines, leaving no record of how far
+behind the recency configurations scored. Both fixed for the re-run.)*
+
+*The same caveat does **not** apply to the other tasks, which I initially claimed it did:
+all four of rel-avito's link tables carry timestamps and all five of rel-trial's do, so
+`--timed-links-only` is a no-op on both. rel-event is the only task in the benchmark where
+the flag changes anything.*
+
+**On rel-avito the calibrated protocol *chose* recency, 3/3** (`recent`, `recent-half`,
+`recent`, all at context 10,000, arm `+struct`), giving **65.62 ± 0.16** against a standing
+**65.54 ± 0.11**. That is a legitimate calibrated result and the first time a recency
+setting has been selected — and it is +0.08, comfortably inside the ±0.6 floor, so it is a
+tie rather than a gain. The gate's +0.90 did not survive calibration, which is the usual
+fate of a gate result and the reason the gate is not the table.
 
 **Why validation rejects it is structural, and measurable.** The train→validation gap is
 smaller than the train→test gap on every task in the benchmark:
