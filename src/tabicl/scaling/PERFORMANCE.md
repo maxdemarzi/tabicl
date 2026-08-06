@@ -123,6 +123,42 @@ seeds to see whether validation resolves it. The reproducibility argument for
 `--top-children` stands on its own regardless of the outcome, since the thing it replaces
 is not well-defined.
 
+### 2026-08-05 — the prediction timestamp: +2.96 on rel-event, −0.68 on rel-trial
+
+Both runners drop every datetime column when assembling the entity block, the cutoff
+included, so nothing downstream could tell a Monday from a Saturday. Eight columns —
+day-of-week, day, month, a weekend flag and sine/cosine pairs — plus a ninth for the
+monotone trend, kept separate because every test row lies beyond the training range on it.
+
+Gated paired by seed, 5 seeds, identical everything else:
+
+| task | horizon | train span | `calendar` | `calendar-trend` |
+|---|---:|---:|---:|---:|
+| **rel-event** | 7 d | 147 d (≈21 weeks) | **+2.96** (SE 0.42, 5/5) | **+3.56** (SE 0.43, 5/5) |
+| rel-avito | 4 d | **8 d** (≈1 week) | +0.09 (SE 0.13) | +0.17 (SE 0.25) |
+| rel-trial | 365 d | 6,570 d | **−0.68** (SE 0.31, 1/5) | −0.54 (SE 0.22) |
+
+**It is a short-horizon feature that also needs a long enough training span**, and rel-event
+is the only task with both. rel-avito's horizon is short but its training window is barely
+one week, so there is no weekly rhythm to learn; rel-trial's horizon is a year, over which
+day-of-week is noise, and the eight columns dilute — it clears the floor *downwards*.
+
+**Unlike recency, this has a real chance of being selected.** Recency's value grows with
+distance from the training period, which is exactly what validation cannot see. A weekly
+rhythm is stationary and validation has the same one test does. Promotion running.
+
+**Also measured, and all null:**
+
+| variant | rel-event | rel-avito | rel-trial |
+|---|---:|---:|---:|
+| `timing` (recency/age/span per child, 27 cols) | +0.91 (SE 0.73) | −0.57 (SE 0.28) | −0.60 (SE 0.42) |
+| `narrow` (budget the nunique block) | +0.32 | n/a | +0.24 |
+| `booleans` (rates instead of a nunique) | n/a | n/a | −0.24 |
+
+`timing` is the one I expected most from and it is worth nothing: 27 columns, negative on
+two tasks. `booleans` fired for the first time here — 26 columns changed on rel-trial, so
+the `'t'`/`'f'` detection works — and does nothing.
+
 ### 2026-08-05 — context temporal locality: large on rel-event, absent everywhere else
 
 The context is drawn uniformly at random from train. Nobody chose that, and the selection
