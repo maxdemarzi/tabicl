@@ -82,6 +82,24 @@ MODEL_VARIANTS = {
     "outliers-off": dict(outlier_threshold=1e9),
 }
 
+# Variants that change WHICH training rows become context. Also same features both arms.
+#
+# The context is drawn uniformly at random from train, which is a choice nobody made. The
+# selection thread ended by diagnosing the train-to-test gap as *temporal*: resampling
+# improved coverage of the training pool and gained ~7.5 on every criterion scored on
+# held-out train rows while test fell 1.44, because a later period is not the same
+# distribution. A recency-weighted context attacks that diagnosis directly instead of
+# working around it.
+#
+# And unlike resampling, this one is selectable. RelBench splits are temporal -- train
+# then val then test -- so validation is itself a later period than train and can see a
+# recency effect. What could not judge resampling was cross-validation over held-out
+# *train* rows, which is a different instrument from the validation split.
+CONTEXT_VARIANTS = {
+    "recent": "the most recent rows by timestamp",
+    "recent-half": "uniform within the most recent half of train",
+}
+
 
 def _numeric(df: pd.DataFrame, codes: dict, fit: bool) -> np.ndarray:
     """Encode to float with one codebook shared by train and test.
@@ -107,7 +125,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("dataset", nargs="?", default="rel-trial")
     ap.add_argument("task", nargs="?", default="study-outcome")
-    ap.add_argument("--variant", choices=sorted(set(VARIANTS) | set(MODEL_VARIANTS)),
+    ap.add_argument("--variant",
+                    choices=sorted(set(VARIANTS) | set(MODEL_VARIANTS) | set(CONTEXT_VARIANTS)),
                     default="categories")
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--context", type=int, default=10000)
@@ -159,7 +178,8 @@ def main() -> None:
         return pd.concat(blocks, axis=1)
 
     model_side = args.variant in MODEL_VARIANTS
-    feature_extra = {} if model_side else VARIANTS[args.variant]
+    context_side = args.variant in CONTEXT_VARIANTS
+    feature_extra = {} if (model_side or context_side) else VARIANTS[args.variant]
 
     frames, widths = {}, {}
     for label, extra in (("base", {}), (args.variant, feature_extra)):
@@ -179,9 +199,10 @@ def main() -> None:
     # `numeric_booleans` a no-op. Refuse to score identical inputs.
     added = [c for c in widths[args.variant] if c not in set(widths["base"])]
     removed = [c for c in widths["base"] if c not in set(widths[args.variant])]
-    if model_side:
-        print(f"{args.variant}: model-side, identical features both arms "
-              f"({len(widths['base'])} columns): {MODEL_VARIANTS[args.variant]}", flush=True)
+    if model_side or context_side:
+        detail = MODEL_VARIANTS[args.variant] if model_side else CONTEXT_VARIANTS[args.variant]
+        print(f"{args.variant}: {'model' if model_side else 'context'}-side, identical "
+              f"features both arms ({len(widths['base'])} columns): {detail}", flush=True)
     elif not added and not removed:
         raise SystemExit(
             f"variant {args.variant!r} changed no columns ({len(widths['base'])} either "
@@ -199,14 +220,31 @@ def main() -> None:
                                **(extra or {})).fit(X[rows], y[rows])
         return roc_auc_score(y_te, clf.predict_proba(Xe)[:, 1]) * 100
 
+    # Train row order by time, for the context variants. Ties keep their original order so
+    # the choice is reproducible.
+    train_order = np.argsort(train[tcol].to_numpy(), kind="stable")
+
+    def context_rows(rng, n, size, variant):
+        if variant == "recent":
+            # Deterministic given the size, so its only seed-to-seed variation is the
+            # model's -- which is the point: if this helps, it helps without a draw.
+            return train_order[-size:]
+        if variant == "recent-half":
+            pool = train_order[len(train_order) // 2:]
+            return rng.choice(pool, size=min(size, len(pool)), replace=False)
+        return rng.choice(n, size=size, replace=False)
+
     print(f"\n{'seed':>5} {'base':>9} {args.variant:>11} {'gap':>8}", flush=True)
     gaps = []
     for seed in range(args.seeds):
         rng = np.random.default_rng(seed)
         n = len(frames["base"][0])
-        rows = rng.choice(n, size=min(args.context, n), replace=False)
+        size = min(args.context, n)
+        rows = rng.choice(n, size=size, replace=False)
         a = score(*frames["base"], rows, seed)
-        b = score(*frames[args.variant], rows, seed,
+        b_rows = context_rows(np.random.default_rng(seed), n, size, args.variant) \
+            if context_side else rows
+        b = score(*frames[args.variant], b_rows, seed,
                   MODEL_VARIANTS[args.variant] if model_side else None)
         gaps.append(b - a)
         print(f"{seed:>5} {a:>9.2f} {b:>11.2f} {b - a:>+8.2f}", flush=True)
