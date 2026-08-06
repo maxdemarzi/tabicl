@@ -155,15 +155,30 @@ Calibrated, `--timed-links-only`, 3 replicates each:
 almost exactly, with the spread five times tighter (0.21 against 1.08). The monotone trend
 column adds nothing and triples the variance, so the safe option is also the better one.
 
-**The validation comparison does not decide anything, and I initially read it as though it
-did.** −1.92 against a combined SE near 1.2 is about 1.6 SE — and this same log records
-that rel-event needs *twelve* replicates to resolve 1.6 points, its standing 80.98 being a
-12-replicate figure with sd 2.07 whose replicates span 76.67 to 85.46. Three replicates
-cannot settle it either way.
+**The validation comparison decides it, and it takes pairing to see that.** I first read
+−1.92 against the summary sds (0.43 and 1.12) as ~1.6 SE and called it undecided. That is
+the wrong denominator: seed *i* draws the same rows and the same model randomness in both
+runs, so the per-seed differences are the statistic.
 
-So calendar on rel-event is **undecided**, not rejected. Re-running both arms at 12
-replicates, because the decision is worth about 4.7 AUC: adoption would take rel-event from
-80.98 to roughly 85.7, past TabPFN-REL's 85.38 and within half a point of RelGNN's 86.18.
+| seed | none val | cal val | Δval | none test | cal test | Δtest |
+|---|---:|---:|---:|---:|---:|---:|
+| 0 | 86.68 | 84.19 | −2.49 | 83.92 | 85.78 | +1.86 |
+| 1 | 87.16 | 85.04 | −2.12 | 82.29 | 85.46 | +3.17 |
+| 2 | 87.54 | 86.41 | −1.13 | 81.88 | 85.86 | +3.98 |
+
+**Δval −1.91, sd 0.70, SE 0.41 → 4.7 SE. Δtest +3.00, sd 1.07, SE 0.62 → 4.9 SE.** Both
+unanimous. Three replicates are ample once paired, and twelve would have been 1.5 hours
+spent re-answering a settled question.
+
+So **validation decisively rejects calendar and test decisively prefers it** — a sharp
+anti-correlation, and the third independent demonstration of it on this task after recency
+(+7.50, rejected 3/3) and the earlier categorical result (validation 81.63 vs 81.40 while
+test said −3.52). **rel-event's validation split anti-predicts its test split**, and that is
+now a property of the task rather than a run of bad luck.
+
+Calendar is therefore the seventh effect here that is real on test and not selectable, and
+the one with the most at stake: adoption would take rel-event from 80.98 to roughly 85.7,
+past TabPFN-REL's 85.38 and within half a point of RelGNN's 86.18.
 
 *Also worth noting: within the calendar family validation ranks correctly, putting
 `--calendar --time-deltas` top, which is also the best on test. Only the calendar-versus-none
