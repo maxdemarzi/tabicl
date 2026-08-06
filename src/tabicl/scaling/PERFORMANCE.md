@@ -73,6 +73,54 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-05 — context temporal locality: large on rel-event, absent everywhere else
+
+The context is drawn uniformly at random from train. Nobody chose that, and the selection
+thread had already diagnosed the train→test gap as temporal. `recent` takes the most recent
+rows by timestamp instead. Paired by seed, identical features both arms, 5 seeds:
+
+| task | train span | train→test gap | recency @ ctx 10,000 | recency @ ctx 1,000 |
+|---|---:|---:|---:|---:|
+| **rel-event** | 147 d | 15 d | +0.31 (SE 0.57) | **+7.50** (SE 0.96, 5/5) |
+| rel-avito | 8 d | 10 d | +0.90 (SE 0.34) | −1.50 (SE 0.97) |
+| rel-trial | 6,570 d | 731 d | +0.99 (SE 0.28) | −1.42 (SE 1.04) |
+| rel-f1 | 3,870 d | 1,976 d | not measurable¹ | −0.33 (SE 0.50) |
+
+¹ context 10,000 covers all 1,353 training rows, so `recent` selects the same set as
+`random`; the runner skips it rather than report the noise.
+
+**The mechanism is temporal locality, and it is available on exactly one task.** Recency
+pays when the recent slice sits much closer to the test period than an average training
+row. rel-event's last 1,000 rows cover roughly the final week of a 147-day span with test
+15 days later. Everywhere else the gap dwarfs the span — 731 days on rel-trial, 1,976 on
+rel-f1 — and rel-avito's entire training set is 8 days wide, so there is nothing to buy and
+the narrower context only costs diversity. rel-avito @1,000 was a *prediction* of this
+account before it was measured, and it came back −1.50.
+
+**Two explanations were tried and discarded first**, both worth recording because each
+looked convincing at the time:
+
+* *"Recency is a general property of temporal splits."* The @10,000 column alone supports
+  it — +0.90 and +0.99, two tasks, same direction. The @1,000 column reverses both signs.
+* *"It is a class-balance effect."* At context 10,000 the context whose positive rate sits
+  nearer the test prior wins on all four tasks, which is a 4/4 match. At context 1,000 the
+  two largest results both contradict it: rel-event's recent slice is *farther* from the
+  test prior (0.0412 vs 0.0328) and gains 7.50, and rel-trial's is much *closer* (0.0105 vs
+  0.0555) and loses 1.42.
+
+**rel-event `recent` @1,000 scores 86.83 / 86.81 / 87.03 / 86.58 / 86.59** — mean 86.77,
+sd 0.18 — against our standing **80.98** and RelGNN's published **86.18**. The tight spread
+is expected, not suspicious: `recent` is deterministic, so all five seeds share one context
+and only the model varies. It beats the standing *configuration* by 5.8, so it is not an
+artefact of comparing against a weak small-context baseline.
+
+**This is test-side and is not in the table.** It enters only if the calibrated protocol
+selects it on validation. One change was needed before that is even possible: the
+calibrated grid runs `cap//4, cap//2, cap` = 2,500 / 5,000 / 10,000, so it could never have
+tried the setting that produces the effect — it would have measured the diluted +0.31 and
+concluded recency does nothing. The grid now extends to 1,000 whenever more than one
+context order is offered.
+
 ### 2026-08-05 — two feature blocks that had never run in production, now measured and dead
 
 `eval_track_record` builds every child `Table` with `windows` and `max_columns` and nothing
