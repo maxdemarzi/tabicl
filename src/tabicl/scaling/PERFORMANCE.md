@@ -20,12 +20,12 @@ RelBench, official protocol. Test ROC-AUC x100. Comparison columns are the publi
 figures from the TabPFN-3 technical report's Table 14 (arXiv 2605.13986); RelGNN is the
 paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model result.
 
-| task | ours | DFS † | TabPFN-REL | RelGNN | RDBLearn+v3 | vs TabPFN-REL | vs best |
+| task | ours, calibrated | ours, best config ‡ | DFS † | TabPFN-REL | RelGNN | RDBLearn+v3 | calibrated vs best published |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| rel-f1 / driver-top3 | 81.98 | 76.81 | 79.98 | **85.69** | 82.72 | +2.00 | −3.71 |
-| rel-event / user-ignore | 80.98 | 77.95 | 85.38 | **86.18** | 73.70 | −4.40 | −5.20 |
-| rel-avito / user-visits | 65.54 | 65.81 | 66.68 | 66.18 | **66.76** | −1.14 | −1.22 |
-| rel-trial / study-outcome | 72.26 | 69.12 | **76.43** | 71.24 | 72.89 | −4.17 | −4.17 |
+| rel-f1 / driver-top3 | 81.98 | 84.61 | 76.81 | 79.98 | **85.69** | 82.72 | −3.71 |
+| rel-event / user-ignore | 80.98 | 86.77 | 77.95 | 85.38 | **86.18** | 73.70 | −5.20 |
+| rel-avito / user-visits | 65.54 | 66.21 | 65.81 | 66.68 | 66.18 | **66.76** | −1.22 |
+| rel-trial / study-outcome | 72.26 | 73.56 | 69.12 | **76.43** | 71.24 | 72.89 | −4.17 |
 
 † **DFS is measured here, not published.** Deep Feature Synthesis (Featuretools) run over the
 same tables with per-row cutoff times and scored by **the same TabICL, same context, same
@@ -34,10 +34,29 @@ another system with its own model, so DFS is the one entry that isolates *our ag
 from *our model*. It is the baseline the phrase "a generic flattening pipeline" has been
 implicitly claiming parity with since this file began; `RESEARCH.md` 6e.
 
-Bold marks the best result per task. **None of them are ours** — we lead TabPFN-REL on
-rel-f1 but trail RelGNN there by 5, and trail everywhere else. Ours gets bolded when it
-wins a row, not before. rel-trial moved 66.50 → 69.36 on 2026-08-04 and is still last on
-that task; a narrowed gap is not a win.
+‡ **"Best config" is an upper bound selected with knowledge of test. It is not a claim,
+and it is never bolded.** It is included because the columns beside it are not measured the
+way our calibrated column is: the TabPFN-3 report states it takes baselines "as provided by
+the authors of the methods to ensure well-tuned baselines", chose KumoRFMv2's settings
+because they "found to slightly outperform" the defaults, and headlines the best of three
+RDBLearn variants. Reporting one strictly-selected number against that is not like-for-like
+in our favour. Provenance differs per row and matters:
+
+| task | best config | how measured |
+|---|---|---|
+| rel-f1 | 84.61 | calibrated protocol + `--fit-on-train-val`, 8 replicates, paired +2.48 (4.3 SE) |
+| rel-event | 86.77 | base features, 1,000-row **recent** context, 5 seeds (sd 0.18). A gate measurement, *not* the calibrated pipeline — the least comparable entry here. The calibrated-pipeline best is 85.70 with `--calendar` |
+| rel-avito | 66.21 | top-1 key, 5 replicates |
+| rel-trial | 73.56 | calibrated protocol + `--fit-on-train-val`, 8 replicates |
+
+Every one of these was **rejected by the validation split** — that is the point of the
+`STATUS.md` section on the selection constraint, and the reason they are not in the
+calibrated column. rel-event's 86.77 exceeds RelGNN's published 86.18, and that comparison
+is *not* a claim of superiority: one number was chosen on test and the other was not.
+
+Bold marks the best result per task among the comparable columns. **None of them are
+ours** — we lead TabPFN-REL on rel-f1 but trail RelGNN there by 3.7, and trail everywhere
+else. Ours gets bolded when it wins a row on the calibrated column, not before.
 
 Ours are **calibrated**: every setting chosen on a validation split, test touched once,
 AMP off, selection and scoring at the same `n_estimators`. The published figures are
