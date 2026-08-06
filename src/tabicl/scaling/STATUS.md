@@ -171,11 +171,31 @@ overall statistic when group sizes vary. Sufficient statistics compose to the ex
 root-level quantity. Both are legitimate features; only one is the number you probably
 meant.
 
-**Not benchmarked against DFS.** This comparison is analytical, not measured — "a generic
-flattening pipeline" is currently a self-description. Running Featuretools over the same
-four tasks and the same protocol would establish whether this layer beats the standard
-automated approach or merely differs from it, and it is the most useful missing baseline
-in the project. Until then, no claim of superiority over DFS is being made here.
+**Now benchmarked against DFS.** Featuretools was run over the same four tasks with
+per-row cutoff times and scored by the same TabICL, same context, same seeds — only the
+feature builder differs, which makes it the one comparison isolating *our aggregation*
+from *our model*. DFS was given the tuned primitive set, not the default one.
+
+Paired by seed, so the "ours" column is our layer *in the matching configuration* and not
+the calibrated headline number:
+
+| task | DFS | ours | ours − DFS | feature build |
+|---|---:|---:|---:|---|
+| rel-f1 / driver-top3 | 76.81 | 81.84 | **+5.03** (sd 1.49, 5/5) | 28 s → **1 s** |
+| rel-event / user-ignore | 77.95 | 80.34 | **+2.39** (sd 3.16, 4/5) | 119 s → **25 s** |
+| rel-trial / study-outcome | 69.12 | 69.56 | +0.45 (sd 0.50, 5/5) | 20 s → **2 s** |
+| rel-avito / user-visits | 65.81 | 65.51 | −0.30 (sd 0.52, 2/5) | 414 s → **18 s** |
+
+Two wins, two ties inside the ±0.6 floor, and features built 5–23× faster — on rel-avito
+DFS spent seven minutes to produce 94 columns. So "a generic flattening pipeline" was too
+modest on half the benchmark and exactly right on the other half.
+
+Two caveats worth carrying. Both sides used three child tables, so this is DFS-on-3
+against ours-on-3 rather than against the full layer. And **rel-avito is the one task
+where DFS is ahead**, which is also the task where we sit nearest a published win — those
+two facts probably belong together.
+
+See `PERFORMANCE.md`, 2026-08-05 entry (RESEARCH 6e), for the protocol and per-seed numbers.
 
 ## Measured results
 
