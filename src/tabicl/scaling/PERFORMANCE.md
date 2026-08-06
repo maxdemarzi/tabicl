@@ -2184,6 +2184,46 @@ often — are graph models over a schema that includes the task table, so past l
 reach a node through message passing without anyone designing a feature. Our two worst
 placings are both rel-f1, and rel-f1 is where this signal is strongest.
 
+### 2026-08-06 — label history on TEST: the gate ranked the tasks backwards
+
+The gate above measured this feature over **training** rows, where an entity's previous
+outcome is one event old. At test the pool freezes at the end of train and every query
+reads across a widening gap. I recorded that as the hazard that decides the feature. It
+did, and it inverted the ranking — the two tasks the gate liked most are the two it was
+most wrong about. Pool is the training split, horizon applied, scored on test:
+
+| task | train-row gate | test coverage | **test AUC** | pool=train+val | our pipeline |
+|---|---:|---:|---:|---:|---:|
+| rel-f1 / driver-top3 | 84.66 | 35.3% | **56.89** | 59.42 | 81.98 |
+| rel-f1 / driver-dnf | 74.27 | 35.2% | **65.20** | 67.55 | 69.66 |
+| rel-event / user-ignore | 81.72 | 68.1% | **85.35** | 83.24 | 80.98 |
+| rel-event / user-repeat | 67.17 | 68.7% | **78.61** | 79.28 | 77.89 |
+
+**Mechanism, and it is the same one as `recency`.** Drivers race in seasons: the test
+window is a later season, the frozen pool loses two thirds of its coverage (93% → 35%), and
+what remains is a stale observation of a driver whose form has moved. driver-top3 falls
+from 84.66 to 56.89 — barely above chance. rel-event goes the other way because a user's
+propensity to ignore an invitation persists and the test window sits close, so coverage
+holds near 68% and the signal survives intact.
+
+**This is why a train-row gate cannot promote a temporal feature.** Nothing about the gate
+was wrong as a measurement; it answered a question about training rows, and the question
+that matters is about a gap that training rows never see. Two tasks' worth of pod time was
+about to be spent on the rel-f1 pair on the strength of it.
+
+**Do not read 85.35 against 80.98 as a 4.37 gain.** The standalone AUC is over the **68.1%
+of rows that have any history**, and the pipeline's 80.98 is over all of them. Comparing
+scores computed on different row sets is the error this file has caught before. What the
+pair licenses is that the feature is strong *where it applies* on this task, and nothing
+about the combination — which is what the paired A/B measures.
+
+**Consequences for what to run.** rel-event is where this belongs; rel-f1 is demoted to a
+control, kept because a feature that is weak-but-not-absent may still cost something when
+added. rel-trial remains excluded by construction (coverage 0.0%). Pool stays `train` —
+the fitting split — even though `train+val` is better on user-repeat, because the choice
+that varies by task is a selection decision and this file's central finding is that
+selection on this benchmark is biased.
+
 ### 2026-08-06 — the backbone hypothesis, weakened by a ladder already in the table
 
 The open question below asks whether our gap to the flatten-then-TFM peers is featurization
