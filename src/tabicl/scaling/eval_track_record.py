@@ -166,6 +166,12 @@ def main() -> None:
                          "base sweep measures max_columns=None at +23.38 on rel-f1's "
                          "validation split against the 2 hardcoded here, while rel-event "
                          "loses 1.36 by the same change. Set it per task.")
+    ap.add_argument("--top-children", type=int, default=0,
+                    help="keep the N child tables with the strongest single column on "
+                         "validation, instead of the first N in dictionary order. WHICH "
+                         "children, not how many -- the count has been swept, the identity "
+                         "never has. --top-keys does exactly this for link tables and "
+                         "measured them 53 to 82 apart on rel-event.")
     ap.add_argument("--categories", type=int, default=0,
                     help="emit a per-category proportion block for each categorical child "
                          "column: the N most frequent values plus an 'other' bucket. 0 is "
@@ -224,6 +230,61 @@ def main() -> None:
                 for fk, pt in (t.fkey_col_to_pkey_table or {}).items()
                 if pt == entity and t.time_col]
     kids = all_kids if args.children <= 0 else all_kids[: args.children]
+    if args.top_children and len(all_kids) > args.top_children:
+        # WHICH child tables, not how many. `--children N` sweeps the count and has been
+        # swept; the identity has always been `all_kids[:N]`, which is dictionary order --
+        # the same storage-order selection that put `kids[:3]` on rel-trial's three least
+        # useful children and picked child text rows by row position instead of by time.
+        #
+        # `--top-keys` already does this for link tables and measured them 53 to 82 apart
+        # on rel-event. There is no reason child tables are more equal than link tables,
+        # and no reason dictionary order should find the good ones.
+        #
+        # Ranked on VALIDATION and univariately, so it costs no fit: a column's own AUC
+        # against the validation target needs no model. Distance from chance, because a
+        # strongly anti-correlated column is as informative as a correlated one.
+        val_rank = task.get_table("val", mask_input_cols=False).df
+        truth = val_rank[target].to_numpy()
+        shuffled = np.random.default_rng(0).permutation(truth)
+
+        def best_column(block, labels):
+            """Largest distance from chance any single column of this block reaches."""
+            if len(np.unique(labels)) < 2:
+                return 0.0
+            best = 0.0
+            for col in block.columns:
+                values = block[col].to_numpy(dtype=np.float64)
+                if not np.isfinite(values).any():
+                    continue
+                filled = np.nan_to_num(values, nan=float(np.nanmedian(values)),
+                                       posinf=0.0, neginf=0.0)
+                if len(np.unique(filled)) < 2:
+                    continue
+                best = max(best, abs(roc_auc_score(labels, filled) * 100 - 50.0))
+            return best
+
+        scored = []
+        for spec in all_kids:
+            n, fk, tc = spec
+            table = Table(db.table_dict[n].df, fk, n, time_column=tc, windows=WINDOWS,
+                          max_columns=max_cols)
+            block = asof_statistics(table, val_rank[key].to_numpy(),
+                                    val_rank[tcol].to_numpy())
+            # A maximum over k columns grows with k even under pure noise, so ranking
+            # children by their best column would rank them by how WIDE they are. The same
+            # maximum against a permuted target measures exactly that width, on this
+            # block's own column count and missingness -- so the difference is the part
+            # that is about signal. Same idea as the permutation control, applied to a
+            # selection step rather than to a result.
+            signal, null = best_column(block, truth), best_column(block, shuffled)
+            scored.append((signal - null, signal, null, len(block.columns), spec))
+        scored.sort(key=lambda r: -r[0])
+        print("child ranking on validation (best column above its own permuted null):",
+              flush=True)
+        for margin, signal, null, width, spec in scored:
+            print(f"  {spec[0]:<22} {margin:>+6.1f}  (best {signal:.1f}, "
+                  f"null {null:.1f}, {width} cols)", flush=True)
+        kids = [s[4] for s in scored[: args.top_children]]
     print(f"child tables: using {len(kids)} of {len(all_kids)} available "
           f"{[k[0] for k in kids]}", flush=True)
 
