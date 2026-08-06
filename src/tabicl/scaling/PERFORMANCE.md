@@ -140,6 +140,35 @@ argument rather than on a measurement. `--children-order name` is the other defe
 specification, and it is arbitrary but neutral. The one option that should not stand is the
 current default.
 
+### 2026-08-05 — calendar on rel-event: +3.00 on test, and the validation verdict is UNDECIDED
+
+Calibrated, `--timed-links-only`, 3 replicates each:
+
+| flags | val | test |
+|---|---:|---:|
+| none | **87.13 ± 0.43** | 82.70 ± 1.08 |
+| `--calendar` | 85.21 ± 1.12 | **85.70 ± 0.21** |
+| `--calendar --calendar-trend` | 85.25 ± 0.96 | 85.53 ± 0.93 |
+| `--calendar --time-deltas` | 85.56 ± 1.09 | 86.59 ± 2.10 |
+
+**The test gain is not in doubt.** +3.00 over the baseline, reproducing the gate's +2.96
+almost exactly, with the spread five times tighter (0.21 against 1.08). The monotone trend
+column adds nothing and triples the variance, so the safe option is also the better one.
+
+**The validation comparison does not decide anything, and I initially read it as though it
+did.** −1.92 against a combined SE near 1.2 is about 1.6 SE — and this same log records
+that rel-event needs *twelve* replicates to resolve 1.6 points, its standing 80.98 being a
+12-replicate figure with sd 2.07 whose replicates span 76.67 to 85.46. Three replicates
+cannot settle it either way.
+
+So calendar on rel-event is **undecided**, not rejected. Re-running both arms at 12
+replicates, because the decision is worth about 4.7 AUC: adoption would take rel-event from
+80.98 to roughly 85.7, past TabPFN-REL's 85.38 and within half a point of RelGNN's 86.18.
+
+*Also worth noting: within the calendar family validation ranks correctly, putting
+`--calendar --time-deltas` top, which is also the best on test. Only the calendar-versus-none
+decision is inverted — and that is the one the replicate count cannot resolve.*
+
 ### 2026-08-05 — CORRECTION: the categorical blocks are not dead, they were measured on the wrong configuration
 
 Earlier today I closed the categorical blocks on the basis of five gate measurements, the
