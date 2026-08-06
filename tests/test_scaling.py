@@ -2120,6 +2120,54 @@ def test_two_hop_cutoff_excludes_grandchildren_dated_after_the_entity_cutoff():
     assert out[mean].iloc[0] == pytest.approx(2.0), "the post-cutoff price leaked into mean"
 
 
+def test_column_budget_does_not_delete_the_grandchild_block():
+    """`max_columns` caps a table's own source columns, never its nested statistics.
+
+    Ranking both kinds together made depth-2 unmeasurable rather than merely narrow.
+    Coverage prefers dense raw columns and a grandchild block is sparse by construction,
+    so at `max_columns=2` the nested columns lost every slot and depth-2 emitted output
+    byte-identical to depth-1. The measurement then read +0.00 with sd 0.00 over five
+    seeds, which is indistinguishable from a genuine null and was in fact an empty block.
+
+    A silently-empty feature block is worse than a crash: it reports a number.
+    """
+    from tabicl.scaling import Table, flatten_relational
+
+    entities = pd.DataFrame({"user": [1, 2], "ts": [pd.Timestamp("2026-06-01")] * 2})
+    orders = pd.DataFrame({
+        "oid": [10, 11], "user": [1, 2], "ots": [pd.Timestamp("2026-01-01")] * 2,
+        # Three dense raw columns, so a budget of 2 is genuinely oversubscribed.
+        "a": [1.0, 2.0], "b": [3.0, 4.0], "c": [5.0, 6.0],
+    })
+    items = pd.DataFrame({
+        "oid": [10, 10, 11], "price": [2.0, 4.0, 6.0],
+        "its": [pd.Timestamp("2026-02-01")] * 3,
+    })
+
+    def build(depth, max_columns):
+        kid = Table(items, "oid", "item", time_column="its", max_columns=2)
+        spec = Table(orders, "user", "ord", time_column="ots", max_columns=max_columns,
+                     primary_key="oid" if depth == 2 else None,
+                     children=[kid] if depth == 2 else None)
+        return flatten_relational(entities, "user", [spec], cutoff_column="ts")
+
+    budgeted = build(2, max_columns=2)
+    nested = [c for c in budgeted.columns if "item" in c]
+    assert nested, "the column budget deleted the entire grandchild block"
+
+    # The budget still binds on the child's own columns -- exempting nested statistics
+    # must not quietly disable it.
+    own = [c for c in budgeted.columns if c.startswith("ord__") and "item" not in c]
+    assert not any(c.startswith("ord__c__") for c in own), "max_columns stopped applying"
+
+    # And the nested block is whatever it would have been unbudgeted: a deeper level
+    # carries its own cap, so exempting it here is bounded, not unbounded.
+    assert nested == [c for c in build(2, max_columns=None).columns if "item" in c]
+
+    # The failure this guards: depth-2 indistinguishable from depth-1.
+    assert list(budgeted.columns) != list(build(1, max_columns=2).columns)
+
+
 def test_key_history_subtracts_the_rows_own_outcome_rather_than_dropping_it():
     """Self-exclusion must remove one observation, not a key's whole accumulated history."""
     from tabicl.scaling import key_target_history

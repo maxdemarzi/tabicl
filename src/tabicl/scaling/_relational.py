@@ -179,9 +179,19 @@ def _stat_columns(
     use_cols = child.columns
     if use_cols is None:
         excluded = {child.foreign_key, child.time_column, child.primary_key}
-        use_cols = _budgeted_columns(
-            child, df, [c for c in df.columns if c not in excluded and not c.startswith("__")]
-        )
+        candidates = [c for c in df.columns if c not in excluded and not c.startswith("__")]
+        # The budget caps this table's own *source* columns. A nested statistic is not
+        # one: it arrived from a deeper level already aggregated, and it is exempt.
+        #
+        # Ranking the two kinds together is what made depth-2 unmeasurable. Coverage
+        # prefers dense raw columns, and a grandchild block is sparse by construction --
+        # most parents have no grandchildren -- so with `max_columns=2` the nested
+        # columns lost every slot and depth-2 emitted output byte-identical to depth-1.
+        # The measurement then read +0.00 with sd 0.00, which looks like a null result
+        # and is actually an empty block. Growth stays bounded: each nested column is
+        # one roll-up, and the deeper level had its own budget.
+        own = [c for c in candidates if c not in nested_stats]
+        use_cols = _budgeted_columns(child, df, own) + [c for c in candidates if c in nested_stats]
 
     stem = child.name
     out = pd.DataFrame(index=index)

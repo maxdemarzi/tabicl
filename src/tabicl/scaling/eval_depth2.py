@@ -62,6 +62,9 @@ def main() -> None:
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--context", type=int, default=10000)
     ap.add_argument("--children", type=int, default=3)
+    # 2 was hardcoded here, and a hardcoded 2 elsewhere cost 12.58 AUC on rel-f1 the
+    # moment it was questioned. 0 means no cap.
+    ap.add_argument("--max-columns", type=int, default=2)
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--n-estimators", type=int, default=4)
     args = ap.parse_args()
@@ -100,6 +103,8 @@ def main() -> None:
     kids = ranked if args.children <= 0 else ranked[: args.children]
     print(f"children chosen (with-grandchildren first): {[k[0] for k in kids]}", flush=True)
 
+    budget = args.max_columns if args.max_columns > 0 else None
+
     def grandchildren_of(child_name):
         """Tables pointing at this child, which is what depth-2 would add."""
         ct = tables[child_name]
@@ -110,7 +115,7 @@ def main() -> None:
             for gfk, gpt in (gt.fkey_col_to_pkey_table or {}).items():
                 if gpt == child_name and gt.time_col:
                     out.append(Table(gt.df, gfk, gn, time_column=gt.time_col,
-                                     max_columns=2))
+                                     max_columns=budget))
         return out
 
     def build(frame, depth):
@@ -118,7 +123,7 @@ def main() -> None:
         for n, fk in kids:
             ct = tables[n]
             gcs = grandchildren_of(n) if depth == 2 else []
-            specs.append(Table(ct.df, fk, n, time_column=ct.time_col, max_columns=2,
+            specs.append(Table(ct.df, fk, n, time_column=ct.time_col, max_columns=budget,
                                primary_key=ct.pkey_col if gcs else None,
                                children=gcs or None))
         return flatten_relational(frame, key, specs, cutoff_column=tcol)
@@ -131,14 +136,30 @@ def main() -> None:
         return
 
     frames = {}
+    widths = {}
     for depth in (1, 2):
         t0 = time.perf_counter()
         f_tr = build(train, depth)
         f_te = build(test, depth).reindex(columns=f_tr.columns, fill_value=np.nan)
         cats: dict = {}
         frames[depth] = (_numeric(f_tr, cats, True), _numeric(f_te, cats, False))
+        widths[depth] = list(f_tr.columns)
         print(f"depth {depth}: {f_tr.shape[1]} features in "
               f"{time.perf_counter() - t0:.0f}s", flush=True)
+
+    # An empty feature block does not raise; it reports +0.00 with sd 0.00, which reads
+    # exactly like a clean null. That is how depth-2 stayed "measured at no effect" for a
+    # week while `max_columns` was quietly deleting every grandchild column before the
+    # model ever saw one. Refuse to score identical inputs rather than describe them.
+    added = [c for c in widths[2] if c not in set(widths[1])]
+    if not added:
+        raise SystemExit(
+            f"depth-2 added no columns to depth-1 ({len(widths[1])} either way), so the "
+            f"grandchild block is empty and any gap reported here would be an artefact. "
+            f"{n_gc} grandchild tables were found, so they were built and then dropped -- "
+            f"check the column budget (--max-columns {args.max_columns})."
+        )
+    print(f"depth-2 adds {len(added)} columns, e.g. {added[:3]}", flush=True)
 
     def score(X, Xe, rows, seed):
         clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
