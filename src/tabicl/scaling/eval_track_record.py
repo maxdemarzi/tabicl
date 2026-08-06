@@ -208,6 +208,17 @@ def main() -> None:
                          "column gets a histogram. Below it the column is free text in "
                          "disguise (rel-trial's eligibilities.criteria has 247k values and "
                          "its top 4 cover 0.1%%), and the block is K+1 constant columns.")
+    ap.add_argument("--ensemble-configs", type=int, default=0,
+                    help="average test predictions over the top N configurations by "
+                         "validation score, instead of taking the argmax. 0 keeps the "
+                         "argmax. This routes around the constraint that blocked everything "
+                         "else measured this week: nine effects are real on test and the "
+                         "validation split cannot reliably rank them, so hedging across the "
+                         "top of a noisy ranking is strictly less exposed to that noise than "
+                         "committing to its first element -- and it needs no instrument the "
+                         "argmax does not already need. Ensembling over context draws "
+                         "already cut variance 4.6x on rel-event; this ensembles over "
+                         "configurations.")
     ap.add_argument("--decide-fit-pool", action="store_true",
                     help="decide whether to fit on train+val using validation alone, "
                          "instead of assuming it. Splits val by time into a selection part "
@@ -821,7 +832,7 @@ def main() -> None:
     print(f"feature widths: {widths}; {len(arms['base'][0])} train rows, "
           f"context={args.context}", flush=True)
 
-    def score(X, Xe, rows, seed, truth=None, fit_y=None):
+    def score(X, Xe, rows, seed, truth=None, fit_y=None, return_probs=False):
         """Fit and score, optionally averaging predictions over several context draws.
 
         `RESEARCH` item 10. The largest measured weakness on this branch is not bias but
@@ -866,6 +877,8 @@ def main() -> None:
                                    inference_config=NOAMP).fit(X[take], source_y[take])
             p = clf.predict_proba(Xe)[:, 1]
             probs = p if probs is None else probs + p
+        if return_probs:
+            return probs / draws
         return roc_auc_score(target_y, probs / draws) * 100
 
     if args.calibrated:
@@ -987,6 +1000,7 @@ def main() -> None:
         results = []
         for seed in range(args.seeds):
             best = None
+            candidates: list = []
             criterion = f"{args.cv_folds}-fold CV over train" if args.cv_folds \
                 else "validation only"
             print(f"\n-- seed {seed}: selection ({criterion}) --", flush=True)
@@ -1030,9 +1044,29 @@ def main() -> None:
                         label = f"{name}/{order}" if len(orders) > 1 else name
                         print(f"  {label:<20} context={size:<6} "
                               f"{'cv' if args.cv_folds else 'val'}={v:.2f}", flush=True)
+                        candidates.append((v, name, size, order))
                         if best is None or v > best[0]:
                             best = (v, name, size, order)
             val_auc, name, size, order = best
+
+            if args.ensemble_configs > 1:
+                # Hedge instead of committing. The validation ranking is real but noisy --
+                # on rel-event its top choice was 3.9 below the best configuration
+                # available -- so averaging over the top of it is strictly less exposed to
+                # that noise than taking its first element, and it needs no instrument the
+                # argmax does not already need.
+                top = sorted(candidates, key=lambda c: -c[0])[: args.ensemble_configs]
+                probs = None
+                for _, nm, sz, od in top:
+                    rows_i = draw(od, seed, len(arms[nm][0]), sz)
+                    p_i = score(arms[nm][0], arms[nm][1], rows_i, seed, return_probs=True)
+                    probs = p_i if probs is None else probs + p_i
+                auc = roc_auc_score(y_te, probs / len(top)) * 100
+                picks = ", ".join(f"{nm}@{sz}/{od}" for _, nm, sz, od in top)
+                print(f"  ensembled {len(top)} of {len(candidates)}: {picks} "
+                      f"-> VAL(best) {val_auc:.2f}  TEST {auc:.2f}", flush=True)
+                results.append((auc, name, size, val_auc, order))
+                continue
 
             use_pool = args.fit_on_train_val
             if args.decide_fit_pool:
