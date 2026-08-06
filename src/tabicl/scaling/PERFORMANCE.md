@@ -593,6 +593,42 @@ and the filter is a strict `<`, so they are excluded regardless.
 recorded because every comparison in this file depends on it and none of them had checked
 it — the kind of assumption that is invisible until it is wrong.
 
+### 2026-08-06 — rel-event's 11.68-point spread is label-specific, and reads like selection luck
+
+Two published methods share the **same backbone** (TabPFN-3) and differ enormously on our
+worst task. But rel-event carries *two* tasks in RelBenchV1, and the same pair sits
+differently on each (report Table 14):
+
+| method — both TabPFN-3 | rel-event / **user-repeat** | rel-event / **user-ignore** |
+|---|---:|---:|
+| TabPFN-REL | 77.11 | **85.38** |
+| RDBLearn + v3 | 76.81 | **73.70** |
+| difference | **0.30** | **11.68** |
+
+Same database, same backbone, same two featurizers: **0.30 apart on one label and 11.68 on
+the other.** A genuine featurization advantage would show on both. This one does not, so it
+is not a property of how either method builds features from this schema.
+
+**And `user-ignore` is the task where this project independently measured validation to
+anti-predict test — three separate times**: recency (+7.50 on test, rejected 3/3), calendar
+(+3.00 on test, rejected at 4.7 SE paired), and the earlier categorical result (validation
+81.63 vs 81.40 while test said −3.52). On a task that hostile to model selection,
+RDBLearn+v3's 73.70 is plausibly *its selection instrument failing*, not its features being
+worse — the same failure mode documented at length above, showing up in someone else's
+numbers.
+
+**What this changes about our own position.** The −5.20 gap on rel-event is partly a
+statement about that task's leaderboard rather than about our features: the spread between
+two same-backbone methods there is more than twice our gap to the best of them. Our 80.98
+sits between the two, produced by a protocol that declines anything validation does not
+endorse. It is a *conservative* estimate on a task where the published spread suggests
+selection luck is worth ~12 points.
+
+*This is an interpretation of published numbers, not a new measurement, and it changes
+nothing in the table.* It is recorded because "we are 5.20 behind on rel-event" and "this
+task's numbers move 11.68 on selection alone" are very different readings of the same gap,
+and the second is better supported.
+
 ## Session close, 2026-08-06 — the table is unchanged, and that is the finding
 
 **rel-f1 81.98 · rel-event 80.98 · rel-avito 65.54 · rel-trial 72.26.** Nothing entered.
