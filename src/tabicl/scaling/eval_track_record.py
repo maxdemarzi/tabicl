@@ -903,10 +903,24 @@ def main() -> None:
             cut = t_train[time_order[-len(val):]].min() if len(val) < len(train) else t_train.max()
             pseudo_val = time_order[-len(val):]
             pool_order = np.array([i for i in time_order if t_train[i] <= cut - gap])
-            print(f"gap-validation: pseudo-val = last {len(pseudo_val)} train rows, pool = "
-                  f"{len(pool_order)} rows ending {gap / np.timedelta64(1, 'D'):.0f} days "
-                  f"before them, matching the {gap / np.timedelta64(1, 'D'):.0f}-day "
-                  f"train->test gap", flush=True)
+            day = np.timedelta64(1, "D")
+            print(f"gap-validation: pseudo-val = last {len(pseudo_val)} train rows "
+                  f"(from {pd.Timestamp(t_train[pseudo_val].min()).date()}), pool = "
+                  f"{len(pool_order)} rows ending {pd.Timestamp(t_train[pool_order].max()).date()} "
+                  f"if any, a {gap / day:.0f}-day gap matching train->test", flush=True)
+            # The check that matters: the pool must actually end a full gap before the
+            # pseudo-validation rows start, or the instrument is not doing the one thing it
+            # exists to do.
+            if len(pool_order):
+                actual = (t_train[pseudo_val].min() - t_train[pool_order].max()) / day
+                print(f"  realised gap {actual:.0f} days vs target {gap / day:.0f}",
+                      flush=True)
+                if actual < gap / day - 1e-6:
+                    raise SystemExit(
+                        f"pool ends only {actual:.0f} days before the pseudo-validation "
+                        f"rows, short of the {gap / day:.0f}-day target -- the split does "
+                        f"not reproduce the train->test geometry it exists to reproduce."
+                    )
             if len(pool_order) < 200:
                 raise SystemExit(
                     f"gap-validation leaves only {len(pool_order)} pool rows on this task; "
