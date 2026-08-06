@@ -104,18 +104,32 @@ def run_ssh_capture(target, command: str, timeout: int = 600) -> tuple[int, str]
     return done.returncode, (done.stdout or "") + (done.stderr or "")
 
 
-def probe_host(target) -> tuple[bool, str]:
-    """Is this host usable at all? Checks CUDA from Python, then download bandwidth.
+# `pyproject.toml` requires torch>=2.2 and the model relies on it: `Tensor.all(dim=tuple)`
+# in `layers.py` gained multi-dim support in 2.2 and raises TypeError below it. The package
+# is installed with --no-deps (letting pip resolve torch once upgraded it past the pod's
+# driver and broke hosts the CUDA probe had just cleared), so whatever torch the image
+# happens to ship is what runs. A SECURE A6000 shipping 2.1.2 cost a whole pod cycle:
+# every fit raised, after provisioning, upload, install and dataset download had all
+# succeeded. The declared minimum is not a suggestion the host has read.
+MIN_TORCH = (2, 2)
 
-    Both failures are silent otherwise. A broken community host reports a healthy
-    ``nvidia-smi`` and ``device_count 1`` while every allocation raises; a slow one looks
-    perfectly healthy and simply never finishes. Neither is worth discovering an hour in.
+
+def probe_host(target) -> tuple[bool, str]:
+    """Is this host usable at all? CUDA from Python, then torch version, then bandwidth.
+
+    All three failures are silent otherwise. A broken community host reports a healthy
+    ``nvidia-smi`` and ``device_count 1`` while every allocation raises; an old-torch host
+    imports and allocates perfectly and then raises inside the model's forward pass; a slow
+    one looks entirely healthy and simply never finishes. None is worth discovering an hour
+    in, and the last two are worth discovering before the dataset download rather than
+    after it.
     """
     ok = "".join(chr(c) for c in (67, 85, 68, 65, 95, 79, 75))    # not echoed in the command
     command = (
         f'python -c "import torch;torch.zeros(1).cuda();'
         f'print(chr(67)+chr(85)+chr(68)+chr(65)+chr(95)+chr(79)+chr(75), '
-        f'torch.cuda.get_device_name(0))" ; '
+        f'torch.cuda.get_device_name(0));'
+        f'print(\'TORCH_VERSION\', torch.__version__)" ; '
         f'curl -s --max-time 60 -o /dev/null -w "BYTES_PER_SEC %{{speed_download}}\\n" '
         f'"https://speed.cloudflare.com/__down?bytes={BANDWIDTH_PROBE_BYTES}"'
     )
@@ -125,12 +139,23 @@ def probe_host(target) -> tuple[bool, str]:
     if ok not in out:
         return False, "CUDA unusable from torch"
 
+    version = next((line.split()[1] for line in out.splitlines()
+                    if line.startswith("TORCH_VERSION") and len(line.split()) > 1), "")
+    try:
+        parsed = tuple(int(p) for p in version.split("+")[0].split(".")[:2])
+    except ValueError:
+        parsed = ()
+    if parsed and parsed < MIN_TORCH:
+        return False, (f"torch {version} is below the required "
+                       f"{'.'.join(map(str, MIN_TORCH))} -- the model's multi-dim "
+                       f"Tensor.all raises on it, after everything else has succeeded")
+
     speed = next((float(line.split()[1]) for line in out.splitlines()
                   if line.startswith("BYTES_PER_SEC") and len(line.split()) > 1), 0.0)
     if speed < BANDWIDTH_FLOOR:
         return False, (f"{speed / 1e6:.2f} MB/s is below the {BANDWIDTH_FLOOR / 1e6:.0f} MB/s "
                        f"floor -- pip and a 385 MB dataset will not finish")
-    return True, f"CUDA ok, {speed / 1e6:.1f} MB/s"
+    return True, f"CUDA ok, torch {version}, {speed / 1e6:.1f} MB/s"
 
 
 def create():

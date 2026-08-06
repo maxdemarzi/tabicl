@@ -584,6 +584,20 @@ def flatten_relational(
     keys = entity_df[primary_key]
     duplicated = bool(keys.duplicated().any())
     if duplicated and any(child.children for child in children):
+        # This blocks depth-2 on rel-event and rel-avito, the only two tasks besides
+        # rel-trial whose schema has timestamped grandchildren at all (rel-f1 has none).
+        #
+        # Worth knowing before relaxing it: the conservative resolution it asks for is
+        # already implemented downstream. `_aggregate_by_row` folds grandchildren under
+        # `groupby("__key")["__cutoff"].min()`, the earliest deadline any row with that key
+        # carries, so a repeated key cannot leak -- it can only be *starved*, since a row
+        # with a late cutoff would then see only grandchildren older than the key's
+        # earliest row. So the guard protects against weak features, not against leakage.
+        #
+        # The stronger fix is to fold grandchildren per entity *row* rather than per key,
+        # as depth 1 already does. That costs a |grandchild| x rows-sharing-a-key join.
+        # Not built yet, and deliberately: measure whether depth-2 pays on rel-trial --
+        # where keys are unique and it is available today -- before paying for it.
         raise ValueError(
             "entity keys repeat, which makes a grandchild's cutoff ambiguous; "
             "nested children currently require one row per entity key"
