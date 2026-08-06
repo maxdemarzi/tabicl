@@ -1023,7 +1023,15 @@ def main() -> None:
                     np.concatenate([train[tcol].to_numpy(), val[tcol].to_numpy()]),
                     kind="stable")
                 m = len(pool_X)
-                take = min(size, m)
+                # If validation asked for the whole training set, it was saying "use every
+                # row available" -- and at fit time that is train+val. Capping at
+                # len(train) would use 1,353 of rel-f1's 1,941 rows and throw away the
+                # extra data this flag exists to add.
+                #
+                # Only when the grid's top really was the whole set. On rel-trial the grid
+                # tops out at 10,000 of 11,994, so choosing 10,000 is a genuine preference
+                # for a bounded context and is left alone.
+                take = m if size >= len(arms[name][0]) else min(size, m)
                 rng = np.random.default_rng(seed)
                 if order == "recent":
                     rows = order_pool[-take:]
