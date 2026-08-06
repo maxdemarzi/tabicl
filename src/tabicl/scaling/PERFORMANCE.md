@@ -95,12 +95,25 @@ context draws reduces variance and helps" was too general a claim — it interac
 features are present, which is not what a pure variance-reduction argument predicts and is
 reason enough to distrust the mechanism story I attached to it.
 
-**Both threads are closed.** Resampling is not adopted. No further selection machinery is
-worth building: the honest position is that a 0.3–1.3 effect cannot be selected on this
-benchmark by any instrument available here, and four measured effects stay unclaimed —
-child count (+0.87), per-key selection (+0.67), resampling on two arms. They are recorded
-as *measured but unselectable*, which is a different and more useful statement than
-"measured and adopted" or "not real".
+**Child count, re-measured under the same instrument, shrank — which vindicates declining it.**
+
+| children | time-ordered CV | test |
+|---:|---:|---:|
+| 3 | **67.33** | 71.97 |
+| 6 | 67.16 | **72.27** |
+
+CV ranks 3 first by 0.17 (noise), the same ordering validation gave. But **the test gap fell
+from +0.87 to +0.30**, now inside the floor. A real +0.87 should have persisted across a
+change of selection regime; one that halves is more consistent with noise that happened to
+favour 6 in the first draw. So "measured but unselectable" was too generous for this one:
+the better reading is *probably smaller than it looked, and declining it was right*.
+
+**Both threads are closed.** Resampling is not adopted, and no further selection machinery
+is worth building. Three effects remain recorded as measured-but-unselectable — per-key
+selection (+0.67) and resampling on two arms — with the caveat this entry supplies: an
+effect that only one instrument can see, and that shrinks when another looks, should be
+treated as probably-noise rather than as value trapped behind a bad instrument. That is the
+opposite of the conclusion I was drifting toward an hour ago.
 
 ### 2026-08-05 — context resampling: works on test, unadoptable, and CV made it worse
 Averaging predictions over independent context draws. Test improves on **3/3** tasks and the
