@@ -243,6 +243,21 @@ def key_target_history(
     entire accumulated history rather than one observation. On rel-trial the 365-day
     horizon already pushes a row's own outcome past its own cutoff, so this never fires
     there -- which is exactly why it must not be left to that coincidence.
+
+    **That subtraction assumes one outcome per entity**, because ``own`` aggregates the
+    entity's events with ``min``/``first``. True on rel-trial, where a study has a single
+    outcome; false wherever entities recur, as users do on rel-event. Where an entity holds
+    several outcomes it subtracts the *earliest*, not the row's own.
+
+    With a horizon this is harmless and never fires: the row's own event resolves after its
+    own cutoff, so ``inside`` is False. Every call site in `eval_track_record` passes
+    ``label_horizon=task.timedelta``, so no reported number is affected. **Under
+    ``--no-horizon`` on a recurring-entity task it is a leak** -- the wrong observation is
+    removed and the row's own label stays in the sum. That flag is already documented as
+    wrong and exists only to price its own wrongness, but the price is higher than it
+    advertises: not just a year of unresolved outcomes, but the row's own. For the
+    entity's *own* track record use `entity_label_history`, where the horizon makes
+    self-exclusion structural and there is no subtraction to get wrong.
     """
     entity_col, key_col = links.columns[:2]
     link = links[[entity_col, key_col]].copy()
