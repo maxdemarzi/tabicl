@@ -2184,6 +2184,45 @@ often — are graph models over a schema that includes the task table, so past l
 reach a node through message passing without anyone designing a feature. Our two worst
 placings are both rel-f1, and rel-f1 is where this signal is strongest.
 
+### 2026-08-06 — IDEA 2, from data already collected: per-task calibration buys nothing
+
+Every instrument built from this validation split has failed, and the diagnosis was **bias,
+not noise**. The move that remains is not a better instrument but **not selecting at all**:
+fix global defaults by worst-case regret and run them everywhere. Four tasks already have
+both numbers — the untuned `base` arm and the validation-selected one — so this much needs
+no GPU:
+
+| task | untuned `base` | calibrated | calibration is worth |
+|---|---:|---:|---:|
+| rel-event / user-ignore | 80.80 | 80.98 | +0.18 |
+| rel-avito / user-visits | 65.81 | 65.54 | −0.27 |
+| rel-avito / user-clicks | 67.18 | 65.89 | **−1.29** |
+| rel-f1 / driver-dnf | 68.99 | 69.66 | +0.67 |
+
+**Mean −0.18, negative on 2 of 4, and 2 of 4 inside the ±0.6 floor.** Selecting a
+configuration per task on validation is worth nothing on average and costs 1.29 on
+user-clicks, which is four places in the field. That is the central finding showing up as a
+protocol recommendation rather than a diagnosis.
+
+**Two tasks are missing and both are the interesting kind.** rel-f1/driver-top3 (+8.48) and
+rel-trial (+2.64) are the cases where calibration looks decisive — and on rel-f1 almost all
+of it was the **column budget**, which the shipped `max_columns=2` got wrong for that schema
+by 12.58 on validation. That is not per-task selection earning its keep; it is a bad global
+default being repaired per task.
+
+**Which is why this measurement is not finished, and the reason is a change we made.** All
+six figures were taken at `max_columns=2`. The default is now **4**, chosen on validation
+across four tasks by worst-case regret: never more than 2.13 off the best value for a task,
+against 19.13 for the old 2. If the case for calibration was mostly budget repair, then
+fixing the default should collapse it — the honest test is untuned-at-4 against calibrated,
+paired, on all seven tasks. `work18.sh` collects the `base` arm from the same invocations
+it uses for label history, so three of the seven come free.
+
+**Predicted, before the run:** calibration's advantage on rel-f1/driver-top3 largely
+disappears, and the seven-task mean lands at or below zero. If instead it survives at 4,
+then per-task selection is doing something the regret analysis missed, and the central
+finding needs revisiting rather than restating.
+
 ### 2026-08-06 — label history on TEST: the gate ranked the tasks backwards
 
 The gate above measured this feature over **training** rows, where an entity's previous
