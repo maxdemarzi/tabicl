@@ -526,6 +526,45 @@ validation split — anything derived from a biased signal inherits the bias. An
 that worked would need information the split does not contain: either a later validation
 period, or knowledge of how the test distribution differs.
 
+### 2026-08-06 — test-time compute cannot move AUC, and the code says so before the GPU does
+
+`think_predict_proba` is item 4 of the package's four scaling techniques, listed in
+`STATUS.md` as "Working, modest", and it appeared **nowhere** in this file — never
+benchmarked on RelBench.
+
+**The prediction, recorded before running**, from reading `_ttc.py`:
+
+* `_mean_proba` varies only `random_state` across refits — model-seed ensembling at a fixed
+  context, which is what `n_estimators` does and which this log records as measured at
+  nothing on every task.
+* The head is a `LogisticRegression` over the backbone's own 2-column probability matrix,
+  so the blend is `(1−w)·p + w·σ(αp + β)`, **monotone in p when α > 0. ROC-AUC is invariant
+  under monotone transforms of the score**, so the head can leave AUC alone or hurt it,
+  never help.
+* Its blend weight is chosen on **log-loss**, which is not the metric here.
+
+**Measured, 3 seeds, paired:**
+
+| task | gap | blend weights per seed | permutation effect |
+|---|---:|---|---|
+| rel-trial | +0.12 (SE 0.23, 2/3) | 0.00, **0.90**, 0.30 | `val_base ≈ val_thought` to 4 dp |
+| rel-event | −0.55 (SE 0.70, 1/3) | 0.15, 0.15, 0.00 | `val_base ≈ val_thought` |
+
+**The diagnostic confirms the mechanism, not merely the null.** The head *engaged* — up to
+`w = 0.90` — because the guard genuinely wanted it on log-loss, and AUC did not move
+anyway. A null with `w = 0` everywhere would have proven nothing. And `val_base ≈
+val_thought` on every seed says permutation averaging changed even the log-loss by nothing,
+which is `n_estimators` measuring null again by another route.
+
+So: **3× the fit cost, no AUC.** Closed. `STATUS.md`'s "Working, modest" is accurate about
+*calibration* and misleading for this benchmark, which scores ROC-AUC — a metric this
+feature is structurally unable to improve.
+
+*Method note:* this null cost ten minutes of reading and two tasks instead of a four-task
+sweep, because the prediction was derived from the implementation first. After a day of
+expensive nulls that is the cheaper order of operations, and it is the same habit —
+read what the code actually does — that produced nine bug findings.
+
 ## Session close, 2026-08-06 — the table is unchanged, and that is the finding
 
 **rel-f1 81.98 · rel-event 80.98 · rel-avito 65.54 · rel-trial 72.26.** Nothing entered.
