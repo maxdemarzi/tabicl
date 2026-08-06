@@ -15,7 +15,7 @@ recorded after the cutoff leaks the future. ``cutoff_column`` enforces that.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import List, Optional, Sequence, Set, Tuple
 
 import numpy as np
@@ -112,6 +112,12 @@ class Table:
         through the numeric path, so they gain count/sum/mean/std/min/max over all-history
         and over every window, and lose the ``nunique``.
 
+        A flag is recognised by its *values*, not its dtype. RelBench spells every boolean
+        it has as ``'t'``/``'f'`` in an object column -- eleven of them on rel-trial alone
+        -- so a ``is_bool_dtype`` test finds none, and keying off the dtype made this a
+        no-op on the whole benchmark. ``t/f``, ``true/false``, ``yes/no``, ``y/n`` and real
+        booleans all qualify.
+
         Off by default only because it changes existing feature sets. It is not off
         because it lost a measurement.
 
@@ -150,6 +156,61 @@ class Table:
     primary_key: Optional[str] = None
     windows: Sequence = field(default=())
     children: Sequence["Table"] = field(default=())
+
+
+# How a two-valued flag is actually spelled in the wild. RelBench spells every one of them
+# `'t'`/`'f'` in an **object** column -- `eligibilities.adult`, `designs.subject_masked`,
+# `studies.is_fda_regulated_drug` and eight more on rel-trial alone -- so `is_bool_dtype`
+# is False for all of them and a dtype-based test finds nothing at all. Keying off the
+# dtype made `numeric_booleans` a no-op on every task in the benchmark.
+_BOOLEAN_PAIRS = (("t", "f"), ("true", "false"), ("yes", "no"), ("y", "n"))
+
+
+def _boolean_map(series: pd.Series) -> Optional[dict]:
+    """Map this column's values to 1.0/0.0 if it is a two-valued flag, else ``None``.
+
+    A one-valued column still qualifies: it is constant either way, and converting it
+    keeps a column's meaning from depending on which rows happen to be present.
+    """
+    if pd.api.types.is_bool_dtype(series):
+        return {True: 1.0, False: 0.0}
+    if pd.api.types.is_numeric_dtype(series):
+        return None
+    values = set(pd.unique(series.dropna()))
+    if not values or len(values) > 2:
+        return None
+    lowered = {str(v).strip().lower() for v in values}
+    for true_value, false_value in _BOOLEAN_PAIRS:
+        if lowered <= {true_value, false_value}:
+            return {v: (1.0 if str(v).strip().lower() == true_value else 0.0)
+                    for v in values}
+    return None
+
+
+def _coerce_booleans(child: Table) -> Table:
+    """Rewrite two-valued flag columns as real 0/1 floats, when asked.
+
+    Converting the data once, up front, is what keeps this from being spread across the
+    four places that decide numeric-versus-categorical plus the three that read raw values
+    for min/max and sums. Downstream everything simply sees a numeric column, because it
+    is one.
+    """
+    if not child.numeric_booleans:
+        return child
+    excluded = {child.foreign_key, child.time_column, child.primary_key}
+    convert = {}
+    for column in child.df.columns:
+        if column in excluded:
+            continue
+        mapping = _boolean_map(child.df[column])
+        if mapping:
+            convert[column] = mapping
+    if not convert:
+        return child
+    df = child.df.copy()
+    for column, mapping in convert.items():
+        df[column] = df[column].map(mapping).astype("float64")
+    return replace(child, df=df)
 
 
 def _numeric_path(child: Table, series: pd.Series) -> bool:
@@ -320,6 +381,7 @@ def _stat_columns(
 
 def _aggregate_by_key(child: Table, keys: pd.Series, cutoff: Optional[pd.Series]) -> pd.DataFrame:
     """Aggregate to one row per key. Requires keys to be unique (nested path)."""
+    child = _coerce_booleans(child)
     df, nested_stats = _resolve(
         child, pd.Series(cutoff.values, index=keys.values) if cutoff is not None else None
     )
@@ -384,6 +446,7 @@ def _aggregate_by_row(child: Table, anchor: pd.DataFrame, n_rows: int) -> pd.Dat
     # and in DESIGN.md asserted propagation that did not occur, and the existing two-hop
     # test could not see it because its fixture dates every grandchild identically to its
     # parent -- which makes grandchild leakage indistinguishable from parent filtering.
+    child = _coerce_booleans(child)
     cutoff_by_key = None
     if "__cutoff" in anchor.columns and child.children:
         # One deadline per key. A key appearing at several cutoffs takes the earliest, so
@@ -681,6 +744,7 @@ def asof_statistics(
     if child.time_column is None:
         raise ValueError(f"table {child.name!r} needs time_column for an as-of scan")
 
+    child = _coerce_booleans(child)
     df = child.df
     if columns is None:
         excluded = {child.foreign_key, child.time_column, child.primary_key}

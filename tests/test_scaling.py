@@ -2189,8 +2189,14 @@ def test_boolean_columns_can_carry_their_rate_instead_of_a_nunique():
     standing number was measured -- that is the entire contribution of a boolean child
     column. `numeric_booleans` routes them through the numeric path instead.
 
-    The nullable `boolean` dtype is covered deliberately: it is what RelBench delivers for
-    a boolean column with missing values, and `astype("float64")` raises on it outright.
+    The nullable `boolean` dtype is covered deliberately: `astype("float64")` raises on it
+    outright.
+
+    A flag is recognised by its values, not its dtype, and that distinction is the whole
+    feature here: RelBench spells every boolean it has as `'t'`/`'f'` in an object column
+    -- `eligibilities.adult`, `designs.subject_masked`, `studies.is_fda_regulated_drug`
+    and eight more on rel-trial alone. Keying off `is_bool_dtype` made this a no-op on the
+    entire benchmark, and only the empty-block refusal surfaced that rather than a +0.00.
     """
     from tabicl.scaling import Table, asof_statistics
 
@@ -2199,7 +2205,10 @@ def test_boolean_columns_can_carry_their_rate_instead_of_a_nunique():
         "id": [1, 1, 1],
         "kt": pd.to_datetime(["2020-01-01", "2020-02-01", "2020-03-01"]),
         "flag": np.array([True, False, True]),
+        "tf": ["t", "f", "t"],                       # how RelBench actually spells it
+        "yesno": ["Yes", "No", "Yes"],
         "nullable": pd.array([True, None, True], dtype="boolean"),
+        "genuine_category": ["a", "b", "c"],         # three values: must stay categorical
     })
 
     def run(numeric_booleans):
@@ -2208,13 +2217,17 @@ def test_boolean_columns_can_carry_their_rate_instead_of_a_nunique():
 
     default = run(False)
     assert [c for c in default.columns if "flag" in c] == ["k__flag__nunique"]
+    assert "k__tf__nunique" in default.columns
 
     numeric = run(True)
-    assert "k__flag__nunique" not in numeric.columns
-    assert numeric["k__flag__mean"].iloc[0] == pytest.approx(2 / 3)
+    for column in ("flag", "tf", "yesno"):
+        assert f"k__{column}__nunique" not in numeric.columns
+        assert numeric[f"k__{column}__mean"].iloc[0] == pytest.approx(2 / 3)
     # Nulls leave the denominator rather than counting as False, so this is 2 of 2.
     assert numeric["k__nullable__mean"].iloc[0] == pytest.approx(1.0)
     assert numeric["k__nullable__count"].iloc[0] == pytest.approx(2.0)
+    # A three-valued column is not a flag, whatever the flag setting says.
+    assert "k__genuine_category__nunique" in numeric.columns
 
 
 def test_column_budget_does_not_delete_the_grandchild_block():
