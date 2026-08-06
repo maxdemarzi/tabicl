@@ -22,10 +22,10 @@ paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model resu
 
 | task | ours | DFS † | TabPFN-REL | RelGNN | RDBLearn+v3 | vs TabPFN-REL | vs best |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| rel-f1 / driver-top3 | 81.98 | *pending* | 79.98 | **85.69** | 82.72 | +2.00 | −3.71 |
-| rel-event / user-ignore | 80.98 | *pending* | 85.38 | **86.18** | 73.70 | −4.40 | −5.20 |
-| rel-avito / user-visits | 65.54 | *pending* | 66.68 | 66.18 | **66.76** | −1.14 | −1.22 |
-| rel-trial / study-outcome | 72.26 | *pending* | **76.43** | 71.24 | 72.89 | −4.17 | −4.17 |
+| rel-f1 / driver-top3 | 81.98 | 76.81 | 79.98 | **85.69** | 82.72 | +2.00 | −3.71 |
+| rel-event / user-ignore | 80.98 | *not run* | 85.38 | **86.18** | 73.70 | −4.40 | −5.20 |
+| rel-avito / user-visits | 65.54 | *not run* | 66.68 | 66.18 | **66.76** | −1.14 | −1.22 |
+| rel-trial / study-outcome | 72.26 | 69.12 | **76.43** | 71.24 | 72.89 | −4.17 | −4.17 |
 
 † **DFS is measured here, not published.** Deep Feature Synthesis (Featuretools) run over the
 same tables with per-row cutoff times and scored by **the same TabICL, same context, same
@@ -72,6 +72,34 @@ five points. Pair everything.
 ---
 
 ## Run log
+
+### 2026-08-05 — DFS measured at last: we beat it on rel-f1, tie on rel-trial
+`RESEARCH` 6e, after seven failed attempts. Same TabICL, same context, same seeds — only the
+feature builder differs, and DFS was given the *tuned* primitive set (`num_unique`, `mode`,
+`trend`, `time_since_last`, `avg_time_between`, `skew`, plus date transforms) and per-row
+cutoff times so it respects the same temporal boundary we do.
+
+| task | DFS | ours | ours − DFS | feature build |
+|---|---:|---:|---:|---|
+| rel-f1 / driver-top3 | 76.81 | 81.84 | **+5.03** (sd 1.49, 5/5) | DFS 28 s / 193 cols · ours **1 s** / 428 |
+| rel-trial / study-outcome | 69.12 | 69.56 | +0.45 (sd 0.50, 5/5) | DFS 20 s / 116 cols · ours **2 s** / 134 |
+
+**The claim these documents have leaned on all along now has evidence.** "A generic
+flattening pipeline in front of a stock TabICL" was *too modest* on rel-f1, where our
+aggregation beats the standard automated approach by 5.03 with every seed agreeing, and
+about right on rel-trial, where +0.45 is inside the floor — a tie. And it builds features
+**20–28× faster**, which is the O(n log n) prefix scan against per-cutoff recomputation.
+
+*Read the caveats.* Both arms are capped at 3 child tables (`kids[:3]` still lives in that
+runner), so this is DFS-on-3 against ours-on-3, not against our full layer. DFS also lost
+some column types to a woodwork-safety cast, so it is a competent rather than maximal
+configuration. And rel-event and rel-avito were never run.
+
+*Cost of getting here, recorded because it was disproportionate:* seven attempts. Three
+genuine library incompatibilities (woodwork vs pandas 3, the frame-naming API, pandas
+`Categorical`), **two self-inflicted** (`--device cpu` on a GPU host; `--no-deps` on a
+third-party install stripping woodwork), and two provisioning failures. The diagnostic
+finally cost more than several of the experiments it was meant to contextualise.
 
 ### 2026-08-05 — child-table cap: a point available on test, declined on validation
 Every runner sliced `kids[:3]` — three child tables by dictionary order. **Only rel-trial is
