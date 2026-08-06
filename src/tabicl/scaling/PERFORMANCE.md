@@ -334,6 +334,52 @@ up, test down.
 This is the mirror image of the nine unselectable effects: **selectable and worthless**.
 Validation and test agree, and there is nothing to collect.
 
+### 2026-08-06 — what the defaults should be: `max_columns=4`, and both current values are wrong
+
+The defaults were never chosen, and they disagree with each other:
+
+| setting | library `Table` | `eval_track_record` | `STATUS.md` |
+|---|---|---|---|
+| `max_columns` | `None` | `2` | *"a rescue, not a default"* |
+| `windows` | `()` — none at all | per-dataset | *"the strongest signal a history carries"* |
+
+So a user calling `flatten_relational` gets no windows and no budget, while every published
+number here was measured with windows and a budget of 2.
+
+A default is chosen without seeing the user's data, so the criterion is robustness across
+schemas. Scored on **validation**, all four tasks, 3 seeds, test never read.
+
+**`max_columns`:**
+
+| task | `None` | `2` | `4` | note |
+|---|---:|---:|---:|---|
+| rel-f1 | **87.18** | 68.05 | 85.05 | 428 columns at `None` |
+| rel-trial | 65.38 | 65.38 | 65.38 | budget never binds — under 2 columns per child |
+| rel-event | 81.80 | 87.54 | **87.92** | **2,000 columns and 349 s** at `None` |
+| rel-avito | **69.32** | 69.28 | 69.23 | |
+
+Mean rank picks `None` (1.50 against 2.25 for both others), **but that is the wrong
+criterion.** A default should bound the damage when it is wrong, so the statistic is
+worst-case regret against the best value for each task:
+
+| candidate | worst-case regret |
+|---|---:|
+| `None` | 6.12 (rel-event) |
+| `2` | **19.13** (rel-f1) |
+| **`4`** | **2.13** (rel-f1) |
+
+**`max_columns=4`.** Never more than 2.13 off the best on any task, against 19.13 for the
+value the runner ships and 6.12 for the value the library ships. Both current defaults are
+wrong, in opposite directions, and `4` was in neither place.
+
+**`windows`:** `single` (a fixed 30 days) ranks 1.75, `task` (hand-picked per dataset) 2.00,
+`none` 2.25 — all within one rank, and the ordering is inconsistent across tasks (`single`
+places 3rd, 1st, 1st, 2nd). Two things follow. The hand-picked per-task windows are *not*
+better than a uniform 30 days, including on rel-trial where 30 days beats 365/1095 — so
+those values were never validated either. And windows nearly triple the feature count
+(44 → 122 on rel-f1) and roughly double build time (27 s → 55 s on rel-avito) for a
+difference inside noise, which makes the cost argument stronger than the accuracy one.
+
 ## Session close, 2026-08-06 — the table is unchanged, and that is the finding
 
 **rel-f1 81.98 · rel-event 80.98 · rel-avito 65.54 · rel-trial 72.26.** Nothing entered.
