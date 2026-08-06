@@ -43,6 +43,7 @@ from relbench.tasks import get_task
 from tabicl import TabICLClassifier
 from tabicl.scaling import Table, asof_statistics
 from tabicl.scaling._guards import assert_no_perfect_feature
+from tabicl.scaling._calendar import calendar_features
 
 NOAMP = {k: {"use_amp": False} for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG")}
 
@@ -68,6 +69,16 @@ VARIANTS = {
     # activity" is the feature a practitioner reaches for first.
     "timing": dict(time_deltas=True),
     "all": dict(top_k_categories=4, include_mode=True, numeric_booleans=True),
+}
+
+# Variants that add a block to the entity frame rather than to a child Table. Both runners
+# drop every datetime column when assembling that frame, the cutoff included, so nothing
+# downstream can tell a Monday from a Saturday -- on tasks with four- and seven-day
+# horizons. `calendar-trend` is separate because days-since-origin is monotone and every
+# test row lies beyond the training range on it; cyclical features have no such problem.
+FRAME_VARIANTS = {
+    "calendar": dict(trend=False),
+    "calendar-trend": dict(trend=True),
 }
 
 # Variants that change the MODEL rather than the features. Same frames on both sides, so
@@ -136,7 +147,7 @@ def main() -> None:
                          "seed and reused -- so the gaps are paired against the same "
                          "numbers and comparable to each other. Available: "
                          + ", ".join(sorted(set(VARIANTS) | set(MODEL_VARIANTS)
-                                            | set(CONTEXT_VARIANTS))))
+                                            | set(CONTEXT_VARIANTS) | set(FRAME_VARIANTS))))
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--context", type=int, default=10000)
     ap.add_argument("--children", type=int, default=3)
@@ -171,18 +182,25 @@ def main() -> None:
     kids = all_kids if args.children <= 0 else all_kids[: args.children]
     unknown = [v.strip() for v in args.variant.split(",")
                if v.strip() and v.strip() not in set(VARIANTS) | set(MODEL_VARIANTS)
-               | set(CONTEXT_VARIANTS)]
+               | set(CONTEXT_VARIANTS) | set(FRAME_VARIANTS)]
     if unknown:
         raise SystemExit(f"unknown variant(s) {unknown}")
     print(f"{args.dataset}/{args.task}  variants={args.variant}  windows={spec}  "
           f"max_columns={max_cols}  children={[k[0] for k in kids]}", flush=True)
 
-    def build(frame, extra):
+    # Trend is measured from the training minimum so train and test share a scale; taking
+    # each frame's own minimum would silently reset the origin at test time.
+    train_origin = pd.Timestamp(train[tcol].min())
+
+    def build(frame, extra, calendar=None):
         base = frame.merge(ent_df, left_on=key, right_on=pk, how="left")
         drop = {target, key, pk, tcol}
         cols = [c for c in base.columns
                 if c not in drop and not pd.api.types.is_datetime64_any_dtype(base[c])]
         blocks = [base[cols].reset_index(drop=True)]
+        if calendar is not None:
+            blocks.append(calendar_features(frame[tcol].to_numpy(),
+                                            origin=train_origin, **calendar))
         for n, fk, tc in kids:
             table = Table(db.table_dict[n].df, fk, n, time_column=tc, windows=windows,
                           max_columns=max_cols, min_category_share=args.category_share,
@@ -198,12 +216,12 @@ def main() -> None:
     wanted = [v.strip() for v in args.variant.split(",") if v.strip()]
     frames, widths = {}, {}
 
-    def ensure(label, extra):
+    def ensure(label, extra, calendar=None):
         if label in frames:
             return
         t0 = time.perf_counter()
-        f_tr = build(train, extra)
-        f_te = build(test, extra).reindex(columns=f_tr.columns, fill_value=np.nan)
+        f_tr = build(train, extra, calendar)
+        f_te = build(test, extra, calendar).reindex(columns=f_tr.columns, fill_value=np.nan)
         codes: dict = {}
         frames[label] = (_numeric(f_tr, codes, True), _numeric(f_te, codes, False))
         widths[label] = list(f_tr.columns)
@@ -254,7 +272,10 @@ def main() -> None:
             n_changed = 0
         else:
             label = variant
-            ensure(label, VARIANTS[variant])
+            if variant in FRAME_VARIANTS:
+                ensure(label, {}, FRAME_VARIANTS[variant])
+            else:
+                ensure(label, VARIANTS[variant])
             # An empty block does not raise, it reports +0.00 with sd 0.00 --
             # indistinguishable from a clean null. Depth-2 spent a week "measured at no
             # effect" that way. Two of these have their own silent-empty path:

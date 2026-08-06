@@ -2120,6 +2120,42 @@ def test_two_hop_cutoff_excludes_grandchildren_dated_after_the_entity_cutoff():
     assert out[mean].iloc[0] == pytest.approx(2.0), "the post-cutoff price leaked into mean"
 
 
+def test_calendar_features_are_cyclical_and_keep_the_trend_separate():
+    """Sunday and Monday are adjacent, and the monotone column is opt-in.
+
+    Both runners drop every datetime column when assembling the entity block, the cutoff
+    included, so nothing downstream can tell a Monday from a Saturday -- on tasks whose
+    horizons are four and seven days.
+
+    `trend` is separate on purpose: days-since-origin is monotone, so every test row lies
+    beyond the training range on it. Bundling it with the cyclical features would let the
+    pair win or lose for reasons that cannot be told apart.
+    """
+    from tabicl.scaling._calendar import calendar_features
+
+    # 2020-01-05 is a Sunday, 2020-01-06 a Monday.
+    stamps = pd.to_datetime(["2020-01-05", "2020-01-06", "2020-06-15"]).to_numpy()
+
+    plain = calendar_features(stamps)
+    assert "cal__trend" not in plain.columns
+    assert plain["cal__dayofweek"].tolist() == [6.0, 0.0, 0.0]
+    assert plain["cal__is_weekend"].tolist() == [1.0, 0.0, 0.0]
+
+    # The whole point of the sine/cosine pair: consecutive days are close in that space,
+    # even though 6 and 0 are far apart as integers.
+    def gap(i, j):
+        return float(np.hypot(plain["cal__dow_sin"].iloc[i] - plain["cal__dow_sin"].iloc[j],
+                              plain["cal__dow_cos"].iloc[i] - plain["cal__dow_cos"].iloc[j]))
+
+    assert gap(0, 1) < 1.0                      # Sunday to Monday: one step round the circle
+    assert gap(0, 1) < abs(plain["cal__dayofweek"].iloc[0] - plain["cal__dayofweek"].iloc[1])
+
+    # Trend is measured from the given origin, so train and test share a scale.
+    origin = pd.Timestamp("2020-01-01")
+    trended = calendar_features(stamps, trend=True, origin=origin)
+    assert trended["cal__trend"].tolist() == [4.0, 5.0, 166.0]
+
+
 def test_recency_age_and_span_are_available_and_off_by_default():
     """Nothing the scan emits says *when*, because the timestamp is the excluded column.
 

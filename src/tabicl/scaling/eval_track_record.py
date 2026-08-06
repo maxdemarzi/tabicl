@@ -46,6 +46,7 @@ from relbench.tasks import get_task
 from tabicl import TabICLClassifier
 from tabicl.scaling import Table, asof_statistics, key_target_history
 from tabicl.scaling._guards import assert_no_perfect_feature
+from tabicl.scaling._calendar import calendar_features
 from tabicl.scaling._leakage import permutation_test, temporal_control
 
 NOAMP = {k: {"use_amp": False} for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG")}
@@ -190,6 +191,17 @@ def main() -> None:
                          "each one a single nunique of 1 or 2 -- and with mode and the "
                          "histogram both off, that has been their entire contribution to "
                          "every number in the table.")
+    ap.add_argument("--calendar", action="store_true",
+                    help="day of week, day, month, weekend flag and their sine/cosine "
+                         "pairs, from the prediction timestamp. Every datetime column is "
+                         "dropped when the entity block is assembled -- the cutoff "
+                         "included -- so nothing downstream can tell a Monday from a "
+                         "Saturday, on tasks with four- and seven-day horizons.")
+    ap.add_argument("--calendar-trend", action="store_true",
+                    help="also emit days since the training minimum. Separate from "
+                         "--calendar on purpose: this one is monotone, so every test row "
+                         "lies beyond the training range on it and a model keying on it "
+                         "extrapolates off the end of its own support.")
     ap.add_argument("--time-deltas", action="store_true",
                     help="emit days-since-last-child-row, days-since-first, and span, for "
                          "all-history and each window. The timestamp is the one column "
@@ -301,6 +313,12 @@ def main() -> None:
         cols = [c for c in base.columns
                 if c not in drop and not pd.api.types.is_datetime64_any_dtype(base[c])]
         blocks = [base[cols].reset_index(drop=True)]
+        if args.calendar or args.calendar_trend:
+            # Origin is the training minimum, so train and test share a scale. Taking each
+            # frame's own minimum would silently reset it at test time.
+            blocks.append(calendar_features(frame[tcol].to_numpy(),
+                                            trend=args.calendar_trend,
+                                            origin=pd.Timestamp(train[tcol].min())))
         for n, fk, tc in kids:
             t = Table(db.table_dict[n].df, fk, n, time_column=tc, windows=WINDOWS,
                       max_columns=max_cols,
