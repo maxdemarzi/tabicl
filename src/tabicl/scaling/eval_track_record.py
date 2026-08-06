@@ -122,6 +122,11 @@ def main() -> None:
                          "balance. Only meaningful with --resample > 1: it removes the "
                          "class-balance wobble between draws, which is noise added to the "
                          "quantity resampling exists to average down.")
+    ap.add_argument("--cv-time-ordered", action="store_true",
+                    help="forward-chaining folds: each is scored using only earlier rows. "
+                         "Required for this benchmark -- random k-folds train on the future "
+                         "to predict the past, and did exactly that, rewarding resampling "
+                         "with +5.3 of CV score while test fell 0.76.")
     ap.add_argument("--cv-folds", type=int, default=0,
                     help="select on k-fold CV over train instead of the single validation "
                          "split. 0 keeps the current behaviour. The val splits here are "
@@ -641,13 +646,28 @@ def main() -> None:
             X, _ = arms[name]
             n = len(X)
             rng = np.random.default_rng(seed)
-            order = rng.permutation(n)
-            folds = np.array_split(order, args.cv_folds)
+            if args.cv_time_ordered:
+                # Forward chaining: fold k is scored using only rows BEFORE it. Random
+                # k-folds break the temporal ordering the benchmark rests on -- a random
+                # fold trains on the future to predict the past, which rewarded context
+                # resampling with +5.3 of CV while test fell 0.76. A criterion that grows
+                # more confident as test degrades is worse than a noisy one.
+                order = np.argsort(train[tcol].to_numpy(), kind="stable")
+                blocks = np.array_split(order, args.cv_folds + 1)
+                folds = blocks[1:]                       # first block is history only
+                past = {i: np.concatenate(blocks[:i + 1]) for i in range(len(folds))}
+            else:
+                order = rng.permutation(n)
+                folds = np.array_split(order, args.cv_folds)
+                past = None
             scores = []
-            for f in folds:
+            for i, f in enumerate(folds):
                 if len(np.unique(y[f])) < 2:
                     continue
-                rest = np.setdiff1d(order, f, assume_unique=False)
+                rest = past[i] if past is not None else np.setdiff1d(order, f,
+                                                                     assume_unique=False)
+                if len(rest) < 50:
+                    continue
                 # Reuse `score`, which already averages over --resample draws. The first
                 # version built its own classifier call: it ignored --resample (returning an
                 # identical 90.37 for 1 and 3 draws, so the criterion was blind to the very
