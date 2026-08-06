@@ -140,6 +140,67 @@ argument rather than on a measurement. `--children-order name` is the other defe
 specification, and it is arbitrary but neutral. The one option that should not stand is the
 current default.
 
+### 2026-08-06 — rel-trial categories settled at 12 replicates: real, and not selectable
+
+Three children (the standing configuration), paired per seed, twelve replicates:
+
+| | none | `--categories 4` | paired Δ |
+|---|---:|---:|---|
+| test | 72.43 ± 0.73 | **73.21 ± 0.57** | **+0.78** (SE 0.186, **4.2 SE**, 11/12) |
+| val | 68.49 | 68.36 | **−0.13** (SE 0.101, 1.3 SE, **3/12**) |
+
+**Test gain is solid. Validation mildly disprefers it, consistently** — nine of twelve seeds
+negative. So this joins the unselectable list rather than the table.
+
+**Two readings of mine that twelve replicates killed**, both from five-seed data:
+
+* "Validation prefers categories (+0.09)" — the sign was split 3-of-5 even then, and at
+  twelve it is −0.13 with 3/12 positive.
+* "68.50 is the highest validation score of any configuration tested" — noise. The margin
+  was 0.09.
+
+The 3-replicate ten-children result (Δval +0.43, 3/3) should be read the same way: three
+replicates on a task whose paired val SE is 0.10 at twelve.
+
+**The baseline reproduces**: 72.43 ± 0.73 against a standing 72.26, so the configuration is
+sound and only the verdict changed.
+
+---
+
+## Session close, 2026-08-06 — the table is unchanged, and that is the finding
+
+**rel-f1 81.98 · rel-event 80.98 · rel-avito 65.54 · rel-trial 72.26.** Nothing entered.
+
+**Every gate result reproduced on test. None of the large ones survived selection.**
+
+| candidate | task | gate | Δtest (paired) | Δval (paired) | outcome |
+|---|---|---:|---:|---:|---|
+| calendar | rel-event | +2.96 | **+3.00** (4.9 SE) | **−1.91** (4.7 SE) | rejected |
+| categories | rel-trial | +0.90 | **+0.78** (4.2 SE) | −0.13 (1.3 SE) | rejected |
+| recency | rel-event | +7.50 | — | validation picks large contexts | rejected |
+| timing | rel-f1 | +0.62 | +0.02 at the correct budget | — | null |
+| narrow | rel-trial | +0.99 | +0.28 | −0.45 | rejected |
+
+**Eight effects are now real-on-test and unselectable.** The mechanism is specific:
+**validation rewards context size**, and on rel-event it accepts `recent` only at 10,000
+rows — the diluted version worth +0.31 — while the +7.50 lives at 1,000. More context helps
+on a *nearby* period; a small recent context helps on a *distant* one; validation observes
+only the first. `--gap-validation` was built to fix exactly this and **made things worse**
+(78.71 against 80.25), because its pseudo-split scores 92.76 and selects on a smaller pool.
+
+**What actually moved the work forward was auditing what the code does not do.** Eight
+defects, six of which printed output shaped like a careful result rather than an error: a
+column budget deleting a feature block; the target passed in as a feature (AUC 100.00 in
+*both* arms, so the gap read as a clean +0.00); an all-NaN block the model silently drops;
+a flag keyed on the wrong dtype so it never fired; a constant column read as a rate; and a
+`tail -60` discarding four variants per task. Plus two that were worse in kind: `--children
+3` selecting **different tables on different machines**, and promotions not inheriting the
+per-task configuration they were being compared against.
+
+**Two of my own hypotheses were refuted by measurement**: that heavy-tailed count features
+want `quantile` normalization (−3.07 on rel-trial, negative on all four), and that a
+gap-matched validation split would fix the selection instrument.
+
 ### 2026-08-05 — gap-matched validation: my own fix, tested and refuted
 
 The diagnosis was that RelBench's validation split sits nearer to train than test does
