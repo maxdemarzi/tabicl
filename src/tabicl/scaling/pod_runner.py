@@ -64,8 +64,14 @@ def find_pod():
 
 
 def ssh_target(pod) -> tuple[str, int] | None:
-    """Public IP and mapped port 22, once the pod has finished starting."""
-    for port in pod.get("runtime", {}).get("ports") or []:
+    """Public IP and mapped port 22, once the pod has finished starting.
+
+    ``or {}`` rather than a ``get`` default: RunPod returns the ``runtime`` key present and
+    explicitly ``null`` while a pod is still booting, and a default only applies when the
+    key is absent. So `status` raised AttributeError for the entire startup window --
+    exactly when someone checking on a run is most likely to ask.
+    """
+    for port in (pod.get("runtime") or {}).get("ports") or []:
         if port.get("privatePort") == 22 and port.get("isIpPublic"):
             return port["ip"], int(port["publicPort"])
     return None
@@ -243,7 +249,8 @@ def main() -> int:
 
     if args.action == "status":
         print(f"{pod['id']}  {pod.get('desiredStatus')}  "
-              f"gpu={pod.get('machine',{}).get('gpuDisplayName')}  ssh={ssh_target(pod)}")
+              f"gpu={(pod.get('machine') or {}).get('gpuDisplayName')}  "
+              f"ssh={ssh_target(pod) or 'not ready'}")
         return 0
 
     if args.action in ("stop", "terminate"):
