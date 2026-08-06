@@ -81,6 +81,15 @@ VARIANTS = {
 # only the final cast differs.
 ENCODING_VARIANTS = ["keepnan"]
 
+# Prediction-path rather than features: `thinking` routes through
+# `think_predict_proba` instead of a single forward pass. Predicted null for AUC before
+# running, on two grounds visible in the code -- its permutation knob varies only
+# `random_state`, which is model-seed ensembling at a fixed context and measured at nothing
+# on every task; and its head is a LogisticRegression over the backbone's own probability
+# matrix, so the blend is monotone in p and ROC-AUC is invariant under monotone transforms.
+# Its blend weight is also chosen on log-loss, which is not the metric here.
+PREDICT_VARIANTS = ["thinking"]
+
 FRAME_VARIANTS = {
     "calendar": dict(trend=False),
     "calendar-trend": dict(trend=True),
@@ -171,7 +180,7 @@ def main() -> None:
                          "numbers and comparable to each other. Available: "
                          + ", ".join(sorted(set(VARIANTS) | set(MODEL_VARIANTS)
                                             | set(CONTEXT_VARIANTS) | set(FRAME_VARIANTS)
-                                            | set(ENCODING_VARIANTS))))
+                                            | set(ENCODING_VARIANTS) | set(PREDICT_VARIANTS))))
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--context", type=int, default=10000)
     ap.add_argument("--children", type=int, default=3)
@@ -206,7 +215,8 @@ def main() -> None:
     kids = all_kids if args.children <= 0 else all_kids[: args.children]
     unknown = [v.strip() for v in args.variant.split(",")
                if v.strip() and v.strip() not in set(VARIANTS) | set(MODEL_VARIANTS)
-               | set(CONTEXT_VARIANTS) | set(FRAME_VARIANTS) | set(ENCODING_VARIANTS)]
+               | set(CONTEXT_VARIANTS) | set(FRAME_VARIANTS) | set(ENCODING_VARIANTS)
+               | set(PREDICT_VARIANTS)]
     if unknown:
         raise SystemExit(f"unknown variant(s) {unknown}")
     print(f"{args.dataset}/{args.task}  variants={args.variant}  windows={spec}  "
@@ -256,10 +266,19 @@ def main() -> None:
 
     ensure("base", {})
 
-    def score(X, Xe, rows, seed, extra=None):
+    def score(X, Xe, rows, seed, extra=None, thinking=False):
         clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
                                random_state=seed, inference_config=NOAMP,
-                               **(extra or {})).fit(X[rows], y[rows])
+                               **(extra or {}))
+        if thinking:
+            from tabicl.scaling import think_predict_proba
+            r = think_predict_proba(clf, X[rows], y[rows], Xe,
+                                    n_permutations=3, random_state=seed)
+            print(f"    thinking: blend_weight={r.blend_weight:.2f} "
+                  f"val_base={r.val_score_base:.4f} val_thought={r.val_score_thought:.4f}",
+                  flush=True)
+            return roc_auc_score(y_te, r.proba[:, 1]) * 100
+        clf.fit(X[rows], y[rows])
         return roc_auc_score(y_te, clf.predict_proba(Xe)[:, 1]) * 100
 
     # Train row order by time, for the context variants. Ties keep their original order so
@@ -305,6 +324,12 @@ def main() -> None:
                       f"rows, so this selects the same set as the base arm and any gap "
                       f"would be noise. Lower --context to measure it.", flush=True)
                 continue
+        elif variant in PREDICT_VARIANTS:
+            # Same features, same context, different prediction path.
+            label = "base"
+            n_changed = 0
+            print(f"\n{variant}: prediction-path, identical features and context "
+                  f"({len(widths['base'])} columns)", flush=True)
         elif variant in ENCODING_VARIANTS:
             # Same features, same columns, different cast. The empty-block refusal below
             # checks column names and would skip this every time -- correctly by its own
@@ -352,7 +377,8 @@ def main() -> None:
             rows = (context_rows(np.random.default_rng(seed), n, size, variant)
                     if context_side else draws[seed])
             b = score(*frames[label], rows, seed,
-                      MODEL_VARIANTS[variant] if model_side else None)
+                      MODEL_VARIANTS[variant] if model_side else None,
+                      thinking=(variant in PREDICT_VARIANTS))
             gaps.append(b - base_auc[seed])
             print(f"{seed:>5} {base_auc[seed]:>9.2f} {b:>14.2f} {gaps[-1]:>+8.2f}", flush=True)
 
