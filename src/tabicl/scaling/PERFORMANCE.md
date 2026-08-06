@@ -259,6 +259,36 @@ overestimates model performance". Protocol rigour is a known problem on this ben
 which is the strongest argument for keeping the calibrated column as the headline and
 publishing the unselectable finding rather than loosening what we report.*
 
+### 2026-08-06 — the context cap was not costing anything
+
+`--context` defaults to 10,000 and the calibrated grid is `{cap//4, cap//2, cap}`, so the
+sweep had never looked above it: 10,000 of rel-avito's 86,619 training rows, 10,000 of
+rel-event's 19,239. An unexamined default of exactly the kind that has paid off repeatedly
+this week — and the one axis where the diagnosis predicted validation would *cooperate*,
+since it demonstrably rewards context size.
+
+| task | context | val | test |
+|---|---:|---:|---:|
+| rel-avito | 10,000 | 77.34 | 65.67 |
+| rel-avito | 20,000 | 77.72 | 65.70 |
+| rel-avito | 40,000 | **77.83** | 65.74 |
+| rel-event | 10,000 | 87.12 | **81.58** |
+| rel-event | 19,000 | **87.53** | 80.68 |
+| rel-trial | 10,000 | 68.52 | 72.30 |
+| rel-trial | 12,000 (control) | 68.55 | 72.56 |
+
+**+0.07 on rel-avito for four times the context, −0.90 on rel-event.** The cap was not a
+limitation, and this closes the last open lead.
+
+Two things worth keeping from it. Validation rose monotonically with context on every task
+— 77.34 → 77.72 → 77.83 on rel-avito, 87.12 → 87.53 on rel-event — which confirms the
+"validation rewards context size" diagnosis a third and fourth time, independently of the
+recency work that produced it. And rel-event shows the same inversion yet again: validation
+up, test down.
+
+This is the mirror image of the nine unselectable effects: **selectable and worthless**.
+Validation and test agree, and there is nothing to collect.
+
 ## Session close, 2026-08-06 — the table is unchanged, and that is the finding
 
 **rel-f1 81.98 · rel-event 80.98 · rel-avito 65.54 · rel-trial 72.26.** Nothing entered.
