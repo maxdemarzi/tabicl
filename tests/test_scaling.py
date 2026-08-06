@@ -2670,3 +2670,25 @@ def test_every_scaling_module_parses_on_the_python_the_pods_run():
         except SyntaxError as exc:
             failures.append(f"{path.name}:{exc.lineno}: {exc.msg}")
     assert not failures, "syntax too new for the pod images:\n" + "\n".join(failures)
+
+
+def test_pod_images_satisfy_the_torch_minimum_the_probe_enforces():
+    """The provisioner must not offer an image its own probe will reject.
+
+    `runpod/pytorch:2.1.0-...` sat in IMAGES as the fallback, so whenever the preferred
+    image was unavailable the loop created a pod from it and the probe then rejected that
+    pod for shipping torch 2.1.0. Two of three rejections in one run were this, and it
+    cost all twelve provisioning attempts. A minimum enforced on the host and violated in
+    the configuration is not a minimum.
+    """
+    from tabicl.scaling import pod_runner
+
+    pod_runner._check_images()          # the shipped list must pass
+
+    original = pod_runner.IMAGES
+    try:
+        pod_runner.IMAGES = ["runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04"]
+        with pytest.raises(SystemExit, match="below the required"):
+            pod_runner._check_images()
+    finally:
+        pod_runner.IMAGES = original
