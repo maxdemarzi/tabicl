@@ -140,6 +140,45 @@ argument rather than on a measurement. `--children-order name` is the other defe
 specification, and it is arbitrary but neutral. The one option that should not stand is the
 current default.
 
+### 2026-08-05 — gap-matched validation: my own fix, tested and refuted
+
+The diagnosis was that RelBench's validation split sits nearer to train than test does
+(7 days against 15 on rel-event), so a setting chosen on it is tuned for a shorter horizon
+than the one it is scored at. `--gap-validation` carved a pseudo-validation split out of
+train whose distance from its fitting pool matched the train→test gap.
+
+**It made things worse.** rel-event, calibrated, `--timed-links-only`, 3 replicates:
+
+| instrument | order chosen | pseudo/val score | test |
+|---|---|---:|---:|
+| ordinary validation | `recent` 3/3 | 88.02 | 80.25 ± 0.45 |
+| **gap-matched** | `random` 2/3 | 92.76 | **78.71 ± 1.78** |
+| *(no context orders offered)* | — | 87.13 | 82.70 ± 1.08 |
+
+The pseudo-validation split scores **92.76**, far above real validation (~88) and test
+(~80): the last 2,013 training rows are simply easier to predict than either. And selection
+ran on an 11,522-row pool while the final fit uses 19,239, so the context size it picks is
+tuned for a smaller fitting set. **The instrument's own bias is larger than the one it was
+built to remove.**
+
+**The sharper diagnosis, which the per-configuration scores make visible:**
+
+```
++counts/recent       context=5000   val=84.49
++counts/random       context=10000  val=87.54
++counts/recent       context=10000  val=88.00   ← chosen, test 79.75
+```
+
+Validation **rewards context size**. It will take `recent` only at 10,000 rows — half the
+training period, the diluted version worth +0.31 — and scores small recent contexts *low*.
+The +7.50 lives at 1,000 rows. So the failure is not merely that validation is nearer to
+train; it is that **more context helps on a nearby period while a small recent context helps
+on a distant one**, and validation can only observe the first.
+
+That is a property of the benchmark's split design, not something a fold arrangement fixes.
+**The selection thread is closed, this time with the alternative built and measured rather
+than assumed** — which is the distinction I failed to draw when I closed it the first time.
+
 ### 2026-08-05 — the standing configuration is per-task, and promotions must carry it
 
 rel-f1's timing promotion scored **73.21** against a standing **81.98**. Not noise, not a
