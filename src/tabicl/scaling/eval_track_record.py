@@ -194,6 +194,12 @@ def main() -> None:
                          "column gets a histogram. Below it the column is free text in "
                          "disguise (rel-trial's eligibilities.criteria has 247k values and "
                          "its top 4 cover 0.1%%), and the block is K+1 constant columns.")
+    ap.add_argument("--budget-categoricals", action="store_true",
+                    help="apply --max-columns to the nunique block as well, which it never "
+                         "has. Measured +0.99 (SE 0.10, 5/5) on rel-trial with all ten "
+                         "child tables -- the budget bounds numeric columns only, so every "
+                         "categorical column emits a distinct-count however narrow the "
+                         "budget is, and with ten children that is 38 columns of nothing.")
     ap.add_argument("--numeric-booleans", action="store_true",
                     help="aggregate boolean child columns as numbers, so a boolean history "
                          "yields its rate. They are categorical by default, which gives "
@@ -382,6 +388,7 @@ def main() -> None:
                       top_k_categories=args.categories or None,
                       min_category_share=args.category_share,
                       numeric_booleans=args.numeric_booleans,
+                      budget_categoricals=args.budget_categoricals,
                       time_deltas=args.time_deltas,
                       include_mode=args.mode)
             blocks.append(asof_statistics(t, frame[key].to_numpy(),

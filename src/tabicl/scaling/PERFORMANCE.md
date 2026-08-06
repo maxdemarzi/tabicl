@@ -123,6 +123,37 @@ seeds to see whether validation resolves it. The reproducibility argument for
 `--top-children` stands on its own regardless of the outcome, since the thing it replaces
 is not well-defined.
 
+### 2026-08-05 — CORRECTION: the categorical blocks are not dead, they were measured on the wrong configuration
+
+Earlier today I closed the categorical blocks on the basis of five gate measurements, the
+largest being +0.27, and wrote that the question was "closed rather than open". Those were
+all taken with **three child tables**. Re-run on rel-trial with **all ten**, 5 seeds:
+
+| variant | gap | SE | positive | columns changed |
+|---|---:|---:|:---:|---:|
+| **`narrow`** (budget the nunique block) | **+0.99** | 0.10 | **5/5** | −38 |
+| **`categories`** (top-K proportions) | **+0.90** | 0.12 | **5/5** | +144 |
+| `booleans` | +0.38 | 0.05 | 5/5 | +26 |
+| `timing` | +0.03 | 0.56 | 3/5 | +90 |
+
+Both clear, both 5/5, both with standard errors under 0.13. The verdict was
+configuration-dependent and I stated it as though it were not.
+
+**`narrow` is the larger of the two and it *removes* columns.** `max_columns` has never
+bounded the `nunique` block, so every categorical column emits a distinct-count however
+narrow the budget is set; with three children that was 10 stray columns and worth nothing,
+with ten children it is 38 and worth a point. The defect was correctly identified this
+morning and its cost was measured on the configuration where it barely mattered.
+
+It was also unreachable from the production runner until now — exposed as
+`--budget-categoricals`.
+
+**What this says about everything else closed today:** every gate in this log ran at
+`--children 3`, which is both an arbitrary count *and*, as the entry below shows, an
+environment-dependent set. Null results measured there bound nothing about the ten-child
+configuration. The categorical entry below is left standing rather than deleted, because
+what it says about three children remains true.
+
 ### 2026-08-05 — the prediction timestamp: +2.96 on rel-event, −0.68 on rel-trial
 
 Both runners drop every datetime column when assembling the entity block, the cutoff
