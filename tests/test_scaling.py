@@ -2120,6 +2120,37 @@ def test_two_hop_cutoff_excludes_grandchildren_dated_after_the_entity_cutoff():
     assert out[mean].iloc[0] == pytest.approx(2.0), "the post-cutoff price leaked into mean"
 
 
+def test_max_columns_bounds_numeric_columns_only_unless_told_otherwise():
+    """One table, budgeted three different ways -- which is worth pinning down.
+
+    `max_columns` has never applied to the `nunique` block, while the category histogram
+    and `include_mode` both apply it. So the budget bounds numeric columns only, and a wide
+    categorical table emits a distinct-count per column however narrow the budget is. That
+    is the failure the budget exists to prevent; rel-event reached 1,670 features that way.
+
+    Asserted in both directions, because the default is the *unbudgeted* one and a silent
+    change there moves every standing number.
+    """
+    from tabicl.scaling import Table, asof_statistics
+
+    entities = pd.DataFrame({"id": [1], "t": [pd.Timestamp("2020-06-01")]})
+    kid = pd.DataFrame({
+        "id": [1, 1],
+        "kt": pd.to_datetime(["2020-01-01", "2020-02-01"]),
+        "c1": ["a", "b"], "c2": ["c", "d"], "c3": ["e", "f"], "c4": ["g", "h"],
+    })
+
+    def widths(budget_categoricals):
+        table = Table(kid, "id", "k", time_column="kt", max_columns=2,
+                      budget_categoricals=budget_categoricals)
+        out = asof_statistics(table, entities["id"].to_numpy(), entities["t"].to_numpy())
+        return [c for c in out.columns if c.endswith("__nunique")]
+
+    # Default: the budget of 2 does not reach this block, so all four columns appear.
+    assert len(widths(False)) == 4
+    assert len(widths(True)) == 2
+
+
 def test_boolean_columns_can_carry_their_rate_instead_of_a_nunique():
     """The mean of a boolean is its rate, and that is the statistic a boolean history has.
 

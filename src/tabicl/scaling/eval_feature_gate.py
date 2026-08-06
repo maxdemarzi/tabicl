@@ -57,6 +57,11 @@ VARIANTS = {
     "categories": dict(top_k_categories=4),
     "mode": dict(include_mode=True),
     "booleans": dict(numeric_booleans=True),
+    # Narrower, not wider: `max_columns` has never bounded the nunique block, so it has
+    # been bounding numeric columns only while every categorical column emitted a
+    # distinct-count regardless. This is the only variant here that can *remove* columns,
+    # and the project's own column-budget measurements say narrow feature sets win.
+    "narrow": dict(budget_categoricals=True),
     "all": dict(top_k_categories=4, include_mode=True, numeric_booleans=True),
 }
 

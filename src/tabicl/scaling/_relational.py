@@ -93,6 +93,14 @@ class Table:
         column yields K+1 constant columns and hurts -- so they are skipped rather than
         emitted. Set to 0.0 to build a histogram for every categorical column.
 
+    budget_categoricals : bool, default=False
+        Apply ``max_columns`` to the ``nunique`` block as well.
+
+        It never has, so ``max_columns`` bounds *numeric* columns only and every categorical
+        column emits a distinct-count whatever the budget says -- while the histogram and
+        ``include_mode`` both honour it. One table, budgeted three different ways. Off by
+        default so no existing feature set changes silently.
+
     numeric_booleans : bool, default=False
         Aggregate boolean columns as numbers rather than as categories.
 
@@ -137,6 +145,7 @@ class Table:
     top_k_categories: Optional[int] = None
     min_category_share: float = 0.5
     numeric_booleans: bool = False
+    budget_categoricals: bool = False
     include_mode: bool = False
     primary_key: Optional[str] = None
     windows: Sequence = field(default=())
@@ -797,6 +806,17 @@ def _prefix_nunique(out, label, child, df, order, sorted_key, hi_idx, lo_idx) ->
     """
     excluded = {child.foreign_key, child.time_column, child.primary_key}
     cats = [c for c in df.columns if c not in excluded and not _numeric_path(child, df[c])]
+    # `max_columns` has never bounded this block, so it bounds *numeric* columns only:
+    # every categorical column emits a nunique whatever the budget says. The histogram and
+    # `_prefix_mode` both apply it, so the same table has been budgeted three different
+    # ways. On a wide table that is the failure the budget exists to prevent -- rel-event
+    # reached 1,670 features and 35.7 GB -- and the project's own measurements say narrow
+    # feature sets win here.
+    #
+    # Off by default so that no standing number moves silently; it is a measurement, not a
+    # cleanup.
+    if child.budget_categoricals:
+        cats = _budgeted_columns(child, df, cats)
     if not cats:
         return
 
