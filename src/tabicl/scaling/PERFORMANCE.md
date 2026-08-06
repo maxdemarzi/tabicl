@@ -32,7 +32,7 @@ field is shown here, with our rank in it.
 | rel-f1 / driver-top3 | **81.98** | 6/10 | 84.61 | 76.81 | **85.69** | 83.52 | 75.54 | 82.50 | 79.69 | 77.60 | 82.72 | 82.09 | 79.98 |
 | rel-event / user-ignore | **80.98** | 7/10 | 86.77 | 77.95 | **86.18** | 81.57 | 81.62 | 83.27 | 82.52 | 78.65 | 73.70 | 78.86 | 85.38 |
 | rel-avito / user-visits | **65.54** | 8/10 | 66.21 | 65.81 | 66.18 | 66.78 | 66.20 | 60.70 | 65.49 | 66.47 | 66.76 | **69.41** ˟ | 66.68 |
-| rel-avito / user-clicks ◆ | **65.89** | 8/10 | — | — | 68.23 | 68.30 | 65.90 | 45.90 | 69.04 | 65.72 | **69.06** | 67.42 ˟ | 67.09 |
+| rel-avito / user-clicks ◆ | **65.89** | 8/10 | 68.19 ⁿ²⁰ | — | 68.23 | 68.30 | 65.90 | 45.90 | 69.04 | 65.72 | **69.06** | 67.42 ˟ | 67.09 |
 | rel-f1 / driver-dnf ◆ | **69.66** | 9/10 | — | — | 75.29 | **75.87** | 72.62 | 57.70 | 70.87 | 71.72 | 71.72 | 72.03 | 70.74 |
 | **average** ¶ | **73.46** | **6/10** | — | — | **76.06** | 74.39 | 72.48 | 64.71 | 73.46 | 72.66 | 73.38 | 74.45 | 74.77 |
 
@@ -63,6 +63,12 @@ support them; not directly comparable.
 cutoffs, scored by **the same TabICL, same context, same seeds** — only the feature builder
 differs, so it is the one column isolating *our aggregation* from *our model*. We lead 2 of
 4 and tie 2, at 5–23× faster feature build. Only run on the original four tasks.
+
+ⁿ **The superscript is the number of configurations the max was taken over**, because a max
+over K noisy scores is biased upward and the bias grows with K. Cells without one came from
+every variant ever run on that task — far more than 20 — so they are *more* inflated than
+the annotated ones, not less. Comparing best-cfg cells across rows compares search effort as
+much as headroom.
 
 ‡ **An upper bound selected with knowledge of test — never a claim, never bolded.** Included
 because the comparison columns are not measured the way our main column is: the report takes
@@ -2183,6 +2189,39 @@ Worth noting what it may also explain: RelGNN and RelGT — the two methods abov
 often — are graph models over a schema that includes the task table, so past labels can
 reach a node through message passing without anyone designing a feature. Our two worst
 placings are both rel-f1, and rel-f1 is where this signal is strongest.
+
+### 2026-08-06 — best-cfg for rel-avito/user-clicks, and two tasks I threw away
+
+A 21-configuration sweep per task — defaults, context 1000, all children, categories,
+top-keys, calendar, resample, each also covering the three frame variants — run to fill the
+three empty `best-cfg` cells. One task's worth survived:
+
+**rel-avito/user-clicks: best-cfg 68.19** (`--resample 4`, `base` arm), from 20 of 21
+configurations. Standing is 65.89, so the labelled upper bound is **+2.30** above what the
+calibrated protocol actually selects, and 68.19 would still sit below RDBLearn+v3's 69.06.
+Top five: 68.19, 67.49, 67.15, 66.96, 66.87 — a 1.32 spread across the top five and 3.93
+across all twenty.
+
+**rel-f1/driver-dnf: at least 69.95**, from only 2 of 21 configurations, so it is a lower
+bound on an upper bound and goes in the table with that count attached, or not at all.
+
+**rel-event/user-repeat: nothing. I destroyed it.** The launcher piped a multi-hour run
+through `tail -300`, which kept the last 300 lines and discarded the first two tasks before
+anyone read them. The sweep itself ran correctly and the pod had already been terminated by
+the time the loss was visible, so the data is gone rather than recoverable.
+
+**This is the fifth time an output filter has eaten results in this project, and the first
+time I did it after writing the other four up.** The earlier four were `tail -60` and a
+`keep` grep discarding per-seed data. The fix is not another reminder: `remote.sh` now
+`tee`s the run to `/workspace/work.log` on the pod, so a truncated local log is survivable
+as long as the pod is still up, and the launcher no longer pipes through `tail` at all.
+
+**A note on what `best-cfg` is worth as a number.** It is a max over 21 noisy scores, and a
+max over K noisy draws is biased upward with the bias growing in K. The original four tasks'
+cells came from every variant ever run on them — far more than 21 — so those cells are
+*more* inflated than these, not less. The column is labelled an upper bound selected with
+knowledge of test for exactly this reason, and the configuration count now travels with each
+cell so the comparison between them is at least visible.
 
 ### 2026-08-06 — IDEA 2, from data already collected: per-task calibration buys nothing
 
