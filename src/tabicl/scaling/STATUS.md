@@ -49,7 +49,7 @@ from tabicl.scaling import (
     select_context, prune_features,
     # graph and label-derived features
     label_homophily, select_graph_context,
-    neighbour_label_features, key_target_history,
+    neighbour_label_features, key_target_history, entity_label_history,
     # 4. test-time compute
     think_predict_proba, ThinkingResult,
 )
@@ -167,13 +167,25 @@ What differs:
 | algebra | fixed primitive set | semirings — `SUM_PRODUCT`, `MIN_PLUS`, `MAX_PLUS`, `BOOLEAN` — one scan, laws checkable |
 | joins | tree-shaped foreign-key paths | plus a compiled WCOJ for **cyclic** patterns (triangles, typed motifs) |
 | width | feature count grows sharply with depth | explicit `max_columns` budget, target-free so it cannot leak |
-| the target | **never used** | `key_target_history` uses *other rows'* labels, with a resolution horizon and negative controls |
+| the target | **never used** | `key_target_history` (other entities, via a shared key) and `entity_label_history` (this entity's own earlier rows), both with a resolution horizon and negative controls |
 
 **The last row is the one that matters.** DFS deliberately never touches the target, and
 that is precisely the ceiling: on rel-trial, admitting other rows' outcomes was worth
 **+5.45**, more than every structural lever in this package combined. The rows above it
 are engineering — exactness, cost, cyclic patterns; the row below the line is the only
 thing that has moved a headline number.
+
+**`entity_label_history` (2026-08-06) is the second half of that row and was missing until
+now.** The task table is itself a timestamped table keyed by entity, and the pipeline read
+only its key, cutoff and label — never the labels of that entity's *earlier* rows.
+`key_target_history` deliberately excludes the entity itself, so nothing covered this.
+Standalone **test** AUC where it applies: rel-event/user-ignore **85.35** at 68.1% coverage
+against a pipeline at 80.98, user-repeat 78.61 at 68.7% against 77.89. It is a rel-event
+feature and not a rel-f1 one — there the frozen label pool leaves test rows reading records
+a median of **2,486 days** old and it falls to 56.89 on driver-top3. rel-trial cannot use it
+at all (`entities == rows`, 0.0% coverage) and the runner refuses it there. Self-exclusion
+is structural: an outcome resolves one horizon after its own cutoff, so a row cannot read
+itself and there is no exclusion step to get wrong.
 
 The mean-of-means distinction is a real correctness difference, not a preference. Stacked
 primitives compute a mean over groups of a per-group statistic, which does not equal the
