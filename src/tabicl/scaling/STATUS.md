@@ -225,24 +225,37 @@ touched once, AMP off, selection and scoring at the same `n_estimators`. The ear
 per-task-maximum table selected its configurations *on test*, ran about a point higher,
 and was not comparable with the published figures; it has been retired.
 
-| task | ours | TabPFN-REL | RelGNN | RDBLearn+v3 | vs best |
-|---|---:|---:|---:|---:|---:|
-| rel-f1 / driver-top3 | 81.98 | 79.98 | **85.69** | 82.72 | −3.71 |
-| rel-event / user-ignore | 80.98 | 85.38 | **86.18** | 73.70 | −5.20 |
-| rel-avito / user-visits | 65.54 | 66.68 | 66.18 | **66.76** | −1.22 |
-| rel-trial / study-outcome | 72.26 | **76.43** | 71.24 | 72.89 | −4.17 |
+Seven tasks, ranked against every method in the TabPFN-3 report's Table 14 that the report
+does **not** flag as using a different protocol — ten methods including us. The full
+per-method table is at the top of `PERFORMANCE.md`.
 
-**These four columns are a subset of the field, and that flatters us.** The report's
-Table 14 has ten comparable methods; RelGT alone beats us on three of these four tasks and
-is not shown here. Measured across **seven** tasks against the full field, our ranks are
-3, 4, 6, 7, 8, 8, 9 — **median 7 of 10**. See the correction at the top of
-`PERFORMANCE.md`, which also carries the DFS baseline, a labelled best-configuration upper
-bound, and what to expect *before* calibrating.
+| task | ours | rank | best in field | gap |
+|---|---:|---:|---|---:|
+| rel-event / user-repeat | 77.89 | **3/10** | RelGNN 79.61 | −1.72 |
+| rel-trial / study-outcome | 72.26 | **4/10** | TabPFN-REL 76.43 | −4.17 |
+| rel-f1 / driver-top3 | 81.98 | 6/10 | RelGNN 85.69 | −3.71 |
+| rel-event / user-ignore | 80.98 | 7/10 | RelGNN 86.18 | −5.20 |
+| rel-avito / user-visits | 65.54 | 8/10 | KumoRFMv2 69.41 | −3.87 |
+| rel-avito / user-clicks | 65.89 | 8/10 | RDBLearn+v3 69.06 | −3.17 |
+| rel-f1 / driver-dnf | 69.66 | 9/10 | RelGT 75.87 | −6.21 |
+| **average** | **73.46** | **6/10** | RelGNN 76.06 | −2.60 |
 
-**We win no task.** Ahead of TabPFN-REL on rel-f1 and behind RelGNN there by 5; within 2
-on rel-avito; well behind on rel-event and rel-trial. rel-trial moved 66.50 → 69.36 on
-2026-08-04 via the shared-key track record, and is still last on that task — a narrowed
-gap is not a win. This is a generic flattening pipeline in front of a stock TabICL, with
+**Median rank 7 of 10.** An earlier version of this section showed three comparison methods
+and reported gaps against them; RelGT beats us on three of the four original tasks and was
+absent. The average row is over these seven tasks for every method, so it is internally
+comparable but is *not* the report's twelve-task Avg AUROC.
+
+Averaging is kinder to us than ranking — 6th on mean AUROC, 7th by median rank — because it
+rewards never collapsing, and our worst task is still mid-field where Griffin has two
+sub-52s. Even the 6th is generous: RDBLearn's average is 0.004 above ours, so that is a tie
+the sort broke. The accurate summary is **consistently mid-field, never leading.**
+`PERFORMANCE.md` also carries the DFS baseline, a labelled best-configuration upper bound,
+and what to expect *before* calibrating.
+
+**We win no task, and we hold no best cell in the field on any of the seven.** Our best
+showings are rel-event/user-repeat (3rd) and rel-trial (4th); our worst is rel-f1/driver-dnf
+at 9th, 6.21 behind. rel-trial moved 66.50 → 69.36 → 72.26 across 2026-08-04/05 and rose
+from last to 4th — but a narrowed gap is not a win. This is a generic flattening pipeline in front of a stock TabICL, with
 no relational machinery in the model and no retraining, measured against systems built for
 relational data.
 

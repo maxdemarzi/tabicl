@@ -34,18 +34,19 @@ field is shown here, with our rank in it.
 | rel-avito / user-visits | **65.54** | 8/10 | 66.21 | 65.81 | 66.18 | 66.78 | 66.20 | 60.70 | 65.49 | 66.47 | 66.76 | **69.41** ˟ | 66.68 |
 | rel-avito / user-clicks ◆ | **65.89** | 8/10 | — | — | 68.23 | 68.30 | 65.90 | 45.90 | 69.04 | 65.72 | **69.06** | 67.42 ˟ | 67.09 |
 | rel-f1 / driver-dnf ◆ | **69.66** | 9/10 | — | — | 75.29 | **75.87** | 72.62 | 57.70 | 70.87 | 71.72 | 71.72 | 72.03 | 70.74 |
-| **average** ¶ | **73.46** | 6.43 | — | — | **76.06** | 74.39 | 72.48 | 64.71 | 73.46 | 72.66 | 73.38 | 74.45 | 74.77 |
+| **average** ¶ | **73.46** | **6/10** | — | — | **76.06** | 74.39 | 72.48 | 64.71 | 73.46 | 72.66 | 73.38 | 74.45 | 74.77 |
 
 **Median rank 7 of 10.** Ranks: 3, 4, 6, 7, 8, 8, 9. Bold in the comparison columns marks
 the best method for that task; **we never hold it.**
 
 ¶ **The average row is over these seven tasks only, for every method — so it is internally
-comparable but is _not_ the report's Avg AUROC, which covers twelve.** The rank cell in that
-row is our *mean* rank (6.43), not a median.
+comparable but is _not_ the report's Avg AUROC, which covers twelve.** Its rank cell is our
+standing among the ten methods' averages, on the same rule as every other row.
 
 **The average ranks us higher than the median rank does, and the difference is the point.**
-On mean AUROC we are 6th, tied with RDBLearn at 73.46 and ahead of RDBLearn+v3, +v2.5,
-GraphSAGE and Griffin; on median rank we are 7th. Averaging rewards *never collapsing* —
+On mean AUROC we are 6th and on median rank 7th. The 6th is generous even so: RDBLearn is
+ahead of us by 0.004 — the two are a tie that the sort had to break. Averaging rewards
+*never collapsing* —
 Griffin scores 45.90 and 51.00 on two tasks and its average falls 8 points below anyone
 else's, while our worst task is still mid-field. So the honest reading is: **we are
 consistently mid-field rather than occasionally excellent**, and no averaging convention
