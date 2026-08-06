@@ -167,6 +167,51 @@ sound and only the verdict changed.
 
 ---
 
+### 2026-08-06 — fitting on train+val: large, task-dependent, and undecidable from validation
+
+We fit the final model on **train only**. RelBench holds out test alone, so training on
+train+val is permitted, and refitting on everything after selecting on a held-out split is
+standard. Paired per seed, each task at its own standing configuration:
+
+| task | train only | train+val | paired Δ | SE | positive |
+|---|---:|---:|---:|---:|:---:|
+| rel-f1 | 82.13 | **84.61** | **+2.48** | 0.58 | 7/8 |
+| rel-trial | 72.30 | **73.56** | **+1.26** | 0.50 | 6/8 |
+| rel-avito | 65.67 | 65.78 | +0.11 | 0.12 | 3/5 |
+| **rel-event** | 81.58 | 74.29 | **−7.29** | 1.56 | **0/5** |
+
+**The mechanism for the positive side**: it helps when the *pool* binds the context, not
+when the *cap* does. rel-f1's context is 1,353 — all of train — so 588 extra rows go
+straight in. rel-avito's cap is 10,000 against 86,619 available, so a bigger pool changes
+nothing. This predicted rel-trial's moderate gain before it was measured.
+
+**rel-event's regression is likely the arm**: it selects `+struct`/`+counts`, whose
+structural counts *grow with time*, so validation rows sit at systematically higher values
+than training rows and poison the context. rel-f1 selects `base`, which has no history
+features at all, and gains most.
+
+**It cannot be adopted, and the reason is the same one as everything else this week.** The
+ordinary validation column is *identical* in both arms — the selection is unchanged, only
+the final fit differs — so the usual instrument is structurally blind.
+
+`--decide-fit-pool` was built to fix that without touching test: split validation by time,
+let the earlier 60% join the pool, judge on the later 40%. **It is anti-correlated with the
+truth:**
+
+| task | better option | procedure chose | cost |
+|---|---|---|---|
+| rel-event | train only | **train+val, 4/5** | −4.90 |
+| rel-f1 | train+val | **train only, 8/8** | forfeits +2.48 |
+
+Adding early-validation rows helps predict late-validation rows — they are adjacent in time
+— and that does not transfer to test. **A third instrument, broken the same way as the
+first two.**
+
+So the options are: per task by test score (test-selection, refused); uniformly (+2.48
++1.26 +0.11 −7.29 = **net −2.52**, knowingly worse); or by this procedure (wrong on both
+tasks that matter). **Train+val fitting is the ninth real-on-test, unselectable effect** —
+and the first whose effect is strongly negative somewhere. The standing table is unchanged.
+
 ## Session close, 2026-08-06 — the table is unchanged, and that is the finding
 
 **rel-f1 81.98 · rel-event 80.98 · rel-avito 65.54 · rel-trial 72.26.** Nothing entered.
