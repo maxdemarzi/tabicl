@@ -171,6 +171,45 @@ tried the setting that produces the effect — it would have measured the dilute
 concluded recency does nothing. The grid now extends to 1,000 whenever more than one
 context order is offered.
 
+**Promoted, and rejected: validation chose `random` 3 times out of 3** on rel-event, taking
+a large random context every replicate. So recency joins graph-neighbour context,
+resampling, child count and per-key selection on the list of effects that are real on test
+and not selectable — the fifth.
+
+*(Two flaws in that run, both mine. It omitted `--timed-links-only`, which the standing
+80.98 requires, so its 78.72 is not comparable to the table. And the output filter dropped
+the per-configuration `val=` lines, leaving no way to see how far behind the recency
+configurations scored. Re-running with both fixed.)*
+
+**Why validation rejects it is structural, and measurable.** The train→validation gap is
+smaller than the train→test gap on every task in the benchmark:
+
+| task | train span | train→val | train→test | ratio |
+|---|---:|---:|---:|---:|
+| rel-event | 147 d | 7 d | 15 d | 2.1× |
+| rel-avito | 8 d | 4 d | 10 d | 2.5× |
+| rel-trial | 6,570 d | 365 d | 731 d | 2.0× |
+| rel-f1 | 3,870 d | 150 d | 1,976 d | **13.2×** |
+
+A setting chosen on validation is tuned for a *shorter horizon* than the one it is scored
+at. Anything whose value grows with distance from the training period is therefore
+systematically undervalued, and recency is exactly such a setting — which is why a +7.50
+test effect is rejected unanimously.
+
+`--gap-validation` carves a pseudo-validation split out of train whose distance from its
+own fitting pool matches the train→test gap. No extra feature build (both are subsets of
+the same matrix), and the final fit still uses all of train and touches test once; only the
+selection geometry changes. Constructible on rel-event (11,522 pool rows, 2,013 pseudo-val)
+and rel-trial (8,620 / 960), and **not** on rel-avito or rel-f1, where the gap is too large
+a fraction of the training span to leave a pool at all.
+
+This reopens the selection thread closed on 2026-08-05, and the distinction matters: that
+verdict came from criteria scored on held-out *train* rows with no gap whatsoever — nearer
+to the fitting pool than the real validation split. The defect here is a specific measured
+mismatch between the selection horizon and the scoring horizon, not another fold
+arrangement. If gap-matched selection also picks `random`, recency is genuinely
+unselectable and that is the answer.
+
 ### 2026-08-05 — two feature blocks that had never run in production, now measured and dead
 
 `eval_track_record` builds every child `Table` with `windows` and `max_columns` and nothing
