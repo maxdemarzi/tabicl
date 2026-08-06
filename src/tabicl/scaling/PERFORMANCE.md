@@ -44,6 +44,51 @@ AMP off, selection and scoring at the same `n_estimators`. The published figures
 presumably single-configuration, so this is the like-for-like column — an earlier
 per-task-maximum table selected on test ran about a point higher and was not comparable.
 
+## What to expect before and after calibrating (2026-08-06)
+
+The table above is the **after** column: every setting chosen on a validation split. Most
+users will not calibrate on the first attempt, so here is what the package gives with no
+tuning at all, and what tuning on your own workload is worth.
+
+All figures are test ROC-AUC×100, 5 seeds, AMP off. "Out of the box" is the base feature
+set at shipped settings, no per-task sweep. "Best block" is the best of the optional
+feature arms, still without calibration. "Calibrated" is the standing table.
+
+| task | out of the box | best block | calibrated | calibration is worth |
+|---|---:|---:|---:|---:|
+| rel-f1 / driver-top3 | 73.50 | 74.05 `+struct` | **81.98** | **+8.48** |
+| rel-trial / study-outcome | 69.56 | **72.20** `+rate` | 72.26 | +2.70 |
+| rel-event / user-ignore | **80.80** | 80.39 `+struct` | 80.98 | +0.18 |
+| rel-avito / user-visits | **65.81** | 65.81 (base wins) | 65.54 | **−0.27** |
+
+**The lever that matters is schema-dependent, and that is the useful thing to tell someone
+before they start:**
+
+* **rel-f1 — calibration dominates (+8.48).** Almost all of it is the column budget: the
+  shipped `max_columns` is wrong for this schema by 12.58 on validation. Opting into
+  feature blocks adds only +0.55.
+* **rel-trial — the feature blocks dominate (+2.64).** The shared-key track record carries
+  it; calibration on top adds +0.06.
+* **rel-event — neither helps (+0.18).** The defaults are already at this schema's ceiling,
+  and its optional blocks actively hurt (`+struct` −0.41, `+counts` −0.56).
+* **rel-avito — calibration is negative (−0.27).** Out of the box beats our own calibrated
+  number. Inside the ±0.6 floor, so read it as a tie rather than a loss — but the arm and
+  context machinery buys nothing on this schema.
+
+So the honest expectation to set is a **range, not an uplift**: somewhere between −0.3 and
++8.5, depending mostly on whether the shipped column budget suits the schema. A user whose
+tables are narrow will see little; one with a wide child table like rel-f1's `results` will
+see a lot.
+
+**Caveat on "out of the box", and it is a real one.** These figures use
+`eval_track_record`'s defaults — `max_columns=2`, windows on, three child tables. The
+library's `Table` defaults are **not the same**: `max_columns=None` and `windows=()`. A user
+calling `flatten_relational` directly therefore gets no windows and no column budget, which
+on rel-f1 should land *closer* to 81.98 than the 73.50 above. The three places that define
+a default — the library, the runner, and `STATUS.md`, which calls the budget "a rescue, not
+a default" — currently disagree. `eval_defaults.py` picks each axis on validation across all
+four tasks so they can be reconciled with a measurement rather than by inheritance.
+
 **Read the gaps honestly.** This is a generic flattening pipeline in front of a stock
 TabICL, with no relational machinery in the model and no retraining, against systems built
 for relational data. Ahead of TabPFN-REL on rel-f1, within 2 on rel-avito, and well behind
