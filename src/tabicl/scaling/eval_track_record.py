@@ -441,7 +441,7 @@ def main() -> None:
     print(f"child tables: using {len(kids)} of {len(all_kids)} available "
           f"{[k[0] for k in kids]}", flush=True)
 
-    def build_base(frame):
+    def build_base(frame, split="train"):
         base = frame.merge(ent_df, left_on=key, right_on=pk, how="left")
         drop = {target, key, pk, tcol}
         cols = [c for c in base.columns
@@ -476,12 +476,12 @@ def main() -> None:
                 train[tcol].to_numpy(), frame[key].to_numpy(),
                 frame[tcol].to_numpy(), label_horizon=task.timedelta))
         out = pd.concat(blocks, axis=1)
-        _audit_requested_blocks(out)
+        _audit_requested_blocks(out, split)
         return out
 
     reported = set()
 
-    def _audit_requested_blocks(frame):
+    def _audit_requested_blocks(frame, split="train"):
         """Refuse to let a requested feature block be silently empty.
 
         Depth-2 spent a week "measured at no effect" because `max_columns` was deleting
@@ -495,13 +495,18 @@ def main() -> None:
         # that never recurs they are simply all-NaN. Coverage is the quantity, not column
         # count -- rel-trial has `entities == rows` and would report a clean +0.00 null
         # forever. Say the coverage out loud and refuse the degenerate case.
-        if args.label_history and "label history" not in reported:
-            reported.add("label history")
+        # Reported PER SPLIT, and deliberately not deduped across splits. Train coverage is
+        # not the quantity that matters and actively misleads: on rel-f1 it reads 93% while
+        # test reads 35%, because drivers race in seasons and the pool freezes at the end
+        # of train. Ranking this feature on its training-row behaviour got the tasks
+        # backwards once already.
+        if args.label_history and f"label history {split}" not in reported:
+            reported.add(f"label history {split}")
             n_prior = frame["self__n_prior"]
             coverage = float((n_prior > 0).mean())
-            print(f"label history: {coverage:.1%} of rows have a resolved earlier outcome "
-                  f"for the same entity (horizon {task.timedelta})", flush=True)
-            if coverage == 0.0:
+            print(f"label history [{split}]: {coverage:.1%} of rows have a resolved earlier "
+                  f"outcome for the same entity (horizon {task.timedelta})", flush=True)
+            if coverage == 0.0 and split == "train":
                 raise SystemExit(
                     "--label-history was requested but NO row has a resolved earlier "
                     "outcome, so every column is NaN and any gap measured would be an "
@@ -620,7 +625,7 @@ def main() -> None:
         return
 
     b_tr = build_base(train)
-    b_te = build_base(test).reindex(columns=b_tr.columns, fill_value=np.nan)
+    b_te = build_base(test, "test").reindex(columns=b_tr.columns, fill_value=np.nan)
 
     # --- text block (RESEARCH 6f) --------------------------------------------------------
     # Fitted on TRAIN ONLY and applied to val/test. Fitting the vectoriser on all splits
@@ -938,7 +943,7 @@ def main() -> None:
     if args.calibrated:
         val = task.get_table("val", mask_input_cols=False).df
         y_va = val[target].to_numpy()
-        b_va = build_base(val).reindex(columns=b_tr.columns, fill_value=np.nan)
+        b_va = build_base(val, "val").reindex(columns=b_tr.columns, fill_value=np.nan)
         t_va = track(val[key].to_numpy(), val[tcol].to_numpy(), y)
         x_va = text_block(val)
         val_arms = {k: v for k, v in {
