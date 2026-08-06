@@ -307,6 +307,59 @@ Build with `python -m tabicl.scaling.build_native`. Check with `native_available
 everything falls back to the Python path when it is absent. On Windows this needs MSVC
 Build Tools — clang alone cannot link a CPython extension.
 
+## The binding constraint is the selection rule, not the features
+
+Nine effects have now been measured as **real on test and not selectable**. Each reproduces
+across seeds, each survives its controls, and each is rejected — or simply not seen — by the
+validation split that the calibrated protocol selects on.
+
+| effect | task | test | validation |
+|---|---|---:|---|
+| context recency, 1,000-row context | rel-event | **+7.50** (SE 0.96, 5/5) | picks large contexts; scores small recent ones low |
+| calendar block | rel-event | **+3.00** (4.9 SE) | **−1.91** (4.7 SE) |
+| train+val fitting | rel-f1 | **+2.48** (4.3 SE, 7/8) | identical in both arms — structurally blind |
+| train+val fitting | rel-trial | +1.26 (2.5 SE) | identical |
+| validation-ranked child tables | rel-trial | +1.05 | −0.27, indistinguishable |
+| categorical proportions | rel-trial | +0.78 (4.2 SE, 11/12) | −0.13 (3/12 positive) |
+| graph-neighbour context | rel-event | +3.10 to +4.94 | rejected 4 of 5 replicates |
+| context resampling | rel-event | +1.26, variance ÷4.6 | backed 1 of 3 |
+| per-key selection | rel-avito | 66.21 vs 65.54 | ranks the subsets in the opposite order |
+
+**The mechanism is measured, not inferred.** The train→validation gap is smaller than the
+train→test gap on every task in the benchmark — 7 days against 15 on rel-event, 4 against
+10 on rel-avito, 365 against 731 on rel-trial, 150 against 1,976 on rel-f1. So validation
+is a *nearer* period than test, and it **rewards context size**: on rel-event it accepts a
+recent context only at 10,000 rows, the diluted version worth +0.31, and scores small
+recent contexts low — while the +7.50 lives at 1,000. More context helps on a nearby
+period; a small recent context helps on a distant one; validation can only observe the
+first.
+
+**Three instruments were built to escape this. All three failed:**
+
+1. **Time-ordered CV** (forward chaining). Failed identically to random k-folds — both
+   gained ~7.5 on resampling while test fell 1.44. Any criterion scored on held-out *train*
+   rows has no gap at all, so it is nearer still.
+2. **Gap-matched validation** — a pseudo-split from train whose distance to its fitting pool
+   matches the train→test gap. Made rel-event *worse* (78.71 against 80.25). Its
+   pseudo-split scores 92.76, easier than both real validation and test, and it selects on
+   an 11,522-row pool against a 19,239-row final fit.
+3. **Held-out-validation pool decision** — split val, let the early part join the fitting
+   pool, judge on the late part. **Anti-correlated with the truth**: chose train+val 4/5 on
+   rel-event where it costs 7.29, and train-only 8/8 on rel-f1 where it is worth 2.48.
+   Adding early-validation rows helps predict late-validation rows because they are
+   adjacent, and that does not transfer.
+
+**What this is not.** It is not a claim that these effects would generalise — an effect
+visible only on test is exactly what a held-out split exists to distrust. It is a claim
+that *this benchmark's split geometry* systematically misprices anything whose value grows
+with distance from the training period, and that the effect is large: the biggest
+unclaimed figure is rel-event at 86.77, against RelGNN's published 86.18.
+
+**Practical consequence for this package:** feature work has a poor expected return here
+until the selection question is resolved. Every gate result this week reproduced on test
+almost exactly; of four promoted to the calibrated protocol, one survived, and it was the
+smallest.
+
 ## Current limits
 
 - **Row chunking cannot bound a wide table.** The activation is allocated at
