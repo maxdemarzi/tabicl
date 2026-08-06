@@ -124,14 +124,47 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
-**Depth-2 is available on one task of four**, which the schema probe should have
-established before any of the work: rel-f1 has *zero* children with timestamped
-grandchildren; rel-event and rel-avito have one each but their entity keys repeat, so the
-ambiguous-cutoff guard blocks them; only rel-trial (`outcomes → outcome_analyses`) is
-measurable. The earlier "+0.00, sd 0.00, 24 features" was `max_columns` deleting the whole
-grandchild block — nested statistics were ranked against raw columns on non-null coverage,
-and a grandchild block is sparse, so depth-2 emitted output byte-identical to depth-1. With
-that fixed the block is present (88 → 305 features).
+### 2026-08-05 — depth-2 cannot be measured on this benchmark, and now for a proven reason
+
+Not "measured at no effect". Not available, on all four tasks, for three different reasons:
+
+| task | timed children | with timestamped grandchildren | blocker |
+|---|---:|---:|---|
+| rel-f1 | 3 | **0** | the schema has no depth-2 to build |
+| rel-event | 3 | 1 | entity keys repeat → ambiguous-cutoff guard |
+| rel-avito | 3 | 1 | entity keys repeat → ambiguous-cutoff guard |
+| rel-trial | 10 | 1 | **the whole subtree postdates the cutoff** |
+
+rel-trial was the one task where depth-2 was reachable, and it is empty:
+
+* **0 of 158,246** `outcome_analyses` rows linked to a training study precede that study's
+  deadline. Minimum lag **1 day**, median 195, maximum **365** — which is exactly
+  `task.timedelta`, the label horizon.
+* **0 of 117,592** `outcomes` rows do either.
+
+So `outcomes → outcome_analyses` *is* the outcome being predicted, and a correct cutoff
+empties it completely. That also explains the old 49.12 → 49.37: those features were built
+from rows that are the label, the leak was total, and it still produced chance — which says
+the figure was never informative in either direction.
+
+**Three separate defects had to be cleared to reach that answer**, and each produced
+`+0.00, sd 0.00` — output indistinguishable from a careful null:
+
+1. `max_columns` deleted the grandchild block outright (nested statistics ranked against
+   raw columns on coverage; a grandchild block is sparse, so depth-2 emitted output
+   byte-identical to depth-1). Fixed → 88 → 305 features.
+2. The **target was passed in as a feature**, so both arms scored AUC 100.00.
+3. With both fixed, 15 columns appear and every one is entirely NaN, so the model drops
+   them and the predictions match to two decimals across five seeds.
+
+The runner now refuses each of the three rather than reporting a number for it. The third
+refusal is the one worth keeping: *columns can be present and still carry nothing*, and
+"+0.00 over five seeds" is what that looks like from the outside.
+
+**Per-row nesting is not worth building.** It would unblock rel-event and rel-avito, but
+the only evidence about whether depth-2 pays comes from the one task where it was
+reachable, and there the honest answer is that the question is unanswerable rather than
+answered.
 
 ### 2026-08-05 — selection machinery closed out: CV cannot judge resampling, at any fold scheme
 Forward-chaining folds were built because random k-folds train on the future to predict the

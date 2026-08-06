@@ -170,6 +170,25 @@ def main() -> None:
         )
     print(f"depth-2 adds {len(added)} columns, e.g. {added[:3]}", flush=True)
 
+    # Columns can be present and still carry nothing. On rel-trial every one of the
+    # 158,246 `outcome_analyses` rows linked to a training study is dated AFTER that
+    # study's deadline -- minimum lag 1 day, maximum 365, which is the task's own label
+    # horizon -- and so is every one of the 117,592 `outcomes` rows. The subtree is the
+    # outcome being predicted, so a correct cutoff empties it completely.
+    #
+    # That is a real answer about the schema, and it must not be reported as "+0.00 over
+    # five seeds" -- which is what it looks like once the model drops constant columns.
+    filled = f_tr[added].notna().to_numpy().mean() if added else 0.0
+    if filled == 0.0:
+        raise SystemExit(
+            f"every one of the {len(added)} depth-2 columns is empty after the cutoff, so "
+            f"there is no depth-2 signal here to measure -- the grandchildren all postdate "
+            f"the entity's prediction time. This is a property of the schema, not a null "
+            f"result, and reporting a gap for it would be reporting the model's handling "
+            f"of all-NaN columns."
+        )
+    print(f"depth-2 columns are {filled:.1%} populated", flush=True)
+
     def score(X, Xe, rows, seed):
         clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
                                random_state=seed, inference_config=NOAMP).fit(X[rows], y[rows])
