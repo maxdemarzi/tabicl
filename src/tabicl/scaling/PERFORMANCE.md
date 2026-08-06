@@ -140,6 +140,33 @@ argument rather than on a measurement. `--children-order name` is the other defe
 specification, and it is arbitrary but neutral. The one option that should not stand is the
 current default.
 
+### 2026-08-05 — the standing configuration is per-task, and promotions must carry it
+
+rel-f1's timing promotion scored **73.21** against a standing **81.98**. Not noise, not a
+regression: rel-f1 requires `--max-columns none` — the +12.58 finding from earlier in this
+project, listed explicitly in Table 1 — and the promotion ran at the default `2`.
+`--timed-links-only` is a no-op there (5 timed link tables, 0 untimed), so the column budget
+is the entire difference.
+
+Three configuration mistakes in one round, all the same shape — assuming a promotion
+inherits the settings that produced the number it is trying to beat:
+
+1. rel-event's first promotion omitted `--timed-links-only`, and rel-event is the **only**
+   task where that matters (2 untimed `user_friends` tables against 0 elsewhere).
+2. I then applied that caveat to rel-avito and rel-trial, where all link tables are
+   timestamped and the flag does nothing.
+3. rel-f1's promotion used the default column budget instead of the uncapped one its
+   headline number depends on.
+
+The internal comparisons survive all three — both arms of each pair shared the wrong
+setting, so the *difference* is still one variable. Only the absolute numbers are
+incomparable to the table. But a promotion whose absolute number cannot be compared to the
+thing it is promoting against is half a measurement.
+
+**What this needs is a per-task configuration record**, not more care: `REFERENCE` in
+`eval_track_record` already names each task's standing score, and the flags that produced
+it belong beside it.
+
 ### 2026-08-05 — rel-trial categories: the one thing today that validation and test agree on
 
 Calibrated at **ten** child tables, paired per seed (seed *i* draws the same rows and the
