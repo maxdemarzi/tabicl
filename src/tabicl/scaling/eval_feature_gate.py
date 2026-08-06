@@ -305,12 +305,26 @@ def main() -> None:
                       f"rows, so this selects the same set as the base arm and any gap "
                       f"would be noise. Lower --context to measure it.", flush=True)
                 continue
+        elif variant in ENCODING_VARIANTS:
+            # Same features, same columns, different cast. The empty-block refusal below
+            # checks column names and would skip this every time -- correctly by its own
+            # logic, since nothing structural changed, and wrongly for this case. So the
+            # check is replaced by one that can actually see the difference: how many cells
+            # stop being NaN.
+            label = variant
+            ensure(label, {}, None, keep_nan=True)
+            base_nan = float(np.isnan(frames["base"][0]).mean())
+            var_nan = float(np.isnan(frames[label][0]).mean())
+            n_changed = int(var_nan * frames[label][0].size)
+            print(f"\n{variant}: encoding-side, {len(widths['base'])} columns either way; "
+                  f"NaN share {base_nan:.1%} -> {var_nan:.1%}", flush=True)
+            if var_nan <= base_nan:
+                print(f"{variant}: SKIPPED -- no cell changed, so any gap would be noise.",
+                      flush=True)
+                continue
         else:
             label = variant
-            if variant == "keepnan":
-                # Same features, different encoding: missing stays missing.
-                ensure(label, {}, None, keep_nan=True)
-            elif variant in FRAME_VARIANTS:
+            if variant in FRAME_VARIANTS:
                 ensure(label, {}, FRAME_VARIANTS[variant])
             else:
                 ensure(label, VARIANTS[variant])
