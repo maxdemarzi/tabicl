@@ -76,6 +76,11 @@ VARIANTS = {
 # downstream can tell a Monday from a Saturday -- on tasks with four- and seven-day
 # horizons. `calendar-trend` is separate because days-since-origin is monotone and every
 # test row lies beyond the training range on it; cyclical features have no such problem.
+# Encoding rather than features: `keepnan` leaves missing values missing instead of
+# zero-filling them. Handled specially in the loop because the frames are identical and
+# only the final cast differs.
+ENCODING_VARIANTS = ["keepnan"]
+
 FRAME_VARIANTS = {
     "calendar": dict(trend=False),
     "calendar-trend": dict(trend=True),
@@ -124,11 +129,17 @@ CONTEXT_VARIANTS = {
 }
 
 
-def _numeric(df: pd.DataFrame, codes: dict, fit: bool) -> np.ndarray:
+def _numeric(df: pd.DataFrame, codes: dict, fit: bool, keep_nan: bool = False) -> np.ndarray:
     """Encode to float with one codebook shared by train and test.
 
     Factorizing per split gives a category code 3 in train and 7 in test, so the model is
     scored on a feature it never saw. That bug has now been found in two runners here.
+
+    ``keep_nan`` leaves missing values missing. The aggregation goes to some trouble to
+    distinguish "no history" from "zero" -- a missing mean is not 0, a missing recency is
+    not "an event today" -- and `nan_to_num` collapses both at the last step, on frames
+    that are 44-47% NaN. TabICL declares ``allow_nan`` and preprocesses with
+    ``nanmean``/``nanstd``, so the zero-fill is not required by the model; it is inherited.
     """
     out = df.copy()
     for col in out.columns:
@@ -141,7 +152,12 @@ def _numeric(df: pd.DataFrame, codes: dict, fit: bool) -> np.ndarray:
             out[col] = factorized
         else:
             out[col] = series.map(codes.get(col, {})).fillna(-1)
-    return np.nan_to_num(out.to_numpy(dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+    values = out.to_numpy(dtype=np.float64)
+    if keep_nan:
+        # Infinities still have to go -- they are an artefact of a division, not a fact
+        # about the entity -- but missingness is information and is kept.
+        return np.where(np.isinf(values), np.nan, values)
+    return np.nan_to_num(values, nan=0.0, posinf=0.0, neginf=0.0)
 
 
 def main() -> None:
@@ -154,7 +170,8 @@ def main() -> None:
                          "seed and reused -- so the gaps are paired against the same "
                          "numbers and comparable to each other. Available: "
                          + ", ".join(sorted(set(VARIANTS) | set(MODEL_VARIANTS)
-                                            | set(CONTEXT_VARIANTS) | set(FRAME_VARIANTS))))
+                                            | set(CONTEXT_VARIANTS) | set(FRAME_VARIANTS)
+                                            | set(ENCODING_VARIANTS))))
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--context", type=int, default=10000)
     ap.add_argument("--children", type=int, default=3)
@@ -189,7 +206,7 @@ def main() -> None:
     kids = all_kids if args.children <= 0 else all_kids[: args.children]
     unknown = [v.strip() for v in args.variant.split(",")
                if v.strip() and v.strip() not in set(VARIANTS) | set(MODEL_VARIANTS)
-               | set(CONTEXT_VARIANTS) | set(FRAME_VARIANTS)]
+               | set(CONTEXT_VARIANTS) | set(FRAME_VARIANTS) | set(ENCODING_VARIANTS)]
     if unknown:
         raise SystemExit(f"unknown variant(s) {unknown}")
     print(f"{args.dataset}/{args.task}  variants={args.variant}  windows={spec}  "
@@ -223,14 +240,15 @@ def main() -> None:
     wanted = [v.strip() for v in args.variant.split(",") if v.strip()]
     frames, widths = {}, {}
 
-    def ensure(label, extra, calendar=None):
+    def ensure(label, extra, calendar=None, keep_nan=False):
         if label in frames:
             return
         t0 = time.perf_counter()
         f_tr = build(train, extra, calendar)
         f_te = build(test, extra, calendar).reindex(columns=f_tr.columns, fill_value=np.nan)
         codes: dict = {}
-        frames[label] = (_numeric(f_tr, codes, True), _numeric(f_te, codes, False))
+        frames[label] = (_numeric(f_tr, codes, True, keep_nan),
+                         _numeric(f_te, codes, False, keep_nan))
         widths[label] = list(f_tr.columns)
         assert_no_perfect_feature(frames[label][0], y, list(f_tr.columns), context=label)
         print(f"{label:>13}: {f_tr.shape[1]} features in {time.perf_counter() - t0:.0f}s",
@@ -289,7 +307,10 @@ def main() -> None:
                 continue
         else:
             label = variant
-            if variant in FRAME_VARIANTS:
+            if variant == "keepnan":
+                # Same features, different encoding: missing stays missing.
+                ensure(label, {}, None, keep_nan=True)
+            elif variant in FRAME_VARIANTS:
                 ensure(label, {}, FRAME_VARIANTS[variant])
             else:
                 ensure(label, VARIANTS[variant])
