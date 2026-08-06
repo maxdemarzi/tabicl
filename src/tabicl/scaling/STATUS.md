@@ -232,9 +232,12 @@ and was not comparable with the published figures; it has been retired.
 | rel-avito / user-visits | 65.54 | 66.68 | 66.18 | **66.76** | −1.22 |
 | rel-trial / study-outcome | 72.26 | **76.43** | 71.24 | 72.89 | −4.17 |
 
-`PERFORMANCE.md` carries the same table with two more columns — a measured DFS baseline,
-and a clearly-labelled best-configuration upper bound — plus what to expect *before*
-calibrating.
+**These four columns are a subset of the field, and that flatters us.** The report's
+Table 14 has ten comparable methods; RelGT alone beats us on three of these four tasks and
+is not shown here. Measured across **seven** tasks against the full field, our ranks are
+3, 4, 6, 7, 8, 8, 9 — **median 7 of 10**. See the correction at the top of
+`PERFORMANCE.md`, which also carries the DFS baseline, a labelled best-configuration upper
+bound, and what to expect *before* calibrating.
 
 **We win no task.** Ahead of TabPFN-REL on rel-f1 and behind RelGNN there by 5; within 2
 on rel-avito; well behind on rel-event and rel-trial. rel-trial moved 66.50 → 69.36 on
