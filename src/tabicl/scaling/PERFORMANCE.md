@@ -438,6 +438,48 @@ case in this project where both hold — the argmax there picks `recent@10000` (
 over `random@10000` (~82). Ensembling can only ever help by diluting a bad argmax, and the
 test above never presented it with one.
 
+### 2026-08-06 — preserving missingness is worse than zero-filling it
+
+The aggregation deliberately keeps "no history" distinct from "zero" — *"a missing mean is
+not 0"*, and for recency *"0 would assert the opposite of what is true"* — and then every
+runner ends with `nan_to_num(nan=0.0)`. TabICL declares `allow_nan` and preprocesses with
+`nanmean`/`nanstd`, so the zero-fill looked inherited rather than chosen.
+
+**It is chosen, and it is right.** Paired by seed, same features, only the final cast
+differs:
+
+| task | NaN share once preserved | gap |
+|---|---:|---:|
+| rel-f1 | 4.8% | −0.06 (SE 0.17) — null |
+| **rel-event** | **54.9%** | **−1.03** (SE 0.48, 1/5) — clears, negative |
+| rel-trial | ~44% | crashed; see below |
+
+Preserving missingness **hurts where there is a lot of it**, which is the failure mode
+predicted before the run: with 55% of cells missing, `nanmean`/`nanstd` have too little to
+work with, and dense consistent zeros beat sparse honest NaNs. The docstrings describe an
+intent the pipeline overrides, and the override is correct.
+
+*A correction to how this was motivated:* "44–47% NaN" was quoted as if typical. It is
+rel-trial's figure. rel-f1 is 4.8%, so there was nothing there to change and its null says
+nothing either way.
+
+**A real TabICL bug, found on the way and not chased.** With NaN preserved, rel-trial dies
+inside `predict_proba`:
+
+```
+preprocessing.py:1172  filtered_mask = feature_mask[self.unique_filter_.features_to_keep_]
+IndexError: size of axis is 134 but size of corresponding boolean axis is 103
+```
+
+`classifier.py:804` builds `feature_mask` over the *input* feature space, and it is then
+indexed against a filter fitted in a *reduced* one. The path is only reachable when some
+test column is entirely NaN, which sets `feature_mask` non-None — and zero-filling makes
+that impossible, so it has never been exercised despite `allow_nan = True` advertising that
+it should work. A 60-row synthetic case with a constant train column and an all-NaN test
+column does **not** reproduce it, so the trigger is more specific than that. Left documented
+rather than fixed: it is core inference code, a blind fix there is riskier than the bug, and
+the measurement above says we do not want NaN input regardless.
+
 ## Session close, 2026-08-06 — the table is unchanged, and that is the finding
 
 **rel-f1 81.98 · rel-event 80.98 · rel-avito 65.54 · rel-trial 72.26.** Nothing entered.
