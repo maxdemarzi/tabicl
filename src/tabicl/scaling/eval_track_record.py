@@ -45,6 +45,7 @@ from relbench.tasks import get_task
 
 from tabicl import TabICLClassifier
 from tabicl.scaling import Table, asof_statistics, key_target_history
+from tabicl.scaling._guards import assert_no_perfect_feature
 from tabicl.scaling._leakage import permutation_test, temporal_control
 
 NOAMP = {k: {"use_amp": False} for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG")}
@@ -686,6 +687,13 @@ def main() -> None:
     # An arm whose own controls failed is not offered to validation at all. Selection
     # cannot be allowed to pick a leaking arm and have the protocol launder it.
     arms = {k: v for k, v in arms.items() if ok.get(k, True)}
+    # Cheap insurance on the runner that produces the standing table. It drops the target
+    # correctly today; `eval_depth2` did not, and scored AUC 100.00 in both arms of a
+    # paired comparison whose difference read as a clean +0.00. A regression here would be
+    # far more expensive, and a control that only runs when someone suspects something is
+    # not a control.
+    for name, (X_arm, _) in arms.items():
+        assert_no_perfect_feature(X_arm, y, context=f"arm {name!r}")
     widths = ", ".join(f"{k} {v[0].shape[1]}" for k, v in arms.items())
     print(f"feature widths: {widths}; {len(arms['base'][0])} train rows, "
           f"context={args.context}", flush=True)
