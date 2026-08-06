@@ -177,6 +177,12 @@ def main() -> None:
                          "column gets a histogram. Below it the column is free text in "
                          "disguise (rel-trial's eligibilities.criteria has 247k values and "
                          "its top 4 cover 0.1%%), and the block is K+1 constant columns.")
+    ap.add_argument("--numeric-booleans", action="store_true",
+                    help="aggregate boolean child columns as numbers, so a boolean history "
+                         "yields its rate. They are categorical by default, which gives "
+                         "each one a single nunique of 1 or 2 -- and with mode and the "
+                         "histogram both off, that has been their entire contribution to "
+                         "every number in the table.")
     ap.add_argument("--mode", action="store_true",
                     help="emit the modal value of each categorical child column over its "
                          "all-history prefix. Entity-relative rather than corpus-relative, "
@@ -232,6 +238,7 @@ def main() -> None:
                       max_columns=max_cols,
                       top_k_categories=args.categories or None,
                       min_category_share=args.category_share,
+                      numeric_booleans=args.numeric_booleans,
                       include_mode=args.mode)
             blocks.append(asof_statistics(t, frame[key].to_numpy(),
                                           frame[tcol].to_numpy()).add_prefix(f"{n}__"))

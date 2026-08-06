@@ -93,6 +93,20 @@ class Table:
         column yields K+1 constant columns and hurts -- so they are skipped rather than
         emitted. Set to 0.0 to build a histogram for every categorical column.
 
+    numeric_booleans : bool, default=False
+        Aggregate boolean columns as numbers rather than as categories.
+
+        They are categories by default, which gives a boolean history exactly one feature:
+        a ``nunique`` that is 1 or 2. That is close to no information, and it displaces the
+        statistic a boolean history actually carries -- **the mean of a boolean is its
+        rate**. "What fraction of this study's prior outcomes were positive" is a rate; so
+        is "what fraction of these events were paid". Turning this on routes booleans
+        through the numeric path, so they gain count/sum/mean/std/min/max over all-history
+        and over every window, and lose the ``nunique``.
+
+        Off by default only because it changes existing feature sets. It is not off
+        because it lost a measurement.
+
     include_mode : bool, default=False
         Emit the modal value of each categorical column over the all-history block of
         :func:`asof_statistics`. Off by default because it costs one linear scan per
@@ -122,10 +136,38 @@ class Table:
     max_columns: Optional[int] = None
     top_k_categories: Optional[int] = None
     min_category_share: float = 0.5
+    numeric_booleans: bool = False
     include_mode: bool = False
     primary_key: Optional[str] = None
     windows: Sequence = field(default=())
     children: Sequence["Table"] = field(default=())
+
+
+def _numeric_path(child: Table, series: pd.Series) -> bool:
+    """Does this column go down the numeric path rather than the categorical one?
+
+    One predicate for all four call sites. The same ``is_numeric and not is_bool`` test was
+    spelled out separately in the join path, the as-of path, the ``nunique`` scan and the
+    category selector -- and a column that is numeric to one of them and categorical to
+    another does not merely lose a feature, it means two different things in the same
+    frame.
+    """
+    if not pd.api.types.is_numeric_dtype(series):
+        return False
+    if pd.api.types.is_bool_dtype(series):
+        return child.numeric_booleans
+    return True
+
+
+def _as_float(series: pd.Series) -> pd.Series:
+    """Float view of a column, tolerating nullable and boolean extension dtypes.
+
+    ``astype("float64")`` raises on a nullable ``boolean`` holding ``pd.NA``, which is the
+    dtype RelBench actually delivers for a boolean column with missing values.
+    """
+    if isinstance(series.dtype, pd.api.extensions.ExtensionDtype):
+        return pd.Series(series.to_numpy(dtype="float64", na_value=np.nan), index=series.index)
+    return series.astype("float64")
 
 
 def _budgeted_columns(child: Table, df: pd.DataFrame, candidates: Sequence[str]) -> List[str]:
@@ -208,7 +250,7 @@ def _stat_columns(
             continue
 
         series = df[col]
-        if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
+        if _numeric_path(child, series):
             # Accumulate around a pivot. sumsq of raw values, then E[X^2] - E[X]^2,
             # loses every significant digit on large-magnitude columns: measured
             # returning std 18.5 for a true value of 1.0 on data offset by 1e9.
@@ -218,7 +260,7 @@ def _stat_columns(
             #
             # Vectorised, not `.apply(lambda ...)`: a Python callback per group was
             # measured at a third of total runtime for no gain in accuracy.
-            values = series.astype("float64")
+            values = _as_float(series)
             shift = float(values.mean()) if values.notna().any() else 0.0
             centred = df.assign(**{"__c": values - shift, "__csq": (values - shift) ** 2})
             out[f"{stem}__{col}__count"] = grouped[col].count()
@@ -620,10 +662,7 @@ def asof_statistics(
     if columns is None:
         excluded = {child.foreign_key, child.time_column, child.primary_key}
         columns = _budgeted_columns(child, df, [
-            c for c in df.columns
-            if c not in excluded
-            and pd.api.types.is_numeric_dtype(df[c])
-            and not pd.api.types.is_bool_dtype(df[c])
+            c for c in df.columns if c not in excluded and _numeric_path(child, df[c])
         ])
 
     # One shared factorisation so child rows and entity rows agree on key identity.
@@ -743,11 +782,7 @@ def _prefix_nunique(out, label, child, df, order, sorted_key, hi_idx, lo_idx) ->
     a window would need an offline dominance count instead.
     """
     excluded = {child.foreign_key, child.time_column, child.primary_key}
-    cats = [
-        c for c in df.columns
-        if c not in excluded
-        and not (pd.api.types.is_numeric_dtype(df[c]) and not pd.api.types.is_bool_dtype(df[c]))
-    ]
+    cats = [c for c in df.columns if c not in excluded and not _numeric_path(child, df[c])]
     if not cats:
         return
 
@@ -763,11 +798,7 @@ def _prefix_nunique(out, label, child, df, order, sorted_key, hi_idx, lo_idx) ->
 def _category_columns(child: Table, df: pd.DataFrame) -> List[str]:
     """Non-numeric columns of a child table, excluding its keys and timestamp."""
     excluded = {child.foreign_key, child.time_column, child.primary_key}
-    return [
-        c for c in df.columns
-        if c not in excluded
-        and not (pd.api.types.is_numeric_dtype(df[c]) and not pd.api.types.is_bool_dtype(df[c]))
-    ]
+    return [c for c in df.columns if c not in excluded and not _numeric_path(child, df[c])]
 
 
 def _category_share(df: pd.DataFrame, col: str, top_k: int) -> float:

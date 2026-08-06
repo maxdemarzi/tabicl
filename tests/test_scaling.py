@@ -2120,6 +2120,42 @@ def test_two_hop_cutoff_excludes_grandchildren_dated_after_the_entity_cutoff():
     assert out[mean].iloc[0] == pytest.approx(2.0), "the post-cutoff price leaked into mean"
 
 
+def test_boolean_columns_can_carry_their_rate_instead_of_a_nunique():
+    """The mean of a boolean is its rate, and that is the statistic a boolean history has.
+
+    Booleans are categorical by default, which gives them exactly one feature: a `nunique`
+    that is 1 or 2. With `include_mode` and the histogram both off -- which is how every
+    standing number was measured -- that is the entire contribution of a boolean child
+    column. `numeric_booleans` routes them through the numeric path instead.
+
+    The nullable `boolean` dtype is covered deliberately: it is what RelBench delivers for
+    a boolean column with missing values, and `astype("float64")` raises on it outright.
+    """
+    from tabicl.scaling import Table, asof_statistics
+
+    entities = pd.DataFrame({"id": [1], "t": [pd.Timestamp("2020-06-01")]})
+    kid = pd.DataFrame({
+        "id": [1, 1, 1],
+        "kt": pd.to_datetime(["2020-01-01", "2020-02-01", "2020-03-01"]),
+        "flag": np.array([True, False, True]),
+        "nullable": pd.array([True, None, True], dtype="boolean"),
+    })
+
+    def run(numeric_booleans):
+        table = Table(kid, "id", "k", time_column="kt", numeric_booleans=numeric_booleans)
+        return asof_statistics(table, entities["id"].to_numpy(), entities["t"].to_numpy())
+
+    default = run(False)
+    assert [c for c in default.columns if "flag" in c] == ["k__flag__nunique"]
+
+    numeric = run(True)
+    assert "k__flag__nunique" not in numeric.columns
+    assert numeric["k__flag__mean"].iloc[0] == pytest.approx(2 / 3)
+    # Nulls leave the denominator rather than counting as False, so this is 2 of 2.
+    assert numeric["k__nullable__mean"].iloc[0] == pytest.approx(1.0)
+    assert numeric["k__nullable__count"].iloc[0] == pytest.approx(2.0)
+
+
 def test_column_budget_does_not_delete_the_grandchild_block():
     """`max_columns` caps a table's own source columns, never its nested statistics.
 
