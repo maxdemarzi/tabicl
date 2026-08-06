@@ -270,6 +270,15 @@ def main() -> None:
             print(f"\n{variant}: {'model' if model_side else 'context'}-side, identical "
                   f"features both arms ({len(widths['base'])} columns): {detail}", flush=True)
             n_changed = 0
+            if context_side and size >= n:
+                # The context already covers every training row, so "the most recent
+                # `size`" is the same set -- and the gap would be pure model noise
+                # reported as a measurement of recency. Same silent-null shape as an
+                # empty feature block.
+                print(f"{variant}: SKIPPED -- context {size} covers all {n} training "
+                      f"rows, so this selects the same set as the base arm and any gap "
+                      f"would be noise. Lower --context to measure it.", flush=True)
+                continue
         else:
             label = variant
             if variant in FRAME_VARIANTS:
