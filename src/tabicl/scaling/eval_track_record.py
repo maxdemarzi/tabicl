@@ -200,6 +200,17 @@ def main() -> None:
                          "each one a single nunique of 1 or 2 -- and with mode and the "
                          "histogram both off, that has been their entire contribution to "
                          "every number in the table.")
+    ap.add_argument("--gap-validation", action="store_true",
+                    help="select on a pseudo-validation split carved out of train that "
+                         "reproduces the train->test gap, instead of on the provided "
+                         "validation split. RelBench's validation sits NEARER to train "
+                         "than test does -- 7 days against 15 on rel-event, 365 against "
+                         "731 on rel-trial, 150 against 1,976 on rel-f1 -- so a setting "
+                         "chosen on it is tuned for a shorter horizon than the one it is "
+                         "scored at, and anything whose value grows with distance from "
+                         "the training period is systematically undervalued. Context "
+                         "recency is exactly such a setting: +7.50 on rel-event test, "
+                         "rejected 3/3 by validation.")
     ap.add_argument("--context-grid", default="",
                     help="comma-separated context sizes for the calibrated sweep, "
                          "overriding the default cap//4, cap//2, cap. The default grid "
@@ -882,16 +893,38 @@ def main() -> None:
         # the choice is reproducible.
         time_order = np.argsort(train[tcol].to_numpy(), kind="stable")
 
-        def draw(order, seed, n, size):
-            size = min(size, n)
+        # A validation split carved from train so that the gap between the pool a setting
+        # is fitted on and the rows it is judged on matches the gap between train and test.
+        # Both are subsets of the same feature matrix, so this costs no extra build.
+        pool_order, pseudo_val = time_order, None
+        if args.gap_validation:
+            t_train = train[tcol].to_numpy()
+            gap = test[tcol].to_numpy().min() - t_train.max()
+            cut = t_train[time_order[-len(val):]].min() if len(val) < len(train) else t_train.max()
+            pseudo_val = time_order[-len(val):]
+            pool_order = np.array([i for i in time_order if t_train[i] <= cut - gap])
+            print(f"gap-validation: pseudo-val = last {len(pseudo_val)} train rows, pool = "
+                  f"{len(pool_order)} rows ending {gap / np.timedelta64(1, 'D'):.0f} days "
+                  f"before them, matching the {gap / np.timedelta64(1, 'D'):.0f}-day "
+                  f"train->test gap", flush=True)
+            if len(pool_order) < 200:
+                raise SystemExit(
+                    f"gap-validation leaves only {len(pool_order)} pool rows on this task; "
+                    f"the train->test gap is too large a fraction of the training span for "
+                    f"this instrument to exist here."
+                )
+
+        def draw(order, seed, n, size, pool=None):
+            pool = time_order if pool is None else pool
+            size = min(size, len(pool))
             rng = np.random.default_rng(seed)
             if order == "recent":
                 # Deterministic given a size: if this helps, it helps without a draw.
-                return time_order[-size:]
+                return pool[-size:]
             if order == "recent-half":
-                pool = time_order[len(time_order) // 2:]
-                return rng.choice(pool, size=min(size, len(pool)), replace=False)
-            return rng.choice(n, size=size, replace=False)
+                half = pool[len(pool) // 2:]
+                return rng.choice(half, size=min(size, len(half)), replace=False)
+            return rng.choice(pool, size=size, replace=False)
 
         results = []
         for seed in range(args.seeds):
@@ -925,10 +958,17 @@ def main() -> None:
                         # the selection rather than a choice.
                         if order != "random" and min(size, n) >= n:
                             continue
-                        rows = draw(order, seed, n, size)
-                        v = (cv_score(name, size, seed) if args.cv_folds
-                             else score(arms[name][0], val_arms[name], rows, seed,
-                                        truth=y_va))
+                        rows = draw(order, seed, n, size, pool_order)
+                        if args.cv_folds:
+                            v = cv_score(name, size, seed)
+                        elif pseudo_val is not None:
+                            # Judged on the latest train rows, having been fitted only on
+                            # rows a full train->test gap earlier. Same matrix, so the
+                            # features are identical to the ones test will see.
+                            v = score(arms[name][0], arms[name][0][pseudo_val], rows, seed,
+                                      truth=y[pseudo_val])
+                        else:
+                            v = score(arms[name][0], val_arms[name], rows, seed, truth=y_va)
                         label = f"{name}/{order}" if len(orders) > 1 else name
                         print(f"  {label:<20} context={size:<6} "
                               f"{'cv' if args.cv_folds else 'val'}={v:.2f}", flush=True)
