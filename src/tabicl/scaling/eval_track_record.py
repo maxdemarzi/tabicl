@@ -194,6 +194,17 @@ def main() -> None:
                          "column gets a histogram. Below it the column is free text in "
                          "disguise (rel-trial's eligibilities.criteria has 247k values and "
                          "its top 4 cover 0.1%%), and the block is K+1 constant columns.")
+    ap.add_argument("--decide-fit-pool", action="store_true",
+                    help="decide whether to fit on train+val using validation alone, "
+                         "instead of assuming it. Splits val by time into a selection part "
+                         "and a decision part: settings are chosen on the first, then "
+                         "fit-on-train versus fit-on-train+selection-part is compared on "
+                         "the second, and whichever wins is used for the final fit on all "
+                         "of train(+val). No test data is involved. Needed because "
+                         "--fit-on-train-val is +2.48 on rel-f1 and -7.29 on rel-event, "
+                         "and the ordinary validation column is IDENTICAL in both arms -- "
+                         "it cannot see the difference, so enabling it per task by test "
+                         "score would be test-selection.")
     ap.add_argument("--fit-on-train-val", action="store_true",
                     help="after the setting is chosen on validation, draw the final "
                          "context from train AND val instead of train alone. The same "
@@ -1008,7 +1019,41 @@ def main() -> None:
                         if best is None or v > best[0]:
                             best = (v, name, size, order)
             val_auc, name, size, order = best
-            if args.fit_on_train_val:
+
+            use_pool = args.fit_on_train_val
+            if args.decide_fit_pool:
+                # Decide the pool question on VALIDATION, never on test. Split val by time:
+                # the earlier part joins the fitting pool, the later part judges whether
+                # that helped. Both halves are validation rows, so this is a
+                # validation-only decision procedure.
+                #
+                # It exists because the ordinary validation column is identical whether or
+                # not val joins the final fit -- the selection is unchanged, so the usual
+                # instrument is blind to a difference worth +2.48 on rel-f1 and -7.29 on
+                # rel-event.
+                v_order = np.argsort(val[tcol].to_numpy(), kind="stable")
+                cut = max(1, int(0.6 * len(v_order)))
+                add_idx, judge_idx = v_order[:cut], v_order[cut:]
+                judge_X, judge_y = val_arms[name][judge_idx], y_va[judge_idx]
+                n_tr = len(arms[name][0])
+
+                plain_rows = draw(order, seed, n_tr, size)
+                plain = score(arms[name][0], judge_X, plain_rows, seed, truth=judge_y)
+
+                aug_X = np.vstack([arms[name][0], val_arms[name][add_idx]])
+                aug_y = np.concatenate([y, y_va[add_idx]])
+                aug_take = len(aug_X) if size >= n_tr else min(size, len(aug_X))
+                aug_rows = np.random.default_rng(seed).choice(
+                    len(aug_X), size=aug_take, replace=False)
+                augmented = score(aug_X, judge_X, aug_rows, seed,
+                                  truth=judge_y, fit_y=aug_y)
+
+                use_pool = augmented > plain
+                print(f"  pool decision on held-out val: train {plain:.2f} vs "
+                      f"train+val {augmented:.2f} -> "
+                      f"{'train+val' if use_pool else 'train only'}", flush=True)
+
+            if use_pool:
                 # Refit on everything available once the setting is chosen -- the same
                 # pattern as refitting on all data after cross-validation. The validation
                 # split was used to *select*, and RelBench permits training on train and
