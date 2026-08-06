@@ -73,6 +73,56 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-05 — which child tables: dict order spends a slot on a causally-empty table
+
+`--children N` takes the first N child tables in dictionary order. Two findings, one of
+which invalidates the comparison the other is trying to make.
+
+**Dict order is not stable across machines.** rel-trial's first three are
+`['designs', 'eligibilities', 'drop_withdrawals']` on the pod and
+`['conditions_studies', 'designs', 'drop_withdrawals']` on the workstation — same ten
+candidates, same code, different three used. So `--children 3` names a different feature
+set on different hosts, and two runs of the "same" configuration are not comparable. This
+is the storage-order defect in its most consequential form: earlier instances picked the
+wrong rows or the wrong columns, this one picks a different experiment.
+
+**`--top-children` ranks them on validation instead**, univariately (no fit required) and
+corrected for width by scoring each block against three permuted targets — a maximum over
+k columns grows with k under pure noise, so an uncorrected rule ranks tables by how wide
+they are. rel-trial:
+
+| child table | margin | best column | permuted null | cols |
+|---|---:|---:|---:|---:|
+| facilities_studies | **+4.5** | 7.3 | 2.8 | 39 |
+| sponsors_studies | +2.8 | 5.5 | 2.7 | 40 |
+| designs | +2.6 | 4.1 | 1.4 | 33 |
+| eligibilities | +2.6 | 4.1 | 1.4 | 33 |
+| conditions_studies | +1.7 | 3.9 | 2.2 | 39 |
+| drop_withdrawals | +0.0 | **0.0** | 0.0 | 41 |
+| outcomes | +0.0 | **0.0** | 0.0 | 30 |
+| reported_event_totals | +0.0 | **0.0** | 0.0 | 41 |
+| outcome_analyses | +0.0 | **0.0** | 0.0 | 52 |
+| interventions_studies | −0.0 | 3.8 | 3.8 | 39 |
+
+**Four tables yield no usable column at all** — best AUC exactly 50, every column dropped
+as all-NaN or constant after the cutoff. Two of them are `outcomes` and `outcome_analyses`,
+independently proven 100% post-cutoff in the depth-2 entry; the ranking found that without
+being told. `interventions_studies` is the width case the correction exists for: best 3.8
+against a null of 3.8, so all of it is the maximum-over-39-columns effect.
+
+**And the dict-order default spends one of its three slots on `drop_withdrawals`,** one of
+the four empty ones.
+
+Calibrated, 3 seeds: dict-order **72.24 ± 1.14** (VAL 68.56), validation-ranked
+**73.32 ± 0.41** (VAL 68.50).
+
+**Not claimed.** Test says +1.08 with a 3× tighter spread; validation says −0.06 against an
+SE near 0.45, so the selection instrument cannot distinguish them and "test improved" is
+precisely the reasoning that has produced three retractions in this log. Re-running at 5
+seeds to see whether validation resolves it. The reproducibility argument for
+`--top-children` stands on its own regardless of the outcome, since the thing it replaces
+is not well-defined.
+
 ### 2026-08-05 — context temporal locality: large on rel-event, absent everywhere else
 
 The context is drawn uniformly at random from train. Nobody chose that, and the selection
