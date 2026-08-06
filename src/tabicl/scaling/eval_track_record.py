@@ -191,6 +191,16 @@ def main() -> None:
                          "each one a single nunique of 1 or 2 -- and with mode and the "
                          "histogram both off, that has been their entire contribution to "
                          "every number in the table.")
+    ap.add_argument("--context-orders", default="random",
+                    help="comma-separated context selection rules to offer validation: "
+                         "random (uniform over train, the only one ever used), recent (the "
+                         "most recent rows by timestamp), recent-half (uniform within the "
+                         "recent half). Offered as a selectable axis rather than a flag, "
+                         "so a win is chosen on validation and eligible for the table. "
+                         "This is selectable where resampling was not: RelBench splits are "
+                         "temporal, so the validation split is a LATER period than train "
+                         "and can see a recency effect -- the instrument that failed on "
+                         "resampling was CV over held-out train rows, which cannot.")
     ap.add_argument("--calendar", action="store_true",
                     help="day of week, day, month, weekend flag and their sine/cosine "
                          "pairs, from the prediction timestamp. Every datetime column is "
@@ -834,6 +844,25 @@ def main() -> None:
                 scores.append(score(X, X[f], take, seed, truth=y[f]))
             return float(np.mean(scores)) if scores else 0.0
 
+        orders = [o.strip() for o in args.context_orders.split(",") if o.strip()]
+        unknown = [o for o in orders if o not in ("random", "recent", "recent-half")]
+        if unknown:
+            raise SystemExit(f"unknown context order(s) {unknown}")
+        # Train row indices in time order. Stable, so ties keep their original order and
+        # the choice is reproducible.
+        time_order = np.argsort(train[tcol].to_numpy(), kind="stable")
+
+        def draw(order, seed, n, size):
+            size = min(size, n)
+            rng = np.random.default_rng(seed)
+            if order == "recent":
+                # Deterministic given a size: if this helps, it helps without a draw.
+                return time_order[-size:]
+            if order == "recent-half":
+                pool = time_order[len(time_order) // 2:]
+                return rng.choice(pool, size=min(size, len(pool)), replace=False)
+            return rng.choice(n, size=size, replace=False)
+
         results = []
         for seed in range(args.seeds):
             best = None
@@ -847,22 +876,29 @@ def main() -> None:
             grid = sorted({max(1000, cap // 4), max(2000, cap // 2), cap})
             for name in arms:
                 for size in grid:
-                    n = len(arms[name][0])
-                    rows = np.random.default_rng(seed).choice(n, size=min(size, n),
-                                                              replace=False)
-                    v = (cv_score(name, size, seed) if args.cv_folds
-                         else score(arms[name][0], val_arms[name], rows, seed, truth=y_va))
-                    print(f"  {name:<9} context={size:<6} "
-                          f"{'cv' if args.cv_folds else 'val'}={v:.2f}", flush=True)
-                    if best is None or v > best[0]:
-                        best = (v, name, size)
-            val_auc, name, size = best
+                    for order in orders:
+                        n = len(arms[name][0])
+                        # `recent` with a context covering every training row selects the
+                        # same set as `random`, so offering both would put a coin flip in
+                        # the selection rather than a choice.
+                        if order != "random" and min(size, n) >= n:
+                            continue
+                        rows = draw(order, seed, n, size)
+                        v = (cv_score(name, size, seed) if args.cv_folds
+                             else score(arms[name][0], val_arms[name], rows, seed,
+                                        truth=y_va))
+                        label = f"{name}/{order}" if len(orders) > 1 else name
+                        print(f"  {label:<20} context={size:<6} "
+                              f"{'cv' if args.cv_folds else 'val'}={v:.2f}", flush=True)
+                        if best is None or v > best[0]:
+                            best = (v, name, size, order)
+            val_auc, name, size, order = best
             n = len(arms[name][0])
-            rows = np.random.default_rng(seed).choice(n, size=min(size, n), replace=False)
+            rows = draw(order, seed, n, size)
             auc = score(arms[name][0], arms[name][1], rows, seed)
-            results.append((auc, name, size, val_auc))
-            print(f"  chosen {name} context={size} -> VAL {val_auc:.2f}  TEST {auc:.2f}",
-                  flush=True)
+            results.append((auc, name, size, val_auc, order))
+            print(f"  chosen {name} context={size} order={order} -> "
+                  f"VAL {val_auc:.2f}  TEST {auc:.2f}", flush=True)
 
         aucs = np.array([r[0] for r in results])
         vals = np.array([r[3] for r in results])
@@ -880,6 +916,10 @@ def main() -> None:
               f"\t{aucs.mean():.2f}\t{aucs.std(ddof=1) if len(aucs) > 1 else 0:.2f}"
               f"\t{max(set(chose), key=chose.count)}", flush=True)
         print(f"validation chose: {chose}; sizes {[r[2] for r in results]}", flush=True)
+        if len(orders) > 1:
+            picked = [r[4] for r in results]
+            print(f"context order chosen: {picked} "
+                  f"({picked.count('random')}/{len(picked)} random)", flush=True)
         print(f"reference: {REFERENCE.get(args.dataset, 'see PERFORMANCE.md')}", flush=True)
         return
 
