@@ -2,7 +2,7 @@
 
 Written on stopping, so this can be picked up cold. `STATUS.md` is the current state,
 `DESIGN.md` the history log. Nothing here is blocking — the branch is committed, tested
-(147 passed, 1 skipped) and pushed.
+(176 passed, 1 skipped) and pushed.
 
 ## 0. AMP contaminates every GPU number — re-measure before comparing
 
@@ -17,8 +17,13 @@ Consequences for the items below:
   a 24 GB card against ~250s on CPU, and it reproduces CPU *exactly*. That converts
   five-seed paired comparisons from an hour into a minute, which is the thing that would
   have prevented most of the wrong conclusions in `DESIGN.md`.
-* **`pod.py stop`, not `terminate`.** Terminating destroys the volume, and re-downloading
-  rel-event costs ~30 minutes at the ~700 kB/s these pods get. Stop preserves it.
+* **Terminate, and verify nothing is left running.** This reverses the advice that stood
+  here, which was to `stop` so the volume survives a re-download. It was wrong on cost: a
+  stopped pod still bills for its volume, and *every* cycle since has had to hunt for a
+  usable host anyway — the probe now rejects hosts for broken CUDA, for torch below 2.2,
+  and for bandwidth under 5 MB/s, so the preserved volume is rarely the one you come back
+  to. `cycle.ps1` terminates in a `finally` and prints `REMAINING PODS:` afterwards, so a
+  pod cannot outlive its job even if nothing is watching.
 
 Set it like this:
 
@@ -49,8 +54,13 @@ seed — which is the root cause of most wrong conclusions in `DESIGN.md`.
   `nvidia-smi` and `device_count 1`, yet `torch.cuda.is_available()` was False and every
   allocation failed with "CUDA unknown error", with `CUDA_VISIBLE_DEVICES` unset or set.
   `/dev/nvidiactl` was present. Not fixable from inside; terminate and take another host.
-* **`stop` preserves the volume, `terminate` destroys it.** Re-downloading rel-event costs
-  ~30 minutes at the ~700 kB/s these pods get, so stop unless the host is bad.
+* **Probe the host before trusting it, on three counts.** All three failures are silent:
+  a broken community host reports a healthy `nvidia-smi` while every allocation raises; a
+  host shipping torch below 2.2 imports and allocates perfectly and then raises inside the
+  model's forward pass (multi-dim `Tensor.all`), which cost a full cycle after
+  provisioning, upload, install and a 385 MB download had all succeeded; and a slow host
+  looks entirely healthy and simply never finishes. `pod_runner.probe_host` checks CUDA
+  from torch, the torch version, and download bandwidth, in that order.
 
 ## 1. RESOLVED — the sign does flip with `n_estimators`
 
@@ -93,8 +103,17 @@ unsupported, but the corrections are unfinished.
 * The **−3.21 categorical result on rel-event**, and the conclusion drawn from it that
   the categorical blocks "do not generalise". It reproduces at `n_estimators=4` and
   reverses to **+1.50** at `n_estimators=1`.
-* The decision to keep `top_k_categories` / `include_mode` **off by default**. Still the
-  conservative choice, but its justification is what is in question.
+* ~~The decision to keep `top_k_categories` / `include_mode` **off by default**.~~
+  **RESOLVED 2026-08-05, and neither of the earlier numbers was right.** Both blocks turn
+  out never to have run in `eval_track_record` at all — it sets `windows` and
+  `max_columns` and nothing else — so every standing number was measured without them and
+  the ±3-point swings above came from `eval_relbench_calibrated`, whose own bundling made
+  them unreadable: `(2, 4, True)` was its only categorical cell, entangling the blocks
+  with `max_columns=2`, and it factorized train and test separately besides. Gated
+  properly, one variable at a time: rel-trial +0.27 / −0.09, rel-event +0.01 / −0.39,
+  rel-avito +0.05, and on rel-f1 and rel-avito the variants **refuse to run** because
+  those schemas have no eligible categorical child columns. Every cell inside the ±0.6
+  floor. Off by default is correct, and now for a measured reason.
 * The **calibrated rel-event 78.11** in `STATUS.md`, for the reason in (2).
 
 ## 5. DONE — both numbers re-measured
