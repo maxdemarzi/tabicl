@@ -212,6 +212,53 @@ So the options are: per task by test score (test-selection, refused); uniformly 
 tasks that matter). **Train+val fitting is the ninth real-on-test, unselectable effect** —
 and the first whose effect is strongly negative somewhere. The standing table is unchanged.
 
+### 2026-08-06 — we hold ourselves to a stricter standard than the column we compare against
+
+From the TabPFN-3 report's own methods section (arXiv 2605.13986, §3.4), which is the
+source of every comparison figure in the table at the top of this file:
+
+* *"we generally report baseline results as provided by the authors of the methods to
+  ensure well-tuned baselines"* — so RelGNN's 86.18 is the authors' own tuned figure.
+* *"For KumoRFMv2 we ... use four estimators and a context size of 10000 (the respective
+  maxima for each), **which we found to slightly outperform** the script defaults"* —
+  settings chosen by observed performance.
+* *"We compare **three different versions** of RDBLearn"*, and the headline figure is the
+  best of them (RDBLearn + v3).
+
+And Figure 21 splits the field into **foundation models** (TabPFN-REL, KumoRFM, Griffin,
+RTzero) and **supervised, per-task tuned** (RelGNN, RelGT, GraphSAGE, RDBLearn). **RelGNN,
+the number this project has been chasing, is in the second class.** Our own class is
+TabPFN-REL, against which the standing table is +2.00 on rel-f1, −1.14 on rel-avito, −4.17
+on rel-trial and −4.40 on rel-event.
+
+Meanwhile our protocol chooses every setting on a validation split, touches test once, and
+has this week **declined nine measured effects** because validation did not endorse them.
+That is materially stricter than author-reported-best-tuned or best-of-three-variants.
+
+**This does not license test-selection**, and nothing in the table changes on the strength
+of it. But it does mean the calibrated column is not like-for-like, and it is conservative
+in the *unfavourable* direction. The paper's own practice — reporting three RDBLearn
+variants — suggests the honest alternative is two columns rather than a looser one:
+
+| task | calibrated (validation-selected) | best measured configuration |
+|---|---:|---:|
+| rel-f1 | 81.98 | 84.61 — train+val fitting |
+| rel-event | 80.98 | 86.77 — recent 1,000-row context |
+| rel-avito | 65.54 | 66.21 — top-1 key |
+| rel-trial | 72.26 | 73.56 — train+val fitting |
+
+The second column is **an upper bound selected with knowledge of test** and must be
+labelled as such wherever it appears. It is not a claim of superiority and must never be
+the headline — but hiding it while comparing against best-of-variants figures is its own
+kind of misreporting. **Left as an open decision for the maintainer**; the headline table
+is unchanged.
+
+*Also relevant to reading that comparison: the report marks KumoRFMv1 and RTzero as
+"likely following a different evaluation protocol than the one outlined in RelBench, which
+overestimates model performance". Protocol rigour is a known problem on this benchmark,
+which is the strongest argument for keeping the calibrated column as the headline and
+publishing the unselectable finding rather than loosening what we report.*
+
 ## Session close, 2026-08-06 — the table is unchanged, and that is the finding
 
 **rel-f1 81.98 · rel-event 80.98 · rel-avito 65.54 · rel-trial 72.26.** Nothing entered.
