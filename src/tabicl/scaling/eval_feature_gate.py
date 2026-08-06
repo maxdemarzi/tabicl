@@ -267,6 +267,7 @@ def main() -> None:
              for seed in range(args.seeds)}
     base_auc = {seed: score(*frames["base"], draws[seed], seed) for seed in range(args.seeds)}
     print(f"\nbase: {', '.join(f'{base_auc[s]:.2f}' for s in sorted(base_auc))}", flush=True)
+    summary: list[str] = []
 
     for variant in wanted:
         model_side = variant in MODEL_VARIANTS
@@ -330,11 +331,23 @@ def main() -> None:
         # and the sd column alone invites reading them as though they were.
         se = sd / np.sqrt(len(g)) if len(g) > 1 else 0.0
         verdict = "clears" if abs(g.mean()) > max(0.6, 2 * se) else "inside noise"
-        print(f"GATEROW\t{args.dataset}/{args.task}\t{variant}\t{g.mean():+.2f}\t"
-              f"{sd:.2f}\tSE {se:.2f}\t{(g > 0).sum()}/{len(g)}\t{n_changed}\t{verdict}",
-              flush=True)
+        row = (f"GATEROW\t{args.dataset}/{args.task}\t{variant}\t{g.mean():+.2f}\t"
+               f"{sd:.2f}\tSE {se:.2f}\t{(g > 0).sum()}/{len(g)}\t{n_changed}\t{verdict}")
+        summary.append(row)
+        print(row, flush=True)
 
-    print("\nGate only. +-0.6 floor, and this is test-side -- a pass earns a calibrated "
+    # Every row again, together, at the end. A caller that pipes this through `tail`
+    # otherwise keeps only the last variant or two -- which is exactly what happened:
+    # `tail -60` silently discarded timing, calendar, booleans and narrow on every task in
+    # a run, and the results were computed and thrown away rather than missing loudly.
+    print(f"\n===== {args.dataset}/{args.task}: {len(summary)} of {len(wanted)} variants "
+          f"measured", flush=True)
+    for row in summary:
+        print(row, flush=True)
+    skipped = [v for v in wanted if not any(f"\t{v}\t" in r for r in summary)]
+    if skipped:
+        print(f"SKIPPED (nothing to measure): {', '.join(skipped)}", flush=True)
+    print("Gate only. +-0.6 floor, and this is test-side -- a pass earns a calibrated "
           "run, not a table entry.", flush=True)
 
 
