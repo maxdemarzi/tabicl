@@ -82,6 +82,24 @@ def main() -> None:
     # the run reported "0 children, 0 grandchildren" as though the schema had none.
     kids = all_kids if args.children <= 0 else all_kids[: args.children]
 
+    # Prefer children that actually HAVE grandchildren. Taking the first N in dictionary
+    # order found none on rel-trial (the subtree is outcomes -> outcome_analyses, and
+    # outcomes is not among the first three), while taking all ten OOM-killed the host:
+    # the join path is |child| x rows-sharing-a-key, and ten subtrees exceeded memory
+    # before the MAX_JOIN_PAIRS guard could fire. Depth-2 is only *about* the children with
+    # descendants, so order by that and let --children bound the cost.
+    def _has_gc(name):
+        ct = tables[name]
+        if ct.pkey_col is None:
+            return False
+        return any(gpt == name and gt.time_col
+                   for gt in tables.values()
+                   for gpt in (gt.fkey_col_to_pkey_table or {}).values())
+
+    ranked = sorted(all_kids, key=lambda k: (not _has_gc(k[0]), all_kids.index(k)))
+    kids = ranked if args.children <= 0 else ranked[: args.children]
+    print(f"children chosen (with-grandchildren first): {[k[0] for k in kids]}", flush=True)
+
     def grandchildren_of(child_name):
         """Tables pointing at this child, which is what depth-2 would add."""
         ct = tables[child_name]
