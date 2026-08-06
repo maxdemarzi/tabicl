@@ -413,14 +413,19 @@ Calibrated, 5 replicates, `--max-columns 4`:
 | rel-event | 81.72 | 81.41 | **−0.31** | 1.06 → **1.45** |
 | rel-f1 | 82.18 | 82.19 | +0.01 | 1.04 → **0.41** |
 | rel-trial | 72.32 | 72.33 | +0.01 | 1.08 → 1.04 |
+| rel-avito | 65.50 | 65.61 | +0.11 | 0.21 → **0.12** |
 
 *(rel-event at N=3: 81.45, sd 1.18 — monotone between the two.)*
 
-**No accuracy effect anywhere**, and the variance effect is inconsistent: down 2.5× on
-rel-f1, up on rel-event, flat on rel-trial. That pattern tracks how homogeneous each task's
-candidate pool is, not anything about the method — rel-f1's six candidates are near
-duplicates, so averaging removes the seed-to-seed noise of *which* gets picked, while
-rel-event's nine include genuinely weaker configurations that N=5 drags into the average.
+**Mean effect across the four tasks: −0.045. Nil.** The variance effect is inconsistent —
+down 2.5× on rel-f1 and 1.8× on rel-avito, *up* on rel-event, flat on rel-trial — and it
+tracks how homogeneous each task's candidate pool is rather than anything about the method.
+rel-f1's six candidates are near duplicates, so averaging removes the seed-to-seed noise of
+*which* one gets picked; rel-event's nine include genuinely weaker configurations that N=5
+drags into the average.
+
+Cheaper reproducibility on some tasks is worth something, but it is not what this was
+proposed for and is not an accuracy result.
 
 **In hindsight the null is unsurprising and the test was badly aimed.** The candidates the
 sweep offers are arms × context sizes, which sit close together; averaging configurations
