@@ -116,12 +116,29 @@ the four empty ones.
 Calibrated, 3 seeds: dict-order **72.24 ± 1.14** (VAL 68.56), validation-ranked
 **73.32 ± 0.41** (VAL 68.50).
 
-**Not claimed.** Test says +1.08 with a 3× tighter spread; validation says −0.06 against an
-SE near 0.45, so the selection instrument cannot distinguish them and "test improved" is
-precisely the reasoning that has produced three retractions in this log. Re-running at 5
-seeds to see whether validation resolves it. The reproducibility argument for
-`--top-children` stands on its own regardless of the outcome, since the thing it replaces
-is not well-defined.
+**Re-run at 5 seeds, and validation still cannot distinguish them:**
+
+| child set | val | test |
+|---|---:|---:|
+| first 3, dict order | 68.65 ± 0.65 | 72.32 ± 0.94 |
+| best 3 of 10, ranked on validation | 68.38 ± 0.69 | **73.37 ± 0.30** |
+
+Test says **+1.05** with the spread tightening threefold. Validation says **−0.27** against a
+combined SE near 0.42 — indistinguishable, and leaning the wrong way. **So the gain is not
+claimed**, and this becomes the sixth effect in this log that is real on test and not
+selectable.
+
+**But the comparison has a defect the scores cannot fix.** Dict order is not a
+specification: it selects a different set of tables on different machines, so the 72.32
+baseline does not name a reproducible configuration. Among two options validation cannot
+separate, there is a case for preferring the one that is well-defined — and `--top-children`
+uses only validation data to rank, so choosing it costs no test information.
+
+That is a decision about *specification*, not a measured improvement, and it is left open
+rather than taken unilaterally: adopting it would move rel-trial's headline to 73.37 on an
+argument rather than on a measurement. `--children-order name` is the other defensible
+specification, and it is arbitrary but neutral. The one option that should not stand is the
+current default.
 
 ### 2026-08-05 — CORRECTION: the categorical blocks are not dead, they were measured on the wrong configuration
 
