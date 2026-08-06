@@ -194,6 +194,22 @@ setting has been selected — and it is +0.08, comfortably inside the ±0.6 floo
 tie rather than a gain. The gate's +0.90 did not survive calibration, which is the usual
 fate of a gate result and the reason the gate is not the table.
 
+**All three promotions, and the shape of the answer:**
+
+| task | order validation chose | calibrated test | standing | delta |
+|---|---|---:|---:|---:|
+| rel-event | `random` 3/3 | 78.72 ± 1.61 ¹ | 80.98 | — ¹ |
+| rel-avito | **recency 3/3** | 65.62 ± 0.16 | 65.54 ± 0.11 | +0.08 |
+| rel-trial | **recency 2/3** | 71.72 ± 1.57 | 72.26 | −0.54 |
+
+¹ Not comparable: this run omitted `--timed-links-only` and rel-event is the one task where
+that matters, so its `+struct` arm includes two untimed `user_friends` tables.
+
+**Recency is selectable on two tasks of three, and worth nothing on either.** Both deltas
+sit inside the ±0.6 floor. The one task where it is worth a great deal — rel-event, +7.50
+on test — is the one task where validation rejects it. Offering it as an option cost 0.54
+on rel-trial, which is what a free parameter does when it has nothing to find.
+
 **Why validation rejects it is structural, and measurable.** The train→validation gap is
 smaller than the train→test gap on every task in the benchmark:
 
