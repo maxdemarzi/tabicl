@@ -452,12 +452,18 @@ differs:
 |---|---:|---:|
 | rel-f1 | 4.8% | −0.06 (SE 0.17) — null |
 | **rel-event** | **54.9%** | **−1.03** (SE 0.48, 1/5) — clears, negative |
+| rel-avito | 42.0% | +0.12 (SE 0.25) — null |
 | rel-trial | ~44% | crashed; see below |
 
-Preserving missingness **hurts where there is a lot of it**, which is the failure mode
-predicted before the run: with 55% of cells missing, `nanmean`/`nanstd` have too little to
-work with, and dense consistent zeros beat sparse honest NaNs. The docstrings describe an
-intent the pipeline overrides, and the override is correct.
+**No benefit anywhere, and one real cost.** The zero-fill is chosen rather than inherited,
+and the docstrings describe an intent the pipeline overrides — correctly.
+
+*A mechanism I asserted and then had to withdraw.* On rel-event's result alone I wrote that
+preserving NaN "hurts where there is a lot of it", reasoning that `nanmean`/`nanstd` have
+too little to work with at 55% sparsity. rel-avito is 42% missing and is unaffected. Two
+tasks with comparable sparsity and opposite outcomes, so **NaN share is not the
+explanation** and the honest summary is: negative on rel-event, null on the other two that
+ran, cause unknown.
 
 *A correction to how this was motivated:* "44–47% NaN" was quoted as if typical. It is
 rel-trial's figure. rel-f1 is 4.8%, so there was nothing there to change and its null says
