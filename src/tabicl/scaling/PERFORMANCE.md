@@ -76,7 +76,10 @@ validation are in the 2026-08-05/06 entries below.
 foundation models. Our peer group is the flatten-then-tabular-foundation-model set
 (TabPFN-REL, RDBLearn+v3, KumoRFMv2), and **every one of those runs on TabPFN-3 while we run
 on TabICL.** Whether our remaining gap to them is featurization or backbone has never been
-separated — see the open question at the end of this file.
+separated directly. The nearest published evidence — RDBLearn's own three rows, same
+features across three backbone generations — puts a generation step at **+0.72 average, sd
+3.16**, against our 2.60 deficit, and it is *negative* on the task where our peer gap is
+largest. See the 2026-08-06 backbone-ladder entry.
 
 ## CORRECTION — our rank against the full field (2026-08-06)
 
@@ -2114,6 +2117,56 @@ mostly noise.
 *Changed:* number of child tables.
 *Finding:* **+0.35 is inside the noise floor.** Seven extra relations bought nothing
 measurable.
+
+### 2026-08-06 — the backbone hypothesis, weakened by a ladder already in the table
+
+The open question below asks whether our gap to the flatten-then-TFM peers is featurization
+or backbone: they all run TabPFN-3, we run TabICL, and nothing here separates the two. I
+built `eval_backbone.py` to settle it by swapping backbones on identical features — and it
+is **blocked**: `tabpfn` 8.2.0 will not download weights without a `TABPFN_TOKEN` from a
+registered priorlabs.ai account with the license accepted. The 2.x line (through 2.2.1,
+Sept 2025) is ungated, but that is TabPFN v2 — a generation *below* what every peer uses,
+and its 100-feature limit sits under our frame width, so it would measure extrapolation.
+The runner is committed and needs only a token.
+
+**But Table 14 already contains a backbone ladder on fixed features, and I had not read it
+as one.** RDBLearn appears three times — plain, `+v2.5`, `+v3` — same featurization, three
+backbone generations. That isolates the backbone axis directly:
+
+| task | RDBLearn | +v2.5 | +v3 | v2.5→v3 | ours |
+|---|---:|---:|---:|---:|---:|
+| rel-event / user-repeat | 75.04 | 75.55 | 76.81 | **+1.26** | 77.89 |
+| rel-trial / study-outcome | 71.58 | 72.90 | 72.89 | −0.01 | 72.26 |
+| rel-f1 / driver-top3 | 79.69 | 77.60 | 82.72 | **+5.12** | 81.98 |
+| rel-event / user-ignore | 82.52 | 78.65 | 73.70 | **−4.95** | 80.98 |
+| rel-avito / user-visits | 65.49 | 66.47 | 66.76 | +0.29 | 65.54 |
+| rel-avito / user-clicks | 69.04 | 65.72 | 69.06 | **+3.34** | 65.89 |
+| rel-f1 / driver-dnf | 70.87 | 71.72 | 71.72 | 0.00 | 69.66 |
+| **average** | **73.46** | **72.66** | **73.38** | **+0.72** | **73.46** |
+
+**A full backbone generation, on fixed features, is worth +0.72 on average — sd 3.16,
+positive on 4 of 7, and it ranges from −4.95 to +5.12.** Our gap to the best average is
+2.60. So the backbone axis, as far as published evidence reaches, is *smaller than our gap
+and mostly noise around zero*.
+
+Two details sharpen it:
+
+* **On rel-event/user-ignore the newer backbone made RDBLearn 4.95 WORSE.** That is the
+  task where the backbone story was most tempting — we sit 4.40 below TabPFN-REL there. The
+  one published measurement of a backbone upgrade on that exact task points the wrong way.
+* **Plain RDBLearn averages 73.46, above its own `+v3` at 73.38 and its `+v2.5` at 72.66.**
+  The base configuration beats both upgrades on average. "Newer backbone is better" is not
+  supported even within one authors' own three rows.
+
+**What this does and does not license.** It bounds *a generation step inside the TabPFN
+family*, not *TabICL versus TabPFN*, which is a different-family comparison and could be
+larger. It is also seven tasks of published single numbers with no replicate counts, so
+none of these deltas is paired and the ±0.6 floor here is unknown and probably worse. It
+does not close the question — `eval_backbone.py` still should run. What it does is move the
+prior: **the expected value of backbone work is now around +0.7 with a large variance, and
+that is not where a 2.60 average deficit is hiding.** Featurization remains the better bet,
+and this is the second time the peers' published spread has turned out to be dominated by
+something other than model quality — see the 11.68-point user-ignore entry above.
 
 ### Earlier — row chunking verified exact
 `max|Δp| = 1.1e-05`, AUC identical with `offload="auto"` engaged, on both 128- and
