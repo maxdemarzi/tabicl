@@ -565,6 +565,34 @@ sweep, because the prediction was derived from the implementation first. After a
 expensive nulls that is the cheaper order of operations, and it is the same habit —
 read what the code actually does — that produced nine bug findings.
 
+### 2026-08-06 — comparability of the headline numbers, verified rather than assumed
+
+The TabPFN-3 report describes its protocol as *"truncating each database at the
+pre-specified test timestamp before constructing the featurization and context for all test
+entities"* — a **single global cutoff**. This pipeline uses **per-row** cutoffs, each entity
+seeing child rows up to its own timestamp. If the shipped database contained rows between
+the test timestamp and a late test row's own time, our features would use data the published
+methods exclude, and no number in the table above would be comparable.
+
+Checked, and it does not:
+
+| task | distinct test timestamps | test span | child rows at/after `test_timestamp` |
+|---|---:|---|---|
+| rel-f1 | 30 | 2010-03-02 … 2013-03-16 | **0** of 52,520 |
+| rel-trial | 1 | single day | 3,028 of 4,671,285 (0.06%) |
+| rel-event | 1 | single day | **0** of 10,904,791 |
+| rel-avito | 1 | single day | 6 of 7,509,452 |
+
+Three tasks have one test timestamp, equal to `test_timestamp`, so per-row and global
+cutoffs coincide exactly. rel-f1's test rows run three years past its cutoff and **no child
+row exists after it** — RelBench ships the database pre-truncated, so there is nothing there
+to use. The residuals on rel-trial and rel-avito are rows sitting exactly *at* the boundary,
+and the filter is a strict `<`, so they are excluded regardless.
+
+**Our per-row cutoff is therefore no more permissive than the published protocol.** This is
+recorded because every comparison in this file depends on it and none of them had checked
+it — the kind of assumption that is invisible until it is wrong.
+
 ## Session close, 2026-08-06 — the table is unchanged, and that is the finding
 
 **rel-f1 81.98 · rel-event 80.98 · rel-avito 65.54 · rel-trial 72.26.** Nothing entered.
