@@ -44,7 +44,8 @@ from relbench.datasets import get_dataset
 from relbench.tasks import get_task
 
 from tabicl import TabICLClassifier
-from tabicl.scaling import Table, asof_statistics, key_target_history
+from tabicl.scaling import (Table, asof_statistics, entity_label_history,
+                            key_target_history)
 from tabicl.scaling._guards import assert_no_perfect_feature
 from tabicl.scaling._calendar import calendar_features
 from tabicl.scaling._leakage import permutation_test, temporal_control
@@ -297,6 +298,18 @@ def main() -> None:
                          "dropped when the entity block is assembled -- the cutoff "
                          "included -- so nothing downstream can tell a Monday from a "
                          "Saturday, on tasks with four- and seven-day horizons.")
+    ap.add_argument("--label-history", action="store_true",
+                    help="this entity's OWN earlier outcomes: count, positive rate, last "
+                         "label, days since it resolved. The task table is a timestamped "
+                         "table keyed by entity and the pipeline has only ever read its "
+                         "key, cutoff and label -- never the labels of that entity's "
+                         "earlier rows. Gated horizon-correct before being built: on "
+                         "rel-f1 this ONE scalar beats the whole pipeline, 84.66 vs 81.98 "
+                         "on driver-top3 and 74.27 vs 69.66 on driver-dnf. Worth most "
+                         "where entities recur; useless on rel-trial, where every study "
+                         "has exactly one outcome and coverage is 0.0%%. The pool is the "
+                         "fitting split only, and a row cannot read its own label because "
+                         "that label resolves one horizon after its own cutoff.")
     ap.add_argument("--calendar-trend", action="store_true",
                     help="also emit days since the training minimum. Separate from "
                          "--calendar on purpose: this one is monotone, so every test row "
@@ -451,6 +464,17 @@ def main() -> None:
                       include_mode=args.mode)
             blocks.append(asof_statistics(t, frame[key].to_numpy(),
                                           frame[tcol].to_numpy()).add_prefix(f"{n}__"))
+        if args.label_history:
+            # The label pool is the FITTING pool and nothing else. Every other choice here
+            # is a protocol question wearing a feature costume: letting test rows read
+            # validation outcomes would be defensible at inference time and indefensible
+            # in a table that compares against methods which did not. Self-exclusion is
+            # structural inside `entity_label_history` -- a row's own outcome resolves one
+            # horizon after its own cutoff -- so nothing about `frame` needs checking here.
+            blocks.append(entity_label_history(
+                train[key].to_numpy(), train[target].to_numpy(),
+                train[tcol].to_numpy(), frame[key].to_numpy(),
+                frame[tcol].to_numpy(), label_horizon=task.timedelta))
         out = pd.concat(blocks, axis=1)
         _audit_requested_blocks(out)
         return out
@@ -467,6 +491,23 @@ def main() -> None:
         columns whose codebook captures too little, and on a schema of free-text columns
         that is *all* of them. So count what actually came out, once, and say it.
         """
+        # Label history fails differently: the columns are always PRESENT, and on an entity
+        # that never recurs they are simply all-NaN. Coverage is the quantity, not column
+        # count -- rel-trial has `entities == rows` and would report a clean +0.00 null
+        # forever. Say the coverage out loud and refuse the degenerate case.
+        if args.label_history and "label history" not in reported:
+            reported.add("label history")
+            n_prior = frame["self__n_prior"]
+            coverage = float((n_prior > 0).mean())
+            print(f"label history: {coverage:.1%} of rows have a resolved earlier outcome "
+                  f"for the same entity (horizon {task.timedelta})", flush=True)
+            if coverage == 0.0:
+                raise SystemExit(
+                    "--label-history was requested but NO row has a resolved earlier "
+                    "outcome, so every column is NaN and any gap measured would be an "
+                    "artefact of an empty block. This is structural where an entity "
+                    "appears once (rel-trial: entities == rows), not a bug to work around."
+                )
         for flag, suffix, label in ((args.categories, "__cat0", "category histogram"),
                                     (args.mode, "__mode", "prefix mode")):
             if not flag or label in reported:

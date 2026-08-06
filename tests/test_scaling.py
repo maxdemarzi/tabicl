@@ -2692,3 +2692,90 @@ def test_pod_images_satisfy_the_torch_minimum_the_probe_enforces():
             pod_runner._check_images()
     finally:
         pod_runner.IMAGES = original
+
+
+# --------------------------------------------------------------------------------------
+# entity_label_history -- the entity's own earlier outcomes.
+#
+# The property under test is the one the docstring calls structural: a row cannot read its
+# own label, because its own event becomes readable one horizon after its cutoff. These
+# tests exist to make sure that stays true, since the gate that motivated this feature
+# initially omitted the horizon and overstated it by 2.26 AUC.
+# --------------------------------------------------------------------------------------
+
+def _hist_frame():
+    import pandas as pd
+    t = pd.Timestamp("2020-01-01")
+    # one entity with four monthly outcomes, one entity appearing exactly once
+    ent = ["a", "a", "a", "a", "b"]
+    times = [t, t + pd.Timedelta(days=30), t + pd.Timedelta(days=60),
+             t + pd.Timedelta(days=90), t]
+    vals = [1.0, 1.0, 0.0, 1.0, 1.0]
+    return np.array(ent), np.array(vals), pd.to_datetime(pd.Series(times)).to_numpy()
+
+
+def test_entity_label_history_never_reads_its_own_label():
+    import pandas as pd
+    from tabicl.scaling import entity_label_history
+    ent, vals, times = _hist_frame()
+    out = entity_label_history(ent, vals, times, ent, times,
+                               label_horizon=pd.Timedelta(days=30))
+    # The first row of each entity has no resolved predecessor at all.
+    assert out["self__n_prior"].iloc[0] == 0
+    assert np.isnan(out["self__positive_rate"].iloc[0])
+    assert out["self__n_prior"].iloc[4] == 0          # entity 'b', single outcome
+    # Row i of entity 'a' sees exactly its i predecessors, never itself.
+    assert list(out["self__n_prior"].iloc[:4]) == [0, 1, 2, 3]
+    # Rate at row 3 is over labels [1, 1, 0], not including its own 1.
+    assert out["self__positive_rate"].iloc[3] == pytest.approx(2 / 3)
+
+
+def test_entity_label_history_horizon_is_enforced_not_optional():
+    import pandas as pd
+    from tabicl.scaling import entity_label_history
+    ent, vals, times = _hist_frame()
+    for bad in (pd.Timedelta(0), pd.Timedelta(days=-1)):
+        with pytest.raises(ValueError, match="must be positive"):
+            entity_label_history(ent, vals, times, ent, times, label_horizon=bad)
+
+
+def test_entity_label_history_horizon_delays_visibility():
+    import pandas as pd
+    from tabicl.scaling import entity_label_history
+    ent, vals, times = _hist_frame()
+    short = entity_label_history(ent, vals, times, ent, times,
+                                 label_horizon=pd.Timedelta(days=30))
+    long = entity_label_history(ent, vals, times, ent, times,
+                                label_horizon=pd.Timedelta(days=75))
+    # A longer horizon can only hide outcomes, never reveal them.
+    assert (long["self__n_prior"] <= short["self__n_prior"]).all()
+    assert long["self__n_prior"].sum() < short["self__n_prior"].sum()
+
+
+def test_entity_label_history_unknown_entity_and_empty_pool():
+    import pandas as pd
+    from tabicl.scaling import entity_label_history
+    ent, vals, times = _hist_frame()
+    q_ent = np.array(["zz", "a"])
+    q_t = pd.to_datetime(pd.Series([pd.Timestamp("2021-01-01")] * 2)).to_numpy()
+    out = entity_label_history(ent, vals, times, q_ent, q_t,
+                               label_horizon=pd.Timedelta(days=30))
+    assert out["self__n_prior"].iloc[0] == 0            # never-seen entity
+    assert np.isnan(out["self__positive_rate"].iloc[0])
+    assert out["self__n_prior"].iloc[1] == 4            # 'a', all four resolved by then
+    empty = entity_label_history(np.array([]), np.array([]),
+                                 np.array([], dtype="datetime64[ns]"), q_ent, q_t,
+                                 label_horizon=pd.Timedelta(days=30))
+    assert len(empty) == 2 and empty["self__n_prior"].sum() == 0
+
+
+def test_entity_label_history_preserves_query_order():
+    import pandas as pd
+    from tabicl.scaling import entity_label_history
+    ent, vals, times = _hist_frame()
+    order = [3, 0, 4, 2, 1]
+    out = entity_label_history(ent, vals, times, ent[order], times[order],
+                               label_horizon=pd.Timedelta(days=30))
+    straight = entity_label_history(ent, vals, times, ent, times,
+                                    label_horizon=pd.Timedelta(days=30))
+    assert list(out["self__n_prior"]) == list(straight["self__n_prior"].iloc[order])
