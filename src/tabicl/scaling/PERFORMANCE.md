@@ -2118,6 +2118,57 @@ mostly noise.
 *Finding:* **+0.35 is inside the noise floor.** Seven extra relations bought nothing
 measurable.
 
+### 2026-08-06 — GATE: the task table's own label history, and it is the biggest signal found here
+
+**We use the task table for three things — entity key, timestamp, label — and have never
+used its fourth: the labels of that entity's EARLIER rows.** `eval_track_record` touches
+`task.entity_col`, `task.target_col` and the time column and nothing else. Every feature in
+this pipeline comes from the database's child tables. The task table is itself a
+timestamped table keyed by entity, and its past rows are as legitimate a source of as-of
+features as any child table — this is a gap in what we build, not a rule we were respecting.
+
+Gated first, per the standing rule. For each training row, the feature is the mean of that
+entity's strictly-earlier labels (`groupby(entity).shift(1).expanding().mean()` on rows
+sorted by time), so no row can see its own label or any later one:
+
+| task | rows | entities | coverage | history-mean AUC | our full pipeline |
+|---|---:|---:|---:|---:|---:|
+| rel-f1 / driver-top3 | 1,353 | 92 | 93.2% | **86.92** | 81.98 |
+| rel-f1 / driver-dnf | 11,411 | 780 | 93.2% | **74.91** | 69.66 |
+| rel-event / user-ignore | 19,239 | 8,517 | 55.7% | **82.94** | 80.98 |
+| rel-event / user-repeat | 3,842 | 1,388 | 63.9% | 70.04 | 77.89 |
+| rel-avito / user-visits | 86,619 | 44,968 | 48.1% | 57.32 | 65.54 |
+| rel-avito / user-clicks | 59,454 | 34,575 | 41.8% | 59.06 | 65.89 |
+| rel-trial / study-outcome | 11,994 | 11,994 | 0.0% | unavailable | 72.26 |
+
+**On rel-f1 a single scalar beats the entire pipeline** — by 4.94 on driver-top3 and 5.25 on
+driver-dnf, which is our worst placing in the field at 9 of 10. 86.92 on driver-top3 is
+above RelGNN's field-best 85.69. Nothing else gated in this project has come close.
+
+The structure is legible and predicts where it will work: **coverage tracks how often an
+entity recurs.** Drivers race repeatedly (93%), users act repeatedly but sparsely (42–64%),
+and a clinical trial has exactly one outcome (0.0%, `entities == rows`) — so rel-trial can
+never benefit and needs no experiment.
+
+**Why this is not yet a result.** These are AUCs over *training* rows, where the previous
+label is typically one event old. At test time the label history freezes at the end of
+train+val, so every test row is reading a staler history across a gap — the same temporal
+mechanism that made `recency` real-on-test and unselectable. Persistence over that gap is
+the whole question, and a train-row gate cannot answer it. Two further hazards to design
+against before believing any number:
+
+* **Coverage differs between train and test rows,** so a naive column is NaN-heavy exactly
+  where it is least tested. Zero-filling is load-bearing here (see the keepnan entry), and
+  coverage must be reported per split, not pooled.
+* **The as-of construction must be by-construction, not by-assertion.** The prior finding
+  is that leaks arrive as output shaped like a careful result. `assert_no_perfect_feature`
+  will not catch a subtly-late label, since 86.92 is not 99.5.
+
+Worth noting what it may also explain: RelGNN and RelGT — the two methods above us most
+often — are graph models over a schema that includes the task table, so past labels can
+reach a node through message passing without anyone designing a feature. Our two worst
+placings are both rel-f1, and rel-f1 is where this signal is strongest.
+
 ### 2026-08-06 — the backbone hypothesis, weakened by a ladder already in the table
 
 The open question below asks whether our gap to the flatten-then-TFM peers is featurization
