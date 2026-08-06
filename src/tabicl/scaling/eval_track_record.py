@@ -166,6 +166,22 @@ def main() -> None:
                          "base sweep measures max_columns=None at +23.38 on rel-f1's "
                          "validation split against the 2 hardcoded here, while rel-event "
                          "loses 1.36 by the same change. Set it per task.")
+    ap.add_argument("--categories", type=int, default=0,
+                    help="emit a per-category proportion block for each categorical child "
+                         "column: the N most frequent values plus an 'other' bucket. 0 is "
+                         "off, which is what every standing number was measured under -- "
+                         "this runner has never set top_k_categories, so the histogram has "
+                         "been dead code in production since it was written.")
+    ap.add_argument("--category-share", type=float, default=0.5,
+                    help="minimum share of non-null rows the codebook must capture before a "
+                         "column gets a histogram. Below it the column is free text in "
+                         "disguise (rel-trial's eligibilities.criteria has 247k values and "
+                         "its top 4 cover 0.1%%), and the block is K+1 constant columns.")
+    ap.add_argument("--mode", action="store_true",
+                    help="emit the modal value of each categorical child column over its "
+                         "all-history prefix. Entity-relative rather than corpus-relative, "
+                         "so unlike the histogram it stays meaningful at high cardinality. "
+                         "Also never set by this runner before now.")
     ap.add_argument("--timed-links-only", action="store_true",
                     help="use only link tables that carry a timestamp. Required for a "
                          "reportable structural result: an untimed table's degree is "
@@ -213,10 +229,43 @@ def main() -> None:
         blocks = [base[cols].reset_index(drop=True)]
         for n, fk, tc in kids:
             t = Table(db.table_dict[n].df, fk, n, time_column=tc, windows=WINDOWS,
-                      max_columns=max_cols)
+                      max_columns=max_cols,
+                      top_k_categories=args.categories or None,
+                      min_category_share=args.category_share,
+                      include_mode=args.mode)
             blocks.append(asof_statistics(t, frame[key].to_numpy(),
                                           frame[tcol].to_numpy()).add_prefix(f"{n}__"))
-        return pd.concat(blocks, axis=1)
+        out = pd.concat(blocks, axis=1)
+        _audit_requested_blocks(out)
+        return out
+
+    reported = set()
+
+    def _audit_requested_blocks(frame):
+        """Refuse to let a requested feature block be silently empty.
+
+        Depth-2 spent a week "measured at no effect" because `max_columns` was deleting
+        every grandchild column before the model saw one: an empty block does not raise,
+        it reports +0.00 with sd 0.00 and reads exactly like a clean null. The categorical
+        histogram has the same failure mode and its own gate -- `min_category_share` drops
+        columns whose codebook captures too little, and on a schema of free-text columns
+        that is *all* of them. So count what actually came out, once, and say it.
+        """
+        for flag, suffix, label in ((args.categories, "__cat0", "category histogram"),
+                                    (args.mode, "__mode", "prefix mode")):
+            if not flag or label in reported:
+                continue
+            reported.add(label)
+            got = [c for c in frame.columns if c.endswith(suffix)]
+            if not got:
+                raise SystemExit(
+                    f"--{label.split()[0]} was requested but the {label} emitted no columns, "
+                    f"so any gap measured here would be an artefact of an empty block. "
+                    f"Likely the --category-share gate ({args.category_share}) rejected "
+                    f"every categorical column as free text."
+                )
+            print(f"{label}: {len(got)} columns over "
+                  f"{len({c.split('__')[0] for c in got})} child tables", flush=True)
 
     # --- which keys does this schema even offer? ----------------------------------------
     link_specs = []

@@ -51,20 +51,51 @@ WINDOWS = [pd.Timedelta(days=30), pd.Timedelta(days=365)]
 # Each candidate is (max_columns, top_k_categories, include_mode). Deliberately small:
 # the sweep costs one fit per candidate per task, and a wider grid would spend more
 # compute on selection than the settings are worth.
+#
+# It was small in the wrong place, though. `(2, 4, True)` was the only cell with
+# categorical blocks, which entangled three variables and pinned the categorical question
+# to `max_columns=2` -- the budget later measured at 12.58 AUC *below* uncapped on rel-f1.
+# So "the categorical blocks did not win" was never a statement about the categorical
+# blocks. They now also appear at the budget that actually wins, and `mode` appears once
+# without the histogram so the two are separable.
 FEATURE_CANDIDATES = [
     (None, None, False),   # everything, no categorical blocks
     (4, None, False),
     (2, None, False),
     (2, 4, True),          # the categorical blocks, where they might pay
+    (None, 4, True),       # ...and at the budget that wins, which was never tried
+    (None, None, True),    # mode alone, to separate it from the histogram
 ]
 CONTEXT_CANDIDATES: List[Optional[int]] = [5000, 10000, 20000, None]
 
 
-def _numeric(df: pd.DataFrame) -> np.ndarray:
+def _numeric(df: pd.DataFrame, codes: Optional[dict] = None, fit: bool = True) -> np.ndarray:
+    """Encode to float, with one codebook shared between the fit and eval frames.
+
+    Factorizing each frame separately is not a smaller version of the same thing -- it
+    changes what the columns *mean*. ``pd.factorize`` numbers values by order of first
+    appearance, so a category is 3 in the fit frame and 7 in the eval frame, and the model
+    is scored on a feature it was never trained on. This was found and fixed in
+    ``eval_track_record``; the fix was never propagated here, so every configuration this
+    sweep has ever compared was compared on scrambled categoricals.
+
+    Unseen values map to -1, matching the sentinel ``pd.factorize`` already uses for nulls:
+    "a value the fit set never showed me" is the honest encoding, and inventing a fresh
+    code for it would be the same leak in a different direction.
+    """
+    if codes is None:
+        codes = {}
     out = df.copy()
     for col in out.columns:
-        if not pd.api.types.is_numeric_dtype(out[col]):
-            out[col] = pd.factorize(out[col])[0]
+        if pd.api.types.is_numeric_dtype(out[col]):
+            continue
+        series = out[col].astype(object)
+        if fit:
+            factorized, uniques = pd.factorize(series)
+            codes[col] = {value: i for i, value in enumerate(uniques)}
+            out[col] = factorized
+        else:
+            out[col] = series.map(codes.get(col, {})).fillna(-1)
     return np.nan_to_num(out.to_numpy(dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
 
 
@@ -201,8 +232,8 @@ def main() -> None:
         model = TabICLClassifier(
             n_estimators=n_estimators, device=args.device, random_state=0,
             **({"inference_config": cfg} if cfg else {})
-        ).fit(_numeric(f_fit), fit_frame[target].to_numpy())
-        proba = model.predict_proba(_numeric(f_eval))[:, 1]
+        ).fit(_numeric(f_fit, codes := {}, fit=True), fit_frame[target].to_numpy())
+        proba = model.predict_proba(_numeric(f_eval, codes, fit=False))[:, 1]
         return roc_auc_score(eval_frame[target].to_numpy(), proba) * 100
 
     def safe(label, fn):
