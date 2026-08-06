@@ -191,6 +191,12 @@ def main() -> None:
                          "each one a single nunique of 1 or 2 -- and with mode and the "
                          "histogram both off, that has been their entire contribution to "
                          "every number in the table.")
+    ap.add_argument("--context-grid", default="",
+                    help="comma-separated context sizes for the calibrated sweep, "
+                         "overriding the default cap//4, cap//2, cap. The default grid "
+                         "cannot see a recency effect: on rel-event `recent` is +0.31 at "
+                         "context 10,000 and +7.50 at 1,000, because half the training "
+                         "period is not recent and the last few days are.")
     ap.add_argument("--context-orders", default="random",
                     help="comma-separated context selection rules to offer validation: "
                          "random (uniform over train, the only one ever used), recent (the "
@@ -873,7 +879,19 @@ def main() -> None:
             # and a grid scaled to that asks for contexts an L40S will not fit, so the run
             # dies rather than reporting a smaller honest number.
             cap = min(len(arms["base"][0]), args.context)
-            grid = sorted({max(1000, cap // 4), max(2000, cap // 2), cap})
+            if args.context_grid:
+                grid = sorted({min(int(s), cap) for s in args.context_grid.split(",")})
+            else:
+                grid = sorted({max(1000, cap // 4), max(2000, cap // 2), cap})
+                if len(orders) > 1:
+                    # Context size was swept for *random* draws and settled there. Its
+                    # interaction with a recency rule is a different question, and the
+                    # default grid cannot see it: on rel-event, `recent` is +0.31 at
+                    # context 10,000 and +7.50 at 1,000, because 10,000 of 19,239 rows is
+                    # half the training period and 1,000 is the last few days of it. A
+                    # grid that starts at cap//4 would have measured the diluted version
+                    # and concluded recency does nothing.
+                    grid = sorted(set(grid) | {min(1000, cap), min(2000, cap)})
             for name in arms:
                 for size in grid:
                     for order in orders:
