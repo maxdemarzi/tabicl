@@ -73,6 +73,58 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-05 — two feature blocks that had never run in production, now measured and dead
+
+`eval_track_record` builds every child `Table` with `windows` and `max_columns` and nothing
+else. It had never set `top_k_categories` or `include_mode`, so `_category_histogram` and
+`_prefix_mode` — both implemented, both unit-tested, both documented as carrying signal the
+numeric path cannot — contributed **nothing to any number in the standing table**. Wired up
+and gated (paired by seed, one variable, test-side, 5 seeds, `max_columns=2`, 3 children):
+
+| task | variant | gap | sd | positive | columns added |
+|---|---|---:|---:|:---:|---:|
+| rel-trial | categories | +0.27 | 0.42 | 4/5 | 60 |
+| rel-trial | mode | −0.09 | 0.44 | 2/5 | 6 |
+| rel-avito | mode | +0.05 | 0.15 | 3/5 | 1 |
+| rel-event | categories | +0.01 | 1.42 | 2/5 | 30 |
+| rel-event | mode | −0.39 | 1.47 | 2/5 | 3 |
+
+**Every cell is inside the ±0.6 floor.** The categorical blocks do not pay, and the
+question is closed rather than open.
+
+On **rel-f1 and rel-avito every categorical variant refused to run at all** — the runner
+now exits when a requested block emits zero columns rather than scoring identical frames.
+Their child tables are entirely numeric, confirmed on rel-f1 with the budget removed
+(428 features, still nothing eligible). "Not applicable here" and "measured at no effect"
+are different findings and used to be indistinguishable in this log.
+
+**Two bugs this exposed, both of which produced a clean-looking null:**
+
+1. **`eval_depth2` was passing the target in as a feature.** `flatten_relational` forwards
+   every entity column except the key and the cutoff, and the task table carries the
+   target. It scored **AUC 100.00 at both depths** on rel-trial, where the standing number
+   is 72.26 — and the *difference* was +0.00 with sd 0.00 over five seeds, which is exactly
+   what a careful null looks like. The other three callers drop the target; this one never
+   did. `_guards.assert_no_perfect_feature` now refuses any frame where a single column
+   separates the target (≥99.5), wired into all three runners. It tests the symptom, so it
+   catches a renamed target, a duplicate, or an aggregate that reconstructs one.
+
+2. **`numeric_booleans` was a no-op on the entire benchmark.** It keyed off
+   `is_bool_dtype`, and RelBench spells every boolean `'t'`/`'f'` in an **object** column —
+   `eligibilities.adult`, `designs.subject_masked`, `studies.is_fda_regulated_drug` and
+   eight more on rel-trial alone. Flags are now recognised by their values. Those eleven
+   columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
+   computed. Unmeasured as of this entry.
+
+**Depth-2 is available on one task of four**, which the schema probe should have
+established before any of the work: rel-f1 has *zero* children with timestamped
+grandchildren; rel-event and rel-avito have one each but their entity keys repeat, so the
+ambiguous-cutoff guard blocks them; only rel-trial (`outcomes → outcome_analyses`) is
+measurable. The earlier "+0.00, sd 0.00, 24 features" was `max_columns` deleting the whole
+grandchild block — nested statistics were ranked against raw columns on non-null coverage,
+and a grandchild block is sparse, so depth-2 emitted output byte-identical to depth-1. With
+that fixed the block is present (88 → 305 features).
+
 ### 2026-08-05 — selection machinery closed out: CV cannot judge resampling, at any fold scheme
 Forward-chaining folds were built because random k-folds train on the future to predict the
 past. They fail identically:
