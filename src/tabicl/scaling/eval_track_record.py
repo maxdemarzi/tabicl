@@ -75,10 +75,15 @@ REFERENCE = {
 # experiment. `--timed-links-only` matters on rel-event alone -- it has two untimed
 # `user_friends` link tables while the other three schemas have none, so the flag is a
 # no-op everywhere else and omitting it there makes the structural arms an upper bound.
+#
+# `--max-columns 2` is named explicitly for three tasks even though 2 *was* the default when
+# they were measured. It is not the default any more -- the sweep moved it to 4 on
+# worst-case regret -- so an empty list here would quietly mean "4" and a run that believed
+# it matched would not reproduce the number it was compared against.
 STANDING_FLAGS = {
-    "rel-trial": [],
-    "rel-event": ["--timed-links-only"],
-    "rel-avito": [],
+    "rel-trial": ["--max-columns 2"],
+    "rel-event": ["--timed-links-only", "--max-columns 2"],
+    "rel-avito": ["--max-columns 2"],
     "rel-f1": ["--max-columns none"],
 }
 
@@ -1171,10 +1176,24 @@ def main() -> None:
         # measured at a different configuration from the number it is beating is half a
         # measurement, and three runs in one afternoon were exactly that.
         expected = STANDING_FLAGS.get(args.dataset, [])
-        missing = [f for f in expected
-                   if not (f.split()[0] == "--timed-links-only" and args.timed_links_only)
-                   and not (f.startswith("--max-columns")
-                            and str(args.max_columns).lower() in ("none", "null", ""))]
+
+        def satisfied(flag: str) -> bool:
+            """Is this run actually configured the way the standing number was?
+
+            Compares the *value* for --max-columns rather than merely noticing the flag is
+            present: the earlier version treated any `none` as satisfying the requirement
+            and could not tell 2 from 4 at all, which is precisely the distinction that
+            matters now that the default moved.
+            """
+            name, _, want = flag.partition(" ")
+            if name == "--timed-links-only":
+                return args.timed_links_only
+            if name == "--max-columns":
+                norm = lambda v: "none" if str(v).lower() in ("none", "null", "") else str(v)
+                return norm(args.max_columns) == norm(want)
+            return True
+
+        missing = [f for f in expected if not satisfied(f)]
         if missing:
             print(f"WARNING: the standing {args.dataset} number was measured with "
                   f"{' '.join(expected)} and this run was not. The comparison above is "
