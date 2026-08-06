@@ -26,6 +26,14 @@ paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model resu
 | rel-event / user-ignore | 80.98 | 86.77 | 77.95 | 85.38 | **86.18** | 73.70 | −5.20 |
 | rel-avito / user-visits | 65.54 | 66.21 | 65.81 | 66.68 | 66.18 | **66.76** | −1.22 |
 | rel-trial / study-outcome | 72.26 | 73.56 | 69.12 | **76.43** | 71.24 | 72.89 | −4.17 |
+| rel-event / user-repeat ◆ | 77.89 | — | — | 77.11 | **79.61** | 76.81 | −1.72 |
+
+◆ **A fifth task, added 2026-08-06**, and the first run on a task this pipeline was never
+tuned for. Calibrated, 8 replicates, current defaults. **Second of six**, ahead of
+TabPFN-REL and behind only RelGNN. Read the margin honestly: 246 test rows give SE 0.52, so
++0.78 over TabPFN-REL is **1.5 SE — a tie-to-slight-lead, not a win**; the −1.72 to RelGNN
+is 3.3 SE and genuinely behind. Its base arm before calibration is 77.13, already level with
+TabPFN-REL, and calibration adds +0.76.
 
 † **DFS is measured here, not published.** Deep Feature Synthesis (Featuretools) run over the
 same tables with per-row cutoff times and scored by **the same TabICL, same context, same
@@ -628,6 +636,44 @@ selection luck is worth ~12 points.
 nothing in the table.* It is recorded because "we are 5.20 behind on rel-event" and "this
 task's numbers move 11.68 on selection alone" are very different readings of the same gap,
 and the second is better supported.
+
+### 2026-08-06 — rel-event/user-repeat: a new task, run to try to falsify our own claim
+
+The previous entry argued that rel-event/user-ignore's 11.68-point published spread between
+two same-backbone methods looks like selection luck rather than a featurization gap, partly
+because those methods sit only 0.30 apart on **user-repeat**. That argument has an obvious
+failure mode: if our own features are simply weak on this schema, the −5.20 on user-ignore
+is a feature deficit and the interpretation is wrong.
+
+user-repeat is the control, and it had never been run here. **The falsification condition
+was set before the run:** land competitively (~76–79) and the claim holds; land well below
+the field and withdraw it.
+
+Calibrated, 8 replicates, `--timed-links-only`, current defaults, no tuning for this task:
+
+| method | user-repeat | vs ours |
+|---|---:|---:|
+| RelGNN | **79.61** | −1.72 |
+| **ours** | **77.89 ± 1.47** | — |
+| TabPFN-REL | 77.11 | +0.78 |
+| GraphSAGE | 76.89 | +1.00 |
+| RDBLearn + v3 | 76.81 | +1.08 |
+| RelGT | 76.09 | +1.80 |
+
+**Second of six.** The claim survives: the same features, same pipeline and same schema
+place second on one label and −5.20 on the other, so rel-event featurization is not the
+problem — the problem is specific to `user-ignore`, which is exactly the task where
+validation was measured anti-predicting test three separate times.
+
+**Margins, stated properly.** 246 test rows give SE 0.52. +0.78 over TabPFN-REL is 1.5 SE —
+a tie-to-slight-lead, and *not* a second win to put beside rel-f1. The −1.72 to RelGNN is
+3.3 SE and real. The base arm before any calibration is 77.13, already level with
+TabPFN-REL, with calibration worth +0.76.
+
+*Fixed on the way:* `REFERENCE` was keyed by dataset alone, so this run printed
+user-ignore's comparison figures (85.38, 86.18) beside a 77.89. A wrong reference is worse
+than none — it invites reading a score against a different label's leaderboard. Now keyed
+by `(dataset, task)`.
 
 ## Session close, 2026-08-06 — the table is unchanged, and that is the finding
 

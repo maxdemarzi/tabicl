@@ -61,11 +61,15 @@ DEFAULT_WINDOWS = {
 }
 
 # Printed beside a result so it is never read against the wrong task's numbers.
+# Keyed by dataset AND task. It was keyed by dataset alone, so running rel-event/user-repeat
+# printed user-ignore's comparison figures beside it -- a wrong reference is worse than none,
+# because it invites reading a 77.89 against an 85.38 that belongs to a different label.
 REFERENCE = {
-    "rel-trial": "ours 72.26, TabPFN-REL 76.43, RelGNN 71.24, RDBLearn 72.89",
-    "rel-event": "ours 80.98, TabPFN-REL 85.38, RelGNN 86.18, RDBLearn 73.70",
-    "rel-avito": "ours 65.54, TabPFN-REL 66.68, RelGNN 66.18, RDBLearn 66.76",
-    "rel-f1": "ours 81.98, TabPFN-REL 79.98, RelGNN 85.69, RDBLearn 82.72",
+    ("rel-trial", "study-outcome"): "ours 72.26, TabPFN-REL 76.43, RelGNN 71.24, RDBLearn 72.89",
+    ("rel-event", "user-ignore"): "ours 80.98, TabPFN-REL 85.38, RelGNN 86.18, RDBLearn 73.70",
+    ("rel-event", "user-repeat"): "ours 77.89, TabPFN-REL 77.11, RelGNN 79.61, RDBLearn 76.81",
+    ("rel-avito", "user-visits"): "ours 65.54, TabPFN-REL 66.68, RelGNN 66.18, RDBLearn 66.76",
+    ("rel-f1", "driver-top3"): "ours 81.98, TabPFN-REL 79.98, RelGNN 85.69, RDBLearn 82.72",
 }
 
 # The flags each standing number was measured with. This is not documentation, it is the
@@ -1171,7 +1175,7 @@ def main() -> None:
             picked = [r[4] for r in results]
             print(f"context order chosen: {picked} "
                   f"({picked.count('random')}/{len(picked)} random)", flush=True)
-        print(f"reference: {REFERENCE.get(args.dataset, 'see PERFORMANCE.md')}", flush=True)
+        print(f"reference: {REFERENCE.get((args.dataset, args.task), 'see PERFORMANCE.md')}", flush=True)
         # Say out loud whether this run is even comparable to that reference. A promotion
         # measured at a different configuration from the number it is beating is half a
         # measurement, and three runs in one afternoon were exactly that.
@@ -1228,7 +1232,7 @@ def main() -> None:
               f"{g.std(ddof=1) if len(g) > 1 else 0:.2f} over {len(g)} seeds, "
               f"{(g > 0).sum()}/{len(g)} positive", flush=True)
     means = ", ".join(f"{k} {np.mean(v):.2f}" for k, v in results.items())
-    print(f"means: {means}  ({REFERENCE.get(args.dataset, 'see PERFORMANCE.md')})",
+    print(f"means: {means}  ({REFERENCE.get((args.dataset, args.task), 'see PERFORMANCE.md')})",
           flush=True)
     print("NOTE: the +-0.6 floor applies.", flush=True)
 
