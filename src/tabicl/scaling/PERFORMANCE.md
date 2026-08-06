@@ -24,7 +24,7 @@ paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model resu
 |---|---:|---:|---:|---:|---:|---:|---:|
 | rel-f1 / driver-top3 | 81.98 | 76.81 | 79.98 | **85.69** | 82.72 | +2.00 | −3.71 |
 | rel-event / user-ignore | 80.98 | 77.95 | 85.38 | **86.18** | 73.70 | −4.40 | −5.20 |
-| rel-avito / user-visits | 65.54 | *not run* | 66.68 | 66.18 | **66.76** | −1.14 | −1.22 |
+| rel-avito / user-visits | 65.54 | 65.81 | 66.68 | 66.18 | **66.76** | −1.14 | −1.22 |
 | rel-trial / study-outcome | 72.26 | 69.12 | **76.43** | 71.24 | 72.89 | −4.17 | −4.17 |
 
 † **DFS is measured here, not published.** Deep Feature Synthesis (Featuretools) run over the
@@ -73,6 +73,35 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-05 — context resampling: works on test, unadoptable, and CV made it worse
+Averaging predictions over independent context draws. Test improves on **3/3** tasks and the
+spread collapses on **3/3** — rel-event 80.16 → 81.42 with sd 1.98 → 0.43, rel-trial 72.32 →
+72.71, rel-f1 +0.28. That is the mechanism's own prediction, not a pattern found afterwards.
+
+**It is not adopted, because no valid selection rule picks it.** Validation prefers
+`resample=1` on 2 of 3 tasks (the differences are 0.16–0.40, noise). So `--cv-folds` was
+built to give a better-powered criterion — and it failed in the most informative way:
+
+| criterion | resample=1 | resample=3 |
+|---|---:|---:|
+| CV score | 90.37 | **95.67** |
+| test | **81.01** | 80.25 |
+| arm chosen | `+struct` | `base` |
+
+**CV got 5.3 points more confident while test fell 0.76 and the selected arm flipped.**
+The cause is structural and I should have seen it before building: random k-folds over
+train break the temporal ordering the whole benchmark is built on — a random fold trains on
+the future to predict the past, so a variance-reduction trick that helps *within* a period
+is rewarded far beyond what it earns on a later one. A criterion that grows more confident
+as test degrades is worse than a noisy one.
+
+**Where that leaves it.** Resampling is real on test, costs no feature columns, and cannot
+be claimed. The honest statement is not "resampling fails" but **"no selection instrument
+available here resolves a 0.3–1.3 effect"** — validation is too small (588–2,013 rows, and
+it has now failed to see a real effect four separate times), and k-fold CV is biased on a
+temporal split. The correct version is a *time-ordered* split of train, which is the obvious
+next thing and was not what I built.
+
 ### 2026-08-05 — DFS measured at last: we beat it on rel-f1, tie on rel-trial
 `RESEARCH` 6e, after seven failed attempts. Same TabICL, same context, same seeds — only the
 feature builder differs, and DFS was given the *tuned* primitive set (`num_unique`, `mode`,
@@ -84,7 +113,18 @@ cutoff times so it respects the same temporal boundary we do.
 | rel-f1 / driver-top3 | 76.81 | 81.84 | **+5.03** (sd 1.49, 5/5) | DFS 28 s / 193 cols · ours **1 s** / 428 |
 | rel-event / user-ignore | 77.95 | 80.34 | **+2.39** (sd 3.16, 4/5) | DFS 119 s / 811 cols · ours **25 s** / 2000 |
 | rel-trial / study-outcome | 69.12 | 69.56 | +0.45 (sd 0.50, 5/5) | DFS 20 s / 116 cols · ours **2 s** / 134 |
-| rel-avito / user-visits | — | — | *woodwork rejects the nullable `Int64` on `AdID`* | — |
+| rel-avito / user-visits | 65.81 | 65.51 | **−0.30** (sd 0.52, 2/5) | DFS **414 s** / 94 cols · ours **18 s** / 176 |
+
+**Complete: we lead 2 of 4, tie 2.** rel-f1 +5.03 and rel-event +2.39 are real; rel-trial
++0.45 and rel-avito −0.30 are both inside the floor. **rel-avito is the one task where DFS
+is nominally ahead**, and it is the task where our own pipeline is closest to the published
+state of the art — so the aggregation is not what limits us there.
+
+The build-time gap is the durable result: **1 s / 25 s / 2 s / 18 s against 28 s / 119 s /
+20 s / 414 s.** On rel-avito that is 23×, and DFS spent seven minutes producing 94 columns
+against our 176 in eighteen seconds. That is the O(n log n) prefix scan against per-cutoff
+recomputation, and it is why "generic flattening pipeline" understates the layer even where
+the accuracy ties.
 
 **The claim these documents have leaned on all along now has evidence.** "A generic
 flattening pipeline in front of a stock TabICL" was *too modest* on rel-f1, where our
