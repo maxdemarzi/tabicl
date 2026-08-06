@@ -2642,3 +2642,31 @@ def test_stratified_selection_still_prefers_graph_proximity_within_a_class():
     chosen = select_graph_context(edges, train_idx, queries, n_context=2, hops=1,
                                   labels=labels, random_state=0)
     assert set(chosen.tolist()) == {0, 4}, "one per class, and the reachable one each time"
+
+
+def test_every_scaling_module_parses_on_the_python_the_pods_run():
+    """Syntax that is valid here and not on the pod costs a whole provisioning cycle.
+
+    An f-string containing a literal newline parses on 3.12 (PEP 701) and is a syntax
+    error on 3.10. One did, in `eval_graph_context`, and it was discovered only after a
+    pod had been created, a payload uploaded, dependencies installed and a 385 MB dataset
+    downloaded. Local Python is newer than the pod images, so nothing here would have
+    caught it.
+
+    `feature_version` makes the parser reject anything younger than the target, which is
+    the whole check: this cannot run the code, only refuse to let it board.
+    """
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "src" / "tabicl" / "scaling"
+    modules = sorted(root.glob("*.py"))
+    assert modules, "no scaling modules found -- the path is wrong, not the code"
+
+    failures = []
+    for path in modules:
+        try:
+            ast.parse(path.read_text(encoding="utf-8"), str(path), feature_version=(3, 10))
+        except SyntaxError as exc:
+            failures.append(f"{path.name}:{exc.lineno}: {exc.msg}")
+    assert not failures, "syntax too new for the pod images:\n" + "\n".join(failures)
