@@ -190,6 +190,12 @@ def main() -> None:
                          "each one a single nunique of 1 or 2 -- and with mode and the "
                          "histogram both off, that has been their entire contribution to "
                          "every number in the table.")
+    ap.add_argument("--time-deltas", action="store_true",
+                    help="emit days-since-last-child-row, days-since-first, and span, for "
+                         "all-history and each window. The timestamp is the one column "
+                         "never aggregated, so nothing in the feature set currently says "
+                         "WHEN -- and a count over a 7-day window cannot tell a user who "
+                         "searched once yesterday from one who searched once six days ago.")
     ap.add_argument("--mode", action="store_true",
                     help="emit the modal value of each categorical child column over its "
                          "all-history prefix. Entity-relative rather than corpus-relative, "
@@ -301,6 +307,7 @@ def main() -> None:
                       top_k_categories=args.categories or None,
                       min_category_share=args.category_share,
                       numeric_booleans=args.numeric_booleans,
+                      time_deltas=args.time_deltas,
                       include_mode=args.mode)
             blocks.append(asof_statistics(t, frame[key].to_numpy(),
                                           frame[tcol].to_numpy()).add_prefix(f"{n}__"))

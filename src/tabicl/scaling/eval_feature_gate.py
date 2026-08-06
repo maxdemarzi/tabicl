@@ -63,6 +63,10 @@ VARIANTS = {
     # distinct-count regardless. This is the only variant here that can *remove* columns,
     # and the project's own column-budget measurements say narrow feature sets win.
     "narrow": dict(budget_categoricals=True),
+    # The timestamp is the one column never aggregated, so nothing emitted so far says
+    # *when*. On a task asking whether a user acts in the next four days, "days since last
+    # activity" is the feature a practitioner reaches for first.
+    "timing": dict(time_deltas=True),
     "all": dict(top_k_categories=4, include_mode=True, numeric_booleans=True),
 }
 

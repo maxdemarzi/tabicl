@@ -2120,6 +2120,52 @@ def test_two_hop_cutoff_excludes_grandchildren_dated_after_the_entity_cutoff():
     assert out[mean].iloc[0] == pytest.approx(2.0), "the post-cutoff price leaked into mean"
 
 
+def test_recency_age_and_span_are_available_and_off_by_default():
+    """Nothing the scan emits says *when*, because the timestamp is the excluded column.
+
+    Every other statistic answers how much or what kind. On rel-avito, which asks whether
+    a user visits in the next four days, a count over a 7-day window cannot separate a
+    user who searched once yesterday from one who searched once six days ago.
+
+    Over a window, `age` pins to the window edge for anyone active throughout, which makes
+    it a "was already here" indicator rather than a second copy of recency -- checked here,
+    since that is the part that is easy to get wrong.
+    """
+    from tabicl.scaling import Table, asof_statistics
+
+    kid = pd.DataFrame({
+        "id": [1, 1, 1, 1, 2],
+        "kt": pd.to_datetime(["2020-01-01", "2020-03-01", "2020-05-25", "2020-05-30",
+                              "2020-01-01"]),
+        "v": [1.0, 2.0, 3.0, 4.0, 5.0],
+    })
+    keys = np.array([1, 2, 3])                       # entity 3 has no history at all
+    cutoffs = pd.to_datetime(["2020-06-01"] * 3).to_numpy()
+
+    default = asof_statistics(Table(kid, "id", "k", time_column="kt"), keys, cutoffs)
+    assert not [c for c in default.columns if c.endswith("__recency")]
+
+    out = asof_statistics(
+        Table(kid, "id", "k", time_column="kt", time_deltas=True,
+              windows=[pd.Timedelta(days=30)]), keys, cutoffs)
+
+    assert out["k__recency"].iloc[0] == pytest.approx(2.0)     # last row 2020-05-30
+    assert out["k__age"].iloc[0] == pytest.approx(152.0)       # first row 2020-01-01
+    assert out["k__span"].iloc[0] == pytest.approx(150.0)
+    # Within 30 days only 05-25 and 05-30 survive, so age is 7 and not 152.
+    assert out["k_30d__age"].iloc[0] == pytest.approx(7.0)
+    assert out["k_30d__span"].iloc[0] == pytest.approx(5.0)
+
+    # A single event has a recency but no span.
+    assert out["k__recency"].iloc[1] == pytest.approx(152.0)
+    assert out["k__span"].iloc[1] == pytest.approx(0.0)
+
+    # No history means no recency. Zero would assert the opposite of what is true.
+    assert np.isnan(out["k__recency"].iloc[2])
+    assert out["k__count"].iloc[2] == pytest.approx(0.0)
+    assert np.isnan(out["k_30d__recency"].iloc[1])             # active, but not lately
+
+
 def test_leak_guard_fires_on_a_passed_through_target_but_not_on_a_strong_feature():
     """A leak that scores 100.00 in *both* arms of a paired comparison reads as +0.00.
 

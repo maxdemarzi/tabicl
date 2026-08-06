@@ -93,6 +93,17 @@ class Table:
         column yields K+1 constant columns and hurts -- so they are skipped rather than
         emitted. Set to 0.0 to build a histogram for every categorical column.
 
+    time_deltas : bool, default=False
+        Emit ``recency`` (days from the last child row to the cutoff), ``age`` (days from
+        the first) and ``span``, for the all-history block and for each window.
+
+        The timestamp column is the one column never aggregated, since it is in the
+        excluded set, so recency has never been a feature here. Everything emitted says
+        how much or what kind; nothing says when. A count over a 7-day window cannot
+        separate a user who searched once yesterday from one who searched once six days
+        ago, and on a task asking whether a user acts in the next four days that is the
+        distinction that matters.
+
     budget_categoricals : bool, default=False
         Apply ``max_columns`` to the ``nunique`` block as well.
 
@@ -151,6 +162,7 @@ class Table:
     top_k_categories: Optional[int] = None
     min_category_share: float = 0.5
     numeric_booleans: bool = False
+    time_deltas: bool = False
     budget_categoricals: bool = False
     include_mode: bool = False
     primary_key: Optional[str] = None
@@ -842,6 +854,7 @@ def asof_statistics(
 
     hi = upto(cutoffs)
     block(child.name, hi, starts[entity_key])
+    _timing(out, child.name, child, sorted_time, cutoffs, hi, starts[entity_key])
     _extremes(out, child.name, columns, df, order, hi, starts[entity_key])
     _prefix_nunique(out, child.name, child, df, order, sorted_key, hi, starts[entity_key])
     if child.include_mode:
@@ -851,12 +864,61 @@ def asof_statistics(
         lo = upto(cutoffs - window)
         label = f"{child.name}_{_window_label(window)}"
         block(label, hi, lo)
+        _timing(out, label, child, sorted_time, cutoffs, hi, lo)
         _extremes(out, label, columns, df, order, hi, lo)
         # Windows are the case mode cannot serve at all, so the histogram earns most of
         # its keep here rather than on the all-history block.
         _category_histogram(out, label, child, df, order, hi, lo, codebooks)
 
     return pd.DataFrame(out)
+
+
+def _timing(out, label, child, sorted_time, cutoffs, hi_idx, lo_idx) -> None:
+    """How long since this entity's last child row, and how long its history runs.
+
+    The timestamp column is in ``excluded``, so it is the one column never aggregated --
+    which means recency has never been a feature here at all. Not as a statistic, not in a
+    window. Every emitted quantity says *how much* or *what kind*, and none says *when*.
+
+    That is a strange gap on this benchmark. rel-avito asks whether a user visits in the
+    next four days and rel-event whether one ignores an invitation; for both, "days since
+    last activity" is the sort of feature a practitioner reaches for first, and a count
+    over a 7-day window is a blunt substitute -- it cannot separate a user who searched
+    once yesterday from one who searched once six days ago.
+
+    Three quantities, all O(1) per row from indices the scan already has:
+
+    ``recency``  cutoff minus the most recent row in range. The forward-looking one.
+    ``age``      cutoff minus the earliest row in range. Tenure, and over a window it is
+                 pinned to the window edge for anyone active throughout, which makes it a
+                 "was already here" indicator rather than a duplicate of recency.
+    ``span``     last minus first. History length, which distinguishes a burst from a
+                 habit at equal count.
+
+    Days, as floats, because a timedelta64 column is not something the model can embed.
+    NaN where the range is empty -- there is no recency without an event, and 0 would
+    assert the opposite of what is true.
+    """
+    if not child.time_deltas:
+        return
+    hi_arr = np.asarray(hi_idx, dtype=np.int64)
+    lo_arr = np.asarray(lo_idx, dtype=np.int64)
+    nonempty = hi_arr > lo_arr
+
+    day = np.timedelta64(1, "D")
+    times = np.asarray(sorted_time)
+    cut = np.asarray(cutoffs)
+    # Clipped so the gather stays in bounds for empty ranges; those entries are discarded
+    # by `nonempty` immediately afterwards.
+    last = times[np.clip(hi_arr - 1, 0, max(len(times) - 1, 0))]
+    first = times[np.clip(lo_arr, 0, max(len(times) - 1, 0))]
+
+    def days(delta):
+        return np.where(nonempty, delta / day, np.nan).astype(np.float64)
+
+    out[f"{label}__recency"] = days(cut - last)
+    out[f"{label}__age"] = days(cut - first)
+    out[f"{label}__span"] = days(last - first)
 
 
 def _prefix_nunique(out, label, child, df, order, sorted_key, hi_idx, lo_idx) -> None:
