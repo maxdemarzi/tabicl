@@ -2238,12 +2238,29 @@ most wrong about. Pool is the training split, horizon applied, scored on test:
 | rel-event / user-ignore | 81.72 | 68.1% | **85.35** | 83.24 | 80.98 |
 | rel-event / user-repeat | 67.17 | 68.7% | **78.61** | 79.28 | 77.89 |
 
-**Mechanism, and it is the same one as `recency`.** Drivers race in seasons: the test
-window is a later season, the frozen pool loses two thirds of its coverage (93% → 35%), and
-what remains is a stale observation of a driver whose form has moved. driver-top3 falls
-from 84.66 to 56.89 — barely above chance. rel-event goes the other way because a user's
-propensity to ignore an invitation persists and the test window sits close, so coverage
-holds near 68% and the signal survives intact.
+**Mechanism, measured rather than guessed — and it is worse on rel-f1 than "a later
+season".** Taking `days_since` (cutoff minus the time the most recent prior outcome became
+readable) over the covered test rows:
+
+| task | covered test rows | median `days_since` | range |
+|---|---:|---:|---|
+| rel-event / user-ignore | 1,333 | **8 days** | 8 – 113 |
+| rel-f1 / driver-dnf | 247 | **2,486 days** | 1,946 – 3,686 |
+
+**rel-f1's covered test rows are reading labels five to ten YEARS old.** The pool freezes at
+the end of train and rel-f1's test period is long, so even a driver who does appear in train
+is being scored against a decade-stale record — and two thirds of test drivers do not appear
+in train at all. rel-event's median staleness is 8 days, one horizon, which is as fresh as
+this construction permits. That is the whole difference, and it is a property of how far the
+test window runs from the frozen pool, not of the schemas.
+
+**The decay runs the other way on rel-event, and the reason is not leakage.** AUC over the
+covered rows is 83.63 in the fresher quartile and **99.47** in the stalest (22–113 days,
+n=192). A near-perfect subgroup is normally a red flag, so: a user whose last recorded
+outcome is months old is a user who went inactive, an inactive user ignores invitations, and
+they were ignoring them before too. `days_since` alone scores **35.57** — informative
+inverted, i.e. 64.43 the right way round — which is why it is emitted as its own column
+rather than folded into the rate.
 
 **This is why a train-row gate cannot promote a temporal feature.** Nothing about the gate
 was wrong as a measurement; it answered a question about training rows, and the question
