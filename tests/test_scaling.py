@@ -2165,6 +2165,11 @@ def test_recency_age_and_span_are_available_and_off_by_default():
     assert out["k__count"].iloc[2] == pytest.approx(0.0)
     assert np.isnan(out["k_30d__recency"].iloc[1])             # active, but not lately
 
+    # An empty child table: every range is empty, and the gather must not index it.
+    empty = asof_statistics(
+        Table(kid.iloc[:0], "id", "k", time_column="kt", time_deltas=True), keys, cutoffs)
+    assert empty["k__recency"].isna().all()
+
 
 def test_leak_guard_fires_on_a_passed_through_target_but_not_on_a_strong_feature():
     """A leak that scores 100.00 in *both* arms of a paired comparison reads as +0.00.

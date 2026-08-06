@@ -903,15 +903,21 @@ def _timing(out, label, child, sorted_time, cutoffs, hi_idx, lo_idx) -> None:
         return
     hi_arr = np.asarray(hi_idx, dtype=np.int64)
     lo_arr = np.asarray(lo_idx, dtype=np.int64)
+    times = np.asarray(sorted_time)
+    if not len(times):
+        # An empty child table: every range is empty, so every quantity is unknown. The
+        # gather below would index position 0 of a zero-length array.
+        for suffix in ("recency", "age", "span"):
+            out[f"{label}__{suffix}"] = np.full(len(hi_arr), np.nan)
+        return
     nonempty = hi_arr > lo_arr
 
     day = np.timedelta64(1, "D")
-    times = np.asarray(sorted_time)
     cut = np.asarray(cutoffs)
     # Clipped so the gather stays in bounds for empty ranges; those entries are discarded
     # by `nonempty` immediately afterwards.
-    last = times[np.clip(hi_arr - 1, 0, max(len(times) - 1, 0))]
-    first = times[np.clip(lo_arr, 0, max(len(times) - 1, 0))]
+    last = times[np.clip(hi_arr - 1, 0, len(times) - 1)]
+    first = times[np.clip(lo_arr, 0, len(times) - 1)]
 
     def days(delta):
         return np.where(nonempty, delta / day, np.nan).astype(np.float64)
