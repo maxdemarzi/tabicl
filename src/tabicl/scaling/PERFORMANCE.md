@@ -149,15 +149,21 @@ rhythm is stationary and validation has the same one test does. Promotion runnin
 
 **Also measured, and all null:**
 
-| variant | rel-event | rel-avito | rel-trial |
-|---|---:|---:|---:|
-| `timing` (recency/age/span per child, 27 cols) | +0.91 (SE 0.73) | −0.57 (SE 0.28) | −0.60 (SE 0.42) |
-| `narrow` (budget the nunique block) | +0.32 | n/a | +0.24 |
-| `booleans` (rates instead of a nunique) | n/a | n/a | −0.24 |
+| variant | rel-f1 | rel-event | rel-avito | rel-trial |
+|---|---:|---:|---:|---:|
+| `timing` (recency/age/span, 27 cols) | **+0.62** (SE 0.17, 5/5) | +0.91 (SE 0.73) | −0.57 (SE 0.28) | −0.60 (SE 0.42) |
+| `narrow` (budget the nunique block) | n/a | +0.32 | n/a | +0.24 |
+| `booleans` (rates instead of a nunique) | n/a | n/a | n/a | −0.24 |
 
-`timing` is the one I expected most from and it is worth nothing: 27 columns, negative on
-two tasks. `booleans` fired for the first time here — 26 columns changed on rel-trial, so
-the `'t'`/`'f'` detection works — and does nothing.
+**`timing` clears on rel-f1** — the tightest gate result of the day, 5/5 with SE 0.17 — and
+is negative on rel-avito and rel-trial. The discriminator is what the child tables *are*:
+race results and user activity are event streams, so "days since the last one" carries
+signal, while rel-trial's `conditions`/`designs` are attributes recorded once at study
+registration and rel-avito's 8-day span leaves nothing to be recent relative to. Promotion
+running.
+
+`booleans` fired for the first time here — 26 columns changed on rel-trial, so the
+`'t'`/`'f'` detection works — and does nothing.
 
 ### 2026-08-05 — context temporal locality: large on rel-event, absent everywhere else
 
