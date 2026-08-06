@@ -55,6 +55,17 @@ attribution, which is still worth publishing internally.
 
 ## 2. RAG-TabICL — retrieval-conditioned context
 
+> **2026-08-05: the crudest possible version of this is the largest unclaimed effect in the
+> project.** Selecting context by *recency* rather than at random is +7.50 on rel-event at
+> a 1,000-row context (SE 0.96, 5/5 seeds), reaching 86.77 against our standing 80.98 —
+> and it is null or negative on the other three tasks, because rel-event is the only one
+> whose training period sits close enough to test for temporal proximity to mean anything
+> (147-day span, 15-day gap; rel-trial's gap is 731 days). Recency is a one-dimensional
+> retrieval key. If a *content* key does better on the tasks where time does nothing, that
+> is this item, and it now has a measured baseline to beat rather than an argument.
+> See `PERFORMANCE.md`, 2026-08-05.
+
+
 **Bottleneck:** context length limits and memory scaling.
 **Split this claim in two, because the halves have very different evidence.**
 
@@ -188,7 +199,7 @@ apples-to-apples. It is not "raw columns beat your relational pipeline" — it i
 embeddings beat a pipeline that ignores text". That is a more useful statement and a more
 actionable one.
 
-### 6e. Benchmark against Deep Feature Synthesis — the missing baseline
+### 6e. Benchmark against Deep Feature Synthesis — DONE: two wins, two ties, 5-23x faster
 
 `STATUS.md` now positions the relational layer against DFS (Kanter & Veeramachaneni 2015 /
 Featuretools) analytically: sufficient statistics that compose exactly rather than stacked
