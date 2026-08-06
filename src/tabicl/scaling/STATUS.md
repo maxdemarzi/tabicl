@@ -211,8 +211,14 @@ See `PERFORMANCE.md`, 2026-08-05 entry (RESEARCH 6e), for the protocol and per-s
 
 ### RelBench, official protocol
 
-Fit on `train`+`val`, score the held-out `test` split. Test ROC-AUC x100. Comparison
+Fit on `train` only, score the held-out `test` split. Test ROC-AUC x100. Comparison
 columns are published figures from the TabPFN-3 paper's Table 14.
+
+*(This line said "train+val" and that was wrong — the runners draw the context from `train`
+alone. It matters: fitting on train+val was measured on 2026-08-06 at **+2.48** on rel-f1
+and **−7.29** on rel-event, so it names a different configuration, not a wording detail.
+`--fit-on-train-val` exists but is not what any number here used, and is unselectable —
+validation is identical in both arms.)*
 
 All numbers below are **calibrated**: every setting chosen on a validation split, test
 touched once, AMP off, selection and scoring at the same `n_estimators`. The earlier
@@ -221,10 +227,14 @@ and was not comparable with the published figures; it has been retired.
 
 | task | ours | TabPFN-REL | RelGNN | RDBLearn+v3 | vs best |
 |---|---:|---:|---:|---:|---:|
-| rel-f1 / driver-top3 | 80.70 | 79.98 | **85.69** | 82.72 | −4.99 |
-| rel-event / user-ignore | 78.11 | 85.38 | **86.18** | 73.70 | −8.07 |
-| rel-avito / user-visits | 64.85 | 66.68 | 66.18 | **66.76** | −1.91 |
-| rel-trial / study-outcome | 69.36 | **76.43** | 71.24 | 72.89 | −7.07 |
+| rel-f1 / driver-top3 | 81.98 | 79.98 | **85.69** | 82.72 | −3.71 |
+| rel-event / user-ignore | 80.98 | 85.38 | **86.18** | 73.70 | −5.20 |
+| rel-avito / user-visits | 65.54 | 66.68 | 66.18 | **66.76** | −1.22 |
+| rel-trial / study-outcome | 72.26 | **76.43** | 71.24 | 72.89 | −4.17 |
+
+`PERFORMANCE.md` carries the same table with two more columns — a measured DFS baseline,
+and a clearly-labelled best-configuration upper bound — plus what to expect *before*
+calibrating.
 
 **We win no task.** Ahead of TabPFN-REL on rel-f1 and behind RelGNN there by 5; within 2
 on rel-avito; well behind on rel-event and rel-trial. rel-trial moved 66.50 → 69.36 on
