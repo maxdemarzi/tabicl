@@ -140,6 +140,40 @@ argument rather than on a measurement. `--children-order name` is the other defe
 specification, and it is arbitrary but neutral. The one option that should not stand is the
 current default.
 
+### 2026-08-05 — rel-trial categories: the one thing today that validation and test agree on
+
+Calibrated at **ten** child tables, paired per seed (seed *i* draws the same rows and the
+same model randomness in both arms):
+
+| seed | none val | `--categories 4` val | Δval | none test | categories test | Δtest |
+|---|---:|---:|---:|---:|---:|---:|
+| 0 ¹ | 67.81 | 68.42 | +0.61 | 73.42 | 74.09 | +0.67 |
+| 1 | 67.69 | 68.29 | +0.60 | 73.39 | 73.81 | +0.42 |
+| 2 | 68.35 | 68.43 | +0.08 | 71.08 | 71.21 | +0.13 |
+
+**Δval +0.43 (SE 0.17, 2.5 SE, 3/3). Δtest +0.41 (SE 0.16, 2.6 SE, 3/3).**
+
+¹ Seed 0 reconstructed from the reported mean and verified against the printed range — a
+`tail -20` in the run script cut the first line, for the third time today.
+
+**Validation prefers it and test agrees.** After a day of effects that are real on test and
+invisible to the selection rule, this is the one that is selectable. It is small — +0.41,
+below the ±0.6 rule of thumb — but that rule was calibrated for unpaired comparisons; at
+2.6 SE with 3/3 agreement it is a real effect, and the selection rule adopts it without
+being told to.
+
+`--budget-categoricals` did **not** survive the same test: +0.28 on test, −0.45 on
+validation, against a gate result of +0.99. Its gate gain came from removing 38 stray
+`nunique` columns, and the calibrated sweep can already compensate by choosing a different
+arm or context size.
+
+**Why this does not move the headline by itself.** The standing rel-trial number uses
+*three* children, and validation ranks three-children-none (68.65) above
+ten-children-with-categories (68.38). That comparison is unpaired — five seeds against
+three — so it is not yet trustworthy in either direction, and the 2×2 is being closed at
+matched seeds. Until then the honest statement is conditional: *at ten children, turn
+categories on.*
+
 ### 2026-08-05 — calendar on rel-event: +3.00 on test, and the validation verdict is UNDECIDED
 
 Calibrated, `--timed-links-only`, 3 replicates each:
