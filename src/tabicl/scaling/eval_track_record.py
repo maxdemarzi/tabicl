@@ -645,14 +645,24 @@ def main() -> None:
             folds = np.array_split(order, args.cv_folds)
             scores = []
             for f in folds:
-                rest = np.setdiff1d(order, f, assume_unique=False)
-                take = rng.choice(rest, size=min(size, len(rest)), replace=False)
-                clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
-                                       random_state=seed,
-                                       inference_config=NOAMP).fit(X[take], y[take])
                 if len(np.unique(y[f])) < 2:
                     continue
-                scores.append(roc_auc_score(y[f], clf.predict_proba(X[f])[:, 1]) * 100)
+                rest = np.setdiff1d(order, f, assume_unique=False)
+                # Average over the same number of context draws the final model will use.
+                # The first version fitted once regardless of --resample, so the criterion
+                # could not see the very setting it was being asked to adjudicate: it
+                # returned an identical 90.37 for 1 and 3 draws. A selection criterion must
+                # exercise whatever it is selecting over.
+                probs = None
+                for d in range(max(1, args.resample)):
+                    r2 = np.random.default_rng(seed * 7919 + d)
+                    take = r2.choice(rest, size=min(size, len(rest)), replace=False)
+                    clf = TabICLClassifier(n_estimators=args.n_estimators,
+                                           device=args.device, random_state=seed,
+                                           inference_config=NOAMP).fit(X[take], y[take])
+                    p = clf.predict_proba(X[f])[:, 1]
+                    probs = p if probs is None else probs + p
+                scores.append(roc_auc_score(y[f], probs / max(1, args.resample)) * 100)
             return float(np.mean(scores)) if scores else 0.0
 
         results = []
