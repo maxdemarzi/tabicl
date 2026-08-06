@@ -84,12 +84,19 @@ FRAME_VARIANTS = {
 # Variants that change the MODEL rather than the features. Same frames on both sides, so
 # the empty-block refusal does not apply -- there is nothing for them to make empty.
 #
-# These are here because the exhausted list covers ensemble size and context size but not
-# how the ensemble normalizes. `norm_methods=None` means ["none", "power"], and the
-# features this pipeline produces are counts, sums and rates -- heavy-tailed by
-# construction, which is the distribution `quantile` exists for. `outlier_threshold=4.0`
-# then clips |z| > 4, and on a power-law count column that is not an outlier, it is the
-# tail.
+# These were added because the exhausted list covers ensemble size and context size but not
+# how the ensemble normalizes, and the reasoning was that this pipeline emits counts, sums
+# and rates -- heavy-tailed by construction, which is the distribution `quantile` exists
+# for -- while `outlier_threshold=4.0` clips |z| > 4, which on a power-law count column is
+# the tail rather than an outlier.
+#
+# **Measured 2026-08-05, and that reasoning was wrong.** On rel-trial: norm-quantile -3.07,
+# norm-all -1.73, norm-robust -2.08, every one 0/5 positive and every one clearing the
+# floor downwards. outliers-wide -0.73 and outliers-off -0.63, also 0/5 -- so clipping at
+# 4.0 is doing real work rather than truncating signal. rel-avito agrees in direction and
+# is null in size. The library defaults are right for this data.
+#
+# Kept for the record and because they are cheap to re-run, not because they are promising.
 MODEL_VARIANTS = {
     "norm-quantile": dict(norm_methods=["none", "quantile"]),
     "norm-all": dict(norm_methods=["none", "power", "quantile", "robust"]),
