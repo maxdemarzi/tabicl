@@ -62,10 +62,24 @@ DEFAULT_WINDOWS = {
 
 # Printed beside a result so it is never read against the wrong task's numbers.
 REFERENCE = {
-    "rel-trial": "ours 69.36, TabPFN-REL 76.43, RelGNN 71.24, RDBLearn 72.89",
-    "rel-event": "ours 78.11, TabPFN-REL 85.38, RelGNN 86.18, RDBLearn 73.70",
-    "rel-avito": "ours 64.85, TabPFN-REL 66.68, RelGNN 66.18, RDBLearn 66.76",
-    "rel-f1": "ours 80.70, TabPFN-REL 79.98, RelGNN 85.69, RDBLearn 82.72",
+    "rel-trial": "ours 72.26, TabPFN-REL 76.43, RelGNN 71.24, RDBLearn 72.89",
+    "rel-event": "ours 80.98, TabPFN-REL 85.38, RelGNN 86.18, RDBLearn 73.70",
+    "rel-avito": "ours 65.54, TabPFN-REL 66.68, RelGNN 66.18, RDBLearn 66.76",
+    "rel-f1": "ours 81.98, TabPFN-REL 79.98, RelGNN 85.69, RDBLearn 82.72",
+}
+
+# The flags each standing number was measured with. This is not documentation, it is the
+# thing three runs got wrong in one afternoon: a promotion compared against a headline it
+# did not share a configuration with. rel-f1 without `--max-columns none` scores 73.21
+# against a standing 81.98 and looks like a catastrophic regression; it is a different
+# experiment. `--timed-links-only` matters on rel-event alone -- it has two untimed
+# `user_friends` link tables while the other three schemas have none, so the flag is a
+# no-op everywhere else and omitting it there makes the structural arms an upper bound.
+STANDING_FLAGS = {
+    "rel-trial": [],
+    "rel-event": ["--timed-links-only"],
+    "rel-avito": [],
+    "rel-f1": ["--max-columns none"],
 }
 
 
@@ -1115,6 +1129,21 @@ def main() -> None:
             print(f"context order chosen: {picked} "
                   f"({picked.count('random')}/{len(picked)} random)", flush=True)
         print(f"reference: {REFERENCE.get(args.dataset, 'see PERFORMANCE.md')}", flush=True)
+        # Say out loud whether this run is even comparable to that reference. A promotion
+        # measured at a different configuration from the number it is beating is half a
+        # measurement, and three runs in one afternoon were exactly that.
+        expected = STANDING_FLAGS.get(args.dataset, [])
+        missing = [f for f in expected
+                   if not (f.split()[0] == "--timed-links-only" and args.timed_links_only)
+                   and not (f.startswith("--max-columns")
+                            and str(args.max_columns).lower() in ("none", "null", ""))]
+        if missing:
+            print(f"WARNING: the standing {args.dataset} number was measured with "
+                  f"{' '.join(expected)} and this run was not. The comparison above is "
+                  f"between different configurations, not different methods.", flush=True)
+        elif expected:
+            print(f"configuration matches the standing number ({' '.join(expected)})",
+                  flush=True)
         return
 
     header = "".join(f"{name:>10}" for name in arms)
