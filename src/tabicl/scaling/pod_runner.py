@@ -222,7 +222,20 @@ def main() -> int:
                 print(f"  {wasted} wasted attempts ({len(bad_hosts)} bad host(s)) -- "
                       f"escalating to {CLOUDS[0]}", flush=True)
             pod = find_pod() or create()
-            pod, target = wait_ready(pod["id"])
+            try:
+                pod, target = wait_ready(pod["id"])
+            except TimeoutError as exc:
+                # A host that reaches RUNNING and never exposes ssh is just another way of
+                # being unusable, and it used to end the whole cycle: one such host aborted
+                # a run that had twelve attempts left and a queue of work behind it. The
+                # retry loop already exists for exactly this; a timeout belongs inside it,
+                # not above it.
+                print(f"attempt {attempt}: {exc} -- terminating and taking another host",
+                      flush=True)
+                wasted += 1
+                runpod.terminate_pod(pod["id"])
+                time.sleep(5)
+                continue
             if target[0] in bad_hosts:
                 print(f"attempt {attempt}: {target[0]} already rejected -- skipping",
                       flush=True)
