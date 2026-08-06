@@ -194,6 +194,15 @@ def main() -> None:
                          "column gets a histogram. Below it the column is free text in "
                          "disguise (rel-trial's eligibilities.criteria has 247k values and "
                          "its top 4 cover 0.1%%), and the block is K+1 constant columns.")
+    ap.add_argument("--fit-on-train-val", action="store_true",
+                    help="after the setting is chosen on validation, draw the final "
+                         "context from train AND val instead of train alone. The same "
+                         "pattern as refitting on all data after cross-validation, and "
+                         "RelBench permits training on both -- only test is held out, and "
+                         "no test information is involved. The extra data is not marginal: "
+                         "+43%% of rows on rel-f1 and +35%% on rel-avito. This is the one "
+                         "lever that does not depend on the selection instrument, which "
+                         "rejected every large effect measured on 2026-08-05.")
     ap.add_argument("--budget-categoricals", action="store_true",
                     help="apply --max-columns to the nunique block as well, which it never "
                          "has. Measured +0.99 (SE 0.10, 5/5) on rel-trial with all ten "
@@ -787,7 +796,7 @@ def main() -> None:
     print(f"feature widths: {widths}; {len(arms['base'][0])} train rows, "
           f"context={args.context}", flush=True)
 
-    def score(X, Xe, rows, seed, truth=None):
+    def score(X, Xe, rows, seed, truth=None, fit_y=None):
         """Fit and score, optionally averaging predictions over several context draws.
 
         `RESEARCH` item 10. The largest measured weakness on this branch is not bias but
@@ -800,6 +809,9 @@ def main() -> None:
         context, which is the thing that actually moves.
         """
         target_y = y_te if truth is None else truth
+        # Labels for the FIT set. Defaults to train's, but --fit-on-train-val
+        # passes the concatenated train+val labels alongside a taller X.
+        source_y = y if fit_y is None else fit_y
         draws = max(1, args.resample)
         n = len(X)
         probs = None
@@ -816,8 +828,8 @@ def main() -> None:
                 # one at a 0.02 positive rate against a 0.163 base rate.
                 r = np.random.default_rng(seed * 1000 + d)
                 parts = []
-                for cls in np.unique(y):
-                    pool = np.flatnonzero(y == cls)
+                for cls in np.unique(source_y):
+                    pool = np.flatnonzero(source_y == cls)
                     want = int(round(len(rows) * len(pool) / n))
                     parts.append(r.choice(pool, size=min(want, len(pool)), replace=False))
                 take = np.concatenate(parts)
@@ -826,7 +838,7 @@ def main() -> None:
                     n, size=len(rows), replace=False)
             clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
                                    random_state=seed,
-                                   inference_config=NOAMP).fit(X[take], y[take])
+                                   inference_config=NOAMP).fit(X[take], source_y[take])
             p = clf.predict_proba(Xe)[:, 1]
             probs = p if probs is None else probs + p
         return roc_auc_score(target_y, probs / draws) * 100
@@ -996,9 +1008,35 @@ def main() -> None:
                         if best is None or v > best[0]:
                             best = (v, name, size, order)
             val_auc, name, size, order = best
-            n = len(arms[name][0])
-            rows = draw(order, seed, n, size)
-            auc = score(arms[name][0], arms[name][1], rows, seed)
+            if args.fit_on_train_val:
+                # Refit on everything available once the setting is chosen -- the same
+                # pattern as refitting on all data after cross-validation. The validation
+                # split was used to *select*, and RelBench permits training on train and
+                # val; only test is held out. No test information is involved.
+                #
+                # This is the one lever today that does not depend on the selection
+                # instrument, and the extra data is not marginal: +43% of rows on rel-f1
+                # and +35% on rel-avito.
+                pool_X = np.vstack([arms[name][0], val_arms[name]])
+                pool_y = np.concatenate([y, y_va])
+                order_pool = np.argsort(
+                    np.concatenate([train[tcol].to_numpy(), val[tcol].to_numpy()]),
+                    kind="stable")
+                m = len(pool_X)
+                take = min(size, m)
+                rng = np.random.default_rng(seed)
+                if order == "recent":
+                    rows = order_pool[-take:]
+                elif order == "recent-half":
+                    half = order_pool[len(order_pool) // 2:]
+                    rows = rng.choice(half, size=min(take, len(half)), replace=False)
+                else:
+                    rows = rng.choice(m, size=take, replace=False)
+                auc = score(pool_X, arms[name][1], rows, seed, fit_y=pool_y)
+            else:
+                n = len(arms[name][0])
+                rows = draw(order, seed, n, size)
+                auc = score(arms[name][0], arms[name][1], rows, seed)
             results.append((auc, name, size, val_auc, order))
             print(f"  chosen {name} context={size} order={order} -> "
                   f"VAL {val_auc:.2f}  TEST {auc:.2f}", flush=True)
