@@ -65,6 +65,23 @@ VARIANTS = {
     "all": dict(top_k_categories=4, include_mode=True, numeric_booleans=True),
 }
 
+# Variants that change the MODEL rather than the features. Same frames on both sides, so
+# the empty-block refusal does not apply -- there is nothing for them to make empty.
+#
+# These are here because the exhausted list covers ensemble size and context size but not
+# how the ensemble normalizes. `norm_methods=None` means ["none", "power"], and the
+# features this pipeline produces are counts, sums and rates -- heavy-tailed by
+# construction, which is the distribution `quantile` exists for. `outlier_threshold=4.0`
+# then clips |z| > 4, and on a power-law count column that is not an outlier, it is the
+# tail.
+MODEL_VARIANTS = {
+    "norm-quantile": dict(norm_methods=["none", "quantile"]),
+    "norm-all": dict(norm_methods=["none", "power", "quantile", "robust"]),
+    "norm-robust": dict(norm_methods=["none", "robust"]),
+    "outliers-wide": dict(outlier_threshold=12.0),
+    "outliers-off": dict(outlier_threshold=1e9),
+}
+
 
 def _numeric(df: pd.DataFrame, codes: dict, fit: bool) -> np.ndarray:
     """Encode to float with one codebook shared by train and test.
@@ -90,7 +107,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("dataset", nargs="?", default="rel-trial")
     ap.add_argument("task", nargs="?", default="study-outcome")
-    ap.add_argument("--variant", choices=sorted(VARIANTS), default="categories")
+    ap.add_argument("--variant", choices=sorted(set(VARIANTS) | set(MODEL_VARIANTS)),
+                    default="categories")
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--context", type=int, default=10000)
     ap.add_argument("--children", type=int, default=3)
@@ -140,8 +158,11 @@ def main() -> None:
                                           frame[tcol].to_numpy()).add_prefix(f"{n}__"))
         return pd.concat(blocks, axis=1)
 
+    model_side = args.variant in MODEL_VARIANTS
+    feature_extra = {} if model_side else VARIANTS[args.variant]
+
     frames, widths = {}, {}
-    for label, extra in (("base", {}), (args.variant, VARIANTS[args.variant])):
+    for label, extra in (("base", {}), (args.variant, feature_extra)):
         t0 = time.perf_counter()
         f_tr = build(train, extra)
         f_te = build(test, extra).reindex(columns=f_tr.columns, fill_value=np.nan)
@@ -158,19 +179,24 @@ def main() -> None:
     # `numeric_booleans` a no-op. Refuse to score identical inputs.
     added = [c for c in widths[args.variant] if c not in set(widths["base"])]
     removed = [c for c in widths["base"] if c not in set(widths[args.variant])]
-    if not added and not removed:
+    if model_side:
+        print(f"{args.variant}: model-side, identical features both arms "
+              f"({len(widths['base'])} columns): {MODEL_VARIANTS[args.variant]}", flush=True)
+    elif not added and not removed:
         raise SystemExit(
             f"variant {args.variant!r} changed no columns ({len(widths['base'])} either "
             f"way), so any gap measured here would be an artefact of an empty block. "
             f"Either this schema has nothing for it to act on, or the "
             f"--category-share gate ({args.category_share}) rejected every column."
         )
-    print(f"{args.variant}: +{len(added)} columns, -{len(removed)}; "
-          f"e.g. {added[:3]}", flush=True)
+    else:
+        print(f"{args.variant}: +{len(added)} columns, -{len(removed)}; "
+              f"e.g. {(added or removed)[:3]}", flush=True)
 
-    def score(X, Xe, rows, seed):
+    def score(X, Xe, rows, seed, extra=None):
         clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
-                               random_state=seed, inference_config=NOAMP).fit(X[rows], y[rows])
+                               random_state=seed, inference_config=NOAMP,
+                               **(extra or {})).fit(X[rows], y[rows])
         return roc_auc_score(y_te, clf.predict_proba(Xe)[:, 1]) * 100
 
     print(f"\n{'seed':>5} {'base':>9} {args.variant:>11} {'gap':>8}", flush=True)
@@ -180,7 +206,8 @@ def main() -> None:
         n = len(frames["base"][0])
         rows = rng.choice(n, size=min(args.context, n), replace=False)
         a = score(*frames["base"], rows, seed)
-        b = score(*frames[args.variant], rows, seed)
+        b = score(*frames[args.variant], rows, seed,
+                  MODEL_VARIANTS[args.variant] if model_side else None)
         gaps.append(b - a)
         print(f"{seed:>5} {a:>9.2f} {b:>11.2f} {b - a:>+8.2f}", flush=True)
 
