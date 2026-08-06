@@ -2131,19 +2131,34 @@ Gated first, per the standing rule. For each training row, the feature is the me
 entity's strictly-earlier labels (`groupby(entity).shift(1).expanding().mean()` on rows
 sorted by time), so no row can see its own label or any later one:
 
-| task | rows | entities | coverage | history-mean AUC | our full pipeline |
-|---|---:|---:|---:|---:|---:|
-| rel-f1 / driver-top3 | 1,353 | 92 | 93.2% | **86.92** | 81.98 |
-| rel-f1 / driver-dnf | 11,411 | 780 | 93.2% | **74.91** | 69.66 |
-| rel-event / user-ignore | 19,239 | 8,517 | 55.7% | **82.94** | 80.98 |
-| rel-event / user-repeat | 3,842 | 1,388 | 63.9% | 70.04 | 77.89 |
-| rel-avito / user-visits | 86,619 | 44,968 | 48.1% | 57.32 | 65.54 |
-| rel-avito / user-clicks | 59,454 | 34,575 | 41.8% | 59.06 | 65.89 |
-| rel-trial / study-outcome | 11,994 | 11,994 | 0.0% | unavailable | 72.26 |
+**The horizon correction, made before any of these numbers were acted on.** My first pass
+used `shift(1)`, which requires only that the earlier row be earlier. That is wrong:
+RelBench labels answer "does X happen within `task.timedelta` of this cutoff", so a label
+recorded at *t* is not knowable until *t* + horizon. `key_target_history` already takes a
+`label_horizon` for exactly this reason and I did not apply it. Redone as an as-of join on
+the **resolved** time, `label_time + horizon`:
 
-**On rel-f1 a single scalar beats the entire pipeline** — by 4.94 on driver-top3 and 5.25 on
-driver-dnf, which is our worst placing in the field at 9 of 10. 86.92 on driver-top3 is
-above RelGNN's field-best 85.69. Nothing else gated in this project has come close.
+| task | coverage | AUC, no horizon (wrong) | **coverage** | **AUC, horizon applied** | ours |
+|---|---:|---:|---:|---:|---:|
+| rel-f1 / driver-top3 | 93.2% | 86.92 | 88.6% | **84.66** | 81.98 |
+| rel-f1 / driver-dnf | 93.2% | 74.91 | 90.9% | **74.27** | 69.66 |
+| rel-event / user-ignore | 55.7% | 82.94 | 46.4% | **81.72** | 80.98 |
+| rel-event / user-repeat | 63.9% | 70.04 | 49.7% | 67.17 | 77.89 |
+| rel-avito / user-visits | 48.1% | 57.32 | — | — | 65.54 |
+| rel-avito / user-clicks | 41.8% | 59.06 | — | — | 65.89 |
+| rel-trial / study-outcome | 0.0% | unavailable | 0.0% | unavailable | 72.26 |
+
+**The error was small because RelBench spaces an entity's task rows exactly one horizon
+apart** — median gap equals the horizon on all four, and 100% of gaps are at least the
+horizon, so the previous row had almost always resolved. It cost 2.26 on driver-top3 and
+0.64 on driver-dnf, mostly through coverage. The two rel-avito tasks were not redone: both
+were already well below our pipeline, and the correction only moves numbers down.
+
+**One claim did not survive it.** At 86.92 this feature looked to be above RelGNN's
+field-best 85.69 on driver-top3; horizon-correct it is **84.66, below RelGNN**. The
+surviving claim is narrower and still large: **on both rel-f1 tasks a single scalar beats
+our entire pipeline** — by 2.68 on driver-top3 and 4.61 on driver-dnf, our worst placing in
+the field at 9 of 10.
 
 The structure is legible and predicts where it will work: **coverage tracks how often an
 entity recurs.** Drivers race repeatedly (93%), users act repeatedly but sparsely (42–64%),
