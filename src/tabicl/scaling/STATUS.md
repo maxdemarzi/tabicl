@@ -15,7 +15,17 @@ relational feature layer and a compiled join engine underneath it.
 | 1 | Row-chunked column embedding | Working. Exact, not approximate. | off |
 | 2 | Multi-query KV cache | Size win confirmed; needs pretraining to use for accuracy. | off |
 | 3 | Relational flattening | Working. No model change. | n/a |
-| 4 | Test-time compute | Working, modest. | off |
+| 4 | Test-time compute | Working. Improves **calibration**, and cannot improve ROC-AUC. | off |
+
+**On (4), measured 2026-08-06 and worth stating plainly**, because "modest" read as "a
+small win" and it is not one for this benchmark. Both of its knobs are AUC-inert by
+construction: `_mean_proba` varies only `random_state`, which is model-seed ensembling at a
+fixed context and measures null everywhere; and the head is a logistic regression over the
+backbone's own probabilities, so the blend is monotone in *p* and **ROC-AUC is invariant
+under monotone transforms of the score**. Its blend weight is chosen on log-loss. Measured
++0.12 (SE 0.23) on rel-trial and −0.55 (SE 0.70) on rel-event at 3× the fit cost, with the
+head engaging at `w = 0.90` on one seed and AUC not moving — which confirms the mechanism
+rather than merely the null. Use it when you need calibrated probabilities; not for AUC.
 
 ## Public API
 
