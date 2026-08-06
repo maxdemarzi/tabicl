@@ -41,7 +41,7 @@ GPU_PREFERENCE = ["NVIDIA RTX A6000", "NVIDIA A40", "NVIDIA L40S", "NVIDIA L40",
                   "NVIDIA GeForce RTX 4090"]
 IMAGES = [
     "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
-    "runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04",
+    "runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04",
 ]
 # Community capacity is erratic and some hosts have broken CUDA; secure costs more but
 # is far likelier to yield a usable machine.
@@ -164,13 +164,43 @@ def probe_host(target) -> tuple[bool, str]:
     return True, f"CUDA ok, torch {version}, {speed / 1e6:.1f} MB/s"
 
 
-def create():
+def _check_images() -> None:
+    """Refuse to offer an image whose torch is below what the model needs.
+
+    `runpod/pytorch:2.1.0-...` sat in this list as a fallback, so when the preferred image
+    was unavailable the loop created a pod on it and the probe then rejected the pod for
+    shipping torch 2.1.0 -- twice in one run, on hosts that were otherwise fine. The
+    "bad hosts" were our own second choice. A minimum the code enforces on the host and
+    violates in its own configuration is not a minimum.
+    """
+    for image in IMAGES:
+        tag = image.split(":", 1)[-1]
+        try:
+            version = tuple(int(p) for p in tag.split("-", 1)[0].split(".")[:2])
+        except ValueError:
+            continue
+        if version < MIN_TORCH:
+            raise SystemExit(
+                f"image {image!r} ships torch {'.'.join(map(str, version))}, below the "
+                f"required {'.'.join(map(str, MIN_TORCH))}. Every pod created from it "
+                f"would be provisioned and then rejected by the probe."
+            )
+
+
+def create(offset: int = 0):
     if not PUBKEY.exists():
         raise SystemExit(f"no public key at {PUBKEY}")
+    _check_images()
     pubkey = PUBKEY.read_text().strip()
     last = None
+    # Rotate the GPU order by how many attempts have already been wasted. Without this the
+    # loop retries the same preference in the same order and keeps landing on the machine
+    # it just rejected: one run spent attempts 7 through 12 on a single host, terminating
+    # each pod on arrival because the address was already blacklisted.
+    gpus = GPU_PREFERENCE[offset % len(GPU_PREFERENCE):] + \
+        GPU_PREFERENCE[:offset % len(GPU_PREFERENCE)]
     for cloud in CLOUDS:
-      for gpu in GPU_PREFERENCE:
+      for gpu in gpus:
         for image in IMAGES:
             try:
                 print(f"trying {cloud} {gpu} ...", flush=True)
@@ -221,7 +251,7 @@ def main() -> int:
                 CLOUDS.reverse()
                 print(f"  {wasted} wasted attempts ({len(bad_hosts)} bad host(s)) -- "
                       f"escalating to {CLOUDS[0]}", flush=True)
-            pod = find_pod() or create()
+            pod = find_pod() or create(offset=wasted)
             try:
                 pod, target = wait_ready(pod["id"])
             except TimeoutError as exc:
