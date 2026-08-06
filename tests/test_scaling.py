@@ -2120,6 +2120,48 @@ def test_two_hop_cutoff_excludes_grandchildren_dated_after_the_entity_cutoff():
     assert out[mean].iloc[0] == pytest.approx(2.0), "the post-cutoff price leaked into mean"
 
 
+def test_column_budget_does_not_spend_a_slot_on_a_constant_column():
+    """Coverage ranking actively prefers constants: a constant is 100% populated.
+
+    Found on rel-trial, where `designs.subject_masked` is 't' in every row of the table.
+    With `numeric_booleans` on it became a float column, won a slot at `max_columns=2` on
+    perfect coverage, and produced a mean of exactly 1.000 for every entity -- which is
+    what the boolean rates were about to be measured on.
+
+    Fewer varying columns than the budget is a reason to emit fewer, not to pad with
+    constants: all four masked flags in that table are constant, so a rule requiring
+    `max_columns` survivors put one back every time.
+
+    Target-free, so it cannot leak -- this reads the feature column and never y. And it
+    changes nothing on the default path: no task has a constant numeric child column.
+    """
+    from tabicl.scaling import Table, asof_statistics
+
+    entities = pd.DataFrame({"id": [1], "t": [pd.Timestamp("2020-06-01")]})
+    kid = pd.DataFrame({
+        "id": [1, 1, 1],
+        "kt": pd.to_datetime(["2020-01-01", "2020-02-01", "2020-03-01"]),
+        "constant": [7.0, 7.0, 7.0],           # fully populated, and worthless
+        "informative": [1.0, 2.0, np.nan],     # worse coverage, and not worthless
+    })
+
+    out = asof_statistics(
+        Table(kid, "id", "k", time_column="kt", max_columns=1),
+        entities["id"].to_numpy(), entities["t"].to_numpy())
+
+    assert not [c for c in out.columns if "constant" in c], "a constant took the slot"
+    assert [c for c in out.columns if "informative" in c]
+
+    # All-constant candidates: emit nothing rather than pad, since nothing can help.
+    both_constant = pd.DataFrame({
+        "id": [1, 1, 1], "kt": kid["kt"], "a": [7.0, 7.0, 7.0], "b": [8.0, 8.0, 8.0],
+    })
+    degenerate = asof_statistics(
+        Table(both_constant, "id", "k", time_column="kt", max_columns=1),
+        entities["id"].to_numpy(), entities["t"].to_numpy())
+    assert "k__count" in degenerate.columns          # the row count still means something
+
+
 def test_calendar_features_are_cyclical_and_keep_the_trend_separate():
     """Sunday and Monday are adjacent, and the monotone column is opt-in.
 

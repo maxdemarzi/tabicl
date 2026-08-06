@@ -262,6 +262,22 @@ def _budgeted_columns(child: Table, df: pd.DataFrame, candidates: Sequence[str])
     candidates = list(candidates)
     if child.max_columns is None or len(candidates) <= child.max_columns:
         return candidates
+    # Drop the columns that cannot contribute at all before ranking. A column with one
+    # distinct value aggregates to a constant, and coverage *prefers* it: a constant is
+    # 100% populated by definition, so it beats every partially-observed column for a
+    # budget slot while carrying no information whatever.
+    #
+    # Caught on rel-trial, where `designs.subject_masked` is 't' in every row of the table.
+    # It won a slot at `max_columns=2` and produced a mean of exactly 1.000 for every
+    # entity -- which is what the boolean rates were going to be measured on.
+    #
+    # Still target-free, so it cannot leak: this reads the feature column and never y.
+    # Fewer varying columns than the budget is a reason to emit fewer, not a reason to pad
+    # with constants: `designs` has four masked flags and all four are 't' throughout, so
+    # requiring `max_columns` survivors put a constant back in every time.
+    varying = [c for c in candidates if df[c].nunique(dropna=True) > 1]
+    if varying:
+        candidates = varying
     coverage = {c: float(df[c].notna().mean()) for c in candidates}
     ranked = sorted(candidates, key=lambda c: (-coverage[c], candidates.index(c)))
     return sorted(ranked[: child.max_columns], key=candidates.index)
