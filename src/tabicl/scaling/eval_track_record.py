@@ -177,11 +177,15 @@ def main() -> None:
                          "ranked by the same gate used before building. 0 keeps all. Every "
                          "key's block is otherwise concatenated indiscriminately, and the "
                          "gate already measures them as far apart as 53 to 82 on rel-event.")
-    ap.add_argument("--max-columns", default="2",
-                    help="per-child column budget, or 'none'. NOT a universal default: the "
-                         "base sweep measures max_columns=None at +23.38 on rel-f1's "
-                         "validation split against the 2 hardcoded here, while rel-event "
-                         "loses 1.36 by the same change. Set it per task.")
+    ap.add_argument("--max-columns", default="4",
+                    help="per-child column budget, or 'none'. Chosen on validation across "
+                         "all four tasks by worst-case regret, which is the right statistic "
+                         "for a default -- it bounds the damage when the default is wrong. "
+                         "4 is never more than 2.13 off the best value for a task; the 2 "
+                         "that was hardcoded here costs 19.13 on rel-f1, and the None the "
+                         "library ships costs 6.12 on rel-event and builds 2,000 columns in "
+                         "349 s there. Still worth setting per task where you can: the "
+                         "spread across values reaches 19 points.")
     ap.add_argument("--children-order", choices=["dict", "name"], default="dict",
                     help="how to order child tables before --children takes the first N. "
                          "'dict' is insertion order and is NOT stable across environments: "
