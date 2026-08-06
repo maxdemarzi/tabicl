@@ -42,6 +42,7 @@ from relbench.tasks import get_task
 
 from tabicl import TabICLClassifier
 from tabicl.scaling import Table, asof_statistics
+from tabicl.scaling._guards import assert_no_perfect_feature
 
 NOAMP = {k: {"use_amp": False} for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG")}
 
@@ -125,9 +126,13 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("dataset", nargs="?", default="rel-trial")
     ap.add_argument("task", nargs="?", default="study-outcome")
-    ap.add_argument("--variant",
-                    choices=sorted(set(VARIANTS) | set(MODEL_VARIANTS) | set(CONTEXT_VARIANTS)),
-                    default="categories")
+    ap.add_argument("--variant", default="categories",
+                    help="comma-separated. One build per distinct feature set, shared "
+                         "across every variant that needs it, and one base arm scored per "
+                         "seed and reused -- so the gaps are paired against the same "
+                         "numbers and comparable to each other. Available: "
+                         + ", ".join(sorted(set(VARIANTS) | set(MODEL_VARIANTS)
+                                            | set(CONTEXT_VARIANTS))))
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--context", type=int, default=10000)
     ap.add_argument("--children", type=int, default=3)
@@ -160,7 +165,12 @@ def main() -> None:
                 for fk, pt in (t.fkey_col_to_pkey_table or {}).items()
                 if pt == entity and t.time_col]
     kids = all_kids if args.children <= 0 else all_kids[: args.children]
-    print(f"{args.dataset}/{args.task}  variant={args.variant}  windows={spec}  "
+    unknown = [v.strip() for v in args.variant.split(",")
+               if v.strip() and v.strip() not in set(VARIANTS) | set(MODEL_VARIANTS)
+               | set(CONTEXT_VARIANTS)]
+    if unknown:
+        raise SystemExit(f"unknown variant(s) {unknown}")
+    print(f"{args.dataset}/{args.task}  variants={args.variant}  windows={spec}  "
           f"max_columns={max_cols}  children={[k[0] for k in kids]}", flush=True)
 
     def build(frame, extra):
@@ -177,42 +187,27 @@ def main() -> None:
                                           frame[tcol].to_numpy()).add_prefix(f"{n}__"))
         return pd.concat(blocks, axis=1)
 
-    model_side = args.variant in MODEL_VARIANTS
-    context_side = args.variant in CONTEXT_VARIANTS
-    feature_extra = {} if (model_side or context_side) else VARIANTS[args.variant]
-
+    # One build per distinct FEATURE set, shared across every variant that needs it. The
+    # model-side and context-side variants all run on the base frames, so testing five of
+    # them used to mean building the base frames five times -- and on rel-event a build is
+    # the expensive half of the job.
+    wanted = [v.strip() for v in args.variant.split(",") if v.strip()]
     frames, widths = {}, {}
-    for label, extra in (("base", {}), (args.variant, feature_extra)):
+
+    def ensure(label, extra):
+        if label in frames:
+            return
         t0 = time.perf_counter()
         f_tr = build(train, extra)
         f_te = build(test, extra).reindex(columns=f_tr.columns, fill_value=np.nan)
         codes: dict = {}
         frames[label] = (_numeric(f_tr, codes, True), _numeric(f_te, codes, False))
         widths[label] = list(f_tr.columns)
-        print(f"{label:>11}: {f_tr.shape[1]} features in {time.perf_counter() - t0:.0f}s",
+        assert_no_perfect_feature(frames[label][0], y, list(f_tr.columns), context=label)
+        print(f"{label:>13}: {f_tr.shape[1]} features in {time.perf_counter() - t0:.0f}s",
               flush=True)
 
-    # An empty block does not raise, it reports +0.00 with sd 0.00 -- indistinguishable
-    # from a clean null. Depth-2 spent a week "measured at no effect" that way. Two of
-    # these variants have their own silent-empty path: `min_category_share` can reject
-    # every column on a free-text schema, and a schema with no boolean columns leaves
-    # `numeric_booleans` a no-op. Refuse to score identical inputs.
-    added = [c for c in widths[args.variant] if c not in set(widths["base"])]
-    removed = [c for c in widths["base"] if c not in set(widths[args.variant])]
-    if model_side or context_side:
-        detail = MODEL_VARIANTS[args.variant] if model_side else CONTEXT_VARIANTS[args.variant]
-        print(f"{args.variant}: {'model' if model_side else 'context'}-side, identical "
-              f"features both arms ({len(widths['base'])} columns): {detail}", flush=True)
-    elif not added and not removed:
-        raise SystemExit(
-            f"variant {args.variant!r} changed no columns ({len(widths['base'])} either "
-            f"way), so any gap measured here would be an artefact of an empty block. "
-            f"Either this schema has nothing for it to act on, or the "
-            f"--category-share gate ({args.category_share}) rejected every column."
-        )
-    else:
-        print(f"{args.variant}: +{len(added)} columns, -{len(removed)}; "
-              f"e.g. {(added or removed)[:3]}", flush=True)
+    ensure("base", {})
 
     def score(X, Xe, rows, seed, extra=None):
         clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
@@ -234,29 +229,63 @@ def main() -> None:
             return rng.choice(pool, size=min(size, len(pool)), replace=False)
         return rng.choice(n, size=size, replace=False)
 
-    print(f"\n{'seed':>5} {'base':>9} {args.variant:>11} {'gap':>8}", flush=True)
-    gaps = []
-    for seed in range(args.seeds):
-        rng = np.random.default_rng(seed)
-        n = len(frames["base"][0])
-        size = min(args.context, n)
-        rows = rng.choice(n, size=size, replace=False)
-        a = score(*frames["base"], rows, seed)
-        b_rows = context_rows(np.random.default_rng(seed), n, size, args.variant) \
-            if context_side else rows
-        b = score(*frames[args.variant], b_rows, seed,
-                  MODEL_VARIANTS[args.variant] if model_side else None)
-        gaps.append(b - a)
-        print(f"{seed:>5} {a:>9.2f} {b:>11.2f} {b - a:>+8.2f}", flush=True)
+    # The base arm is scored once per seed and reused by every variant. Each variant is
+    # therefore paired against the *same* base numbers, which is what makes the gaps
+    # comparable to each other and not just each to zero.
+    n = len(frames["base"][0])
+    size = min(args.context, n)
+    draws = {seed: np.random.default_rng(seed).choice(n, size=size, replace=False)
+             for seed in range(args.seeds)}
+    base_auc = {seed: score(*frames["base"], draws[seed], seed) for seed in range(args.seeds)}
+    print(f"\nbase: {', '.join(f'{base_auc[s]:.2f}' for s in sorted(base_auc))}", flush=True)
 
-    g = np.array(gaps)
-    sd = g.std(ddof=1) if len(g) > 1 else 0.0
-    print(f"\nGATEROW\t{args.dataset}/{args.task}\t{args.variant}\t{g.mean():+.2f}\t"
-          f"{sd:.2f}\t{(g > 0).sum()}/{len(g)}\t{len(added)}", flush=True)
-    print(f"{args.variant} over base: mean {g.mean():+.2f} sd {sd:.2f} over {len(g)} seeds, "
-          f"{(g > 0).sum()}/{len(g)} positive", flush=True)
-    print("Gate only. +-0.6 floor, and this is test-side -- a pass earns a calibrated run, "
-          "not a table entry.", flush=True)
+    for variant in wanted:
+        model_side = variant in MODEL_VARIANTS
+        context_side = variant in CONTEXT_VARIANTS
+        if model_side or context_side:
+            label = "base"
+            detail = MODEL_VARIANTS[variant] if model_side else CONTEXT_VARIANTS[variant]
+            print(f"\n{variant}: {'model' if model_side else 'context'}-side, identical "
+                  f"features both arms ({len(widths['base'])} columns): {detail}", flush=True)
+            n_changed = 0
+        else:
+            label = variant
+            ensure(label, VARIANTS[variant])
+            # An empty block does not raise, it reports +0.00 with sd 0.00 --
+            # indistinguishable from a clean null. Depth-2 spent a week "measured at no
+            # effect" that way. Two of these have their own silent-empty path:
+            # `min_category_share` can reject every column on a free-text schema, and a
+            # schema with no boolean columns leaves `numeric_booleans` a no-op.
+            added = [c for c in widths[label] if c not in set(widths["base"])]
+            removed = [c for c in widths["base"] if c not in set(widths[label])]
+            n_changed = len(added) + len(removed)
+            if not n_changed:
+                print(f"\n{variant}: SKIPPED -- changed no columns ({len(widths['base'])} "
+                      f"either way), so any gap would be an artefact of an empty block. "
+                      f"Either this schema has nothing for it to act on, or the "
+                      f"--category-share gate ({args.category_share}) rejected every "
+                      f"column.", flush=True)
+                continue
+            print(f"\n{variant}: +{len(added)} columns, -{len(removed)}; "
+                  f"e.g. {(added or removed)[:3]}", flush=True)
+
+        print(f"{'seed':>5} {'base':>9} {variant:>14} {'gap':>8}", flush=True)
+        gaps = []
+        for seed in range(args.seeds):
+            rows = (context_rows(np.random.default_rng(seed), n, size, variant)
+                    if context_side else draws[seed])
+            b = score(*frames[label], rows, seed,
+                      MODEL_VARIANTS[variant] if model_side else None)
+            gaps.append(b - base_auc[seed])
+            print(f"{seed:>5} {base_auc[seed]:>9.2f} {b:>14.2f} {gaps[-1]:>+8.2f}", flush=True)
+
+        g = np.array(gaps)
+        sd = g.std(ddof=1) if len(g) > 1 else 0.0
+        print(f"GATEROW\t{args.dataset}/{args.task}\t{variant}\t{g.mean():+.2f}\t"
+              f"{sd:.2f}\t{(g > 0).sum()}/{len(g)}\t{n_changed}", flush=True)
+
+    print("\nGate only. +-0.6 floor, and this is test-side -- a pass earns a calibrated "
+          "run, not a table entry.", flush=True)
 
 
 if __name__ == "__main__":

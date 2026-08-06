@@ -36,6 +36,7 @@ from relbench.tasks import get_task
 
 from tabicl import TabICLClassifier
 from tabicl.scaling import Table, flatten_relational
+from tabicl.scaling._guards import assert_no_perfect_feature
 
 NOAMP = {k: {"use_amp": False} for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG")}
 
@@ -126,7 +127,13 @@ def main() -> None:
             specs.append(Table(ct.df, fk, n, time_column=ct.time_col, max_columns=budget,
                                primary_key=ct.pkey_col if gcs else None,
                                children=gcs or None))
-        return flatten_relational(frame, key, specs, cutoff_column=tcol)
+        # `flatten_relational` passes through every entity column except the key and the
+        # cutoff, so the TARGET rides along unless it is removed here. It was not, and this
+        # runner has been scoring AUC 100.00 in both arms -- a paired comparison of two
+        # leaks, whose difference is a clean +0.00 with sd 0.00 and reads as a null result.
+        # The other three callers of `flatten_relational` all drop it; this one did not.
+        return flatten_relational(frame.drop(columns=[target], errors="ignore"),
+                                  key, specs, cutoff_column=tcol)
 
     n_gc = sum(len(grandchildren_of(n)) for n, _ in kids)
     print(f"{args.dataset}/{args.task}: {len(kids)} children, {n_gc} grandchildren",
@@ -144,6 +151,8 @@ def main() -> None:
         cats: dict = {}
         frames[depth] = (_numeric(f_tr, cats, True), _numeric(f_te, cats, False))
         widths[depth] = list(f_tr.columns)
+        assert_no_perfect_feature(frames[depth][0], y, list(f_tr.columns),
+                                  context=f"depth {depth}")
         print(f"depth {depth}: {f_tr.shape[1]} features in "
               f"{time.perf_counter() - t0:.0f}s", flush=True)
 

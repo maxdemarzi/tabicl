@@ -2120,6 +2120,36 @@ def test_two_hop_cutoff_excludes_grandchildren_dated_after_the_entity_cutoff():
     assert out[mean].iloc[0] == pytest.approx(2.0), "the post-cutoff price leaked into mean"
 
 
+def test_leak_guard_fires_on_a_passed_through_target_but_not_on_a_strong_feature():
+    """A leak that scores 100.00 in *both* arms of a paired comparison reads as +0.00.
+
+    That is what `eval_depth2` was reporting: `flatten_relational` passes through every
+    entity column except the key and the cutoff, so the target rode along as a feature.
+    Both depths scored AUC 100.00 and their difference was a clean +0.00 with sd 0.00 --
+    a comparison of two leaks, indistinguishable in the output from a careful null.
+
+    The guard tests the symptom rather than the cause, so it does not need to know which
+    mistake produced it: a renamed target, a duplicated column, or an aggregate that
+    reconstructs it all separate the labels perfectly and all get caught.
+    """
+    from tabicl.scaling._guards import assert_no_perfect_feature
+
+    rng = np.random.default_rng(0)
+    y = rng.integers(0, 2, 400)
+    noise = rng.normal(size=(400, 3))
+
+    # Must not fire on an honest strong feature -- a guard that cries wolf gets disabled.
+    strong = y + rng.normal(scale=0.6, size=400)
+    assert_no_perfect_feature(np.column_stack([noise, strong]), y, ["a", "b", "c", "s"])
+
+    with pytest.raises(SystemExit, match="leak"):
+        assert_no_perfect_feature(np.column_stack([noise, y]), y, ["a", "b", "c", "target"])
+
+    # Perfectly anti-correlated is exactly as much of a leak.
+    with pytest.raises(SystemExit, match="leak"):
+        assert_no_perfect_feature(np.column_stack([noise, -y]), y, ["a", "b", "c", "neg"])
+
+
 def test_max_columns_bounds_numeric_columns_only_unless_told_otherwise():
     """One table, budgeted three different ways -- which is worth pinning down.
 
