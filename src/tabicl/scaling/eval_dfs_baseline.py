@@ -120,6 +120,14 @@ def main() -> None:
             if col in keep or pd.api.types.is_numeric_dtype(s) \
                     or pd.api.types.is_datetime64_any_dtype(s) \
                     or pd.api.types.is_bool_dtype(s):
+                # Pandas nullable extension dtypes (Int64, Float64, boolean) are not
+                # numpy dtypes, and woodwork raises TypeConversionError trying to make
+                # Int64 into int64 -- rel-avito's AdID hits exactly this. Downcast to a
+                # numpy float, which holds both the values and the NAs.
+                if isinstance(s.dtype, pd.api.extensions.ExtensionDtype) \
+                        and not isinstance(s.dtype, pd.CategoricalDtype) \
+                        and not pd.api.types.is_datetime64_any_dtype(s):
+                    s = s.astype("float64")
                 out[col] = s
             else:
                 out[col] = s.astype("string")

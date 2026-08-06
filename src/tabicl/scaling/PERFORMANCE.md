@@ -23,7 +23,7 @@ paper's stated SOTA on these tasks and TabPFN-REL its best foundation-model resu
 | task | ours | DFS † | TabPFN-REL | RelGNN | RDBLearn+v3 | vs TabPFN-REL | vs best |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | rel-f1 / driver-top3 | 81.98 | 76.81 | 79.98 | **85.69** | 82.72 | +2.00 | −3.71 |
-| rel-event / user-ignore | 80.98 | *not run* | 85.38 | **86.18** | 73.70 | −4.40 | −5.20 |
+| rel-event / user-ignore | 80.98 | 77.95 | 85.38 | **86.18** | 73.70 | −4.40 | −5.20 |
 | rel-avito / user-visits | 65.54 | *not run* | 66.68 | 66.18 | **66.76** | −1.14 | −1.22 |
 | rel-trial / study-outcome | 72.26 | 69.12 | **76.43** | 71.24 | 72.89 | −4.17 | −4.17 |
 
@@ -82,7 +82,9 @@ cutoff times so it respects the same temporal boundary we do.
 | task | DFS | ours | ours − DFS | feature build |
 |---|---:|---:|---:|---|
 | rel-f1 / driver-top3 | 76.81 | 81.84 | **+5.03** (sd 1.49, 5/5) | DFS 28 s / 193 cols · ours **1 s** / 428 |
+| rel-event / user-ignore | 77.95 | 80.34 | **+2.39** (sd 3.16, 4/5) | DFS 119 s / 811 cols · ours **25 s** / 2000 |
 | rel-trial / study-outcome | 69.12 | 69.56 | +0.45 (sd 0.50, 5/5) | DFS 20 s / 116 cols · ours **2 s** / 134 |
+| rel-avito / user-visits | — | — | *woodwork rejects the nullable `Int64` on `AdID`* | — |
 
 **The claim these documents have leaned on all along now has evidence.** "A generic
 flattening pipeline in front of a stock TabICL" was *too modest* on rel-f1, where our
