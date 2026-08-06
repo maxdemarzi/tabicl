@@ -168,6 +168,15 @@ def main() -> None:
                          "base sweep measures max_columns=None at +23.38 on rel-f1's "
                          "validation split against the 2 hardcoded here, while rel-event "
                          "loses 1.36 by the same change. Set it per task.")
+    ap.add_argument("--children-order", choices=["dict", "name"], default="dict",
+                    help="how to order child tables before --children takes the first N. "
+                         "'dict' is insertion order and is NOT stable across environments: "
+                         "rel-trial's first three are ['designs','eligibilities',"
+                         "'drop_withdrawals'] on one host and ['conditions_studies',"
+                         "'designs','drop_withdrawals'] on another, from the same ten "
+                         "candidates. 'name' sorts alphabetically and is reproducible. "
+                         "Kept as the default only because the standing numbers were "
+                         "measured under it.")
     ap.add_argument("--top-children", type=int, default=0,
                     help="keep the N child tables with the strongest single column on "
                          "validation, instead of the first N in dictionary order. WHICH "
@@ -264,7 +273,22 @@ def main() -> None:
     all_kids = [(n, fk, t.time_col) for n, t in db.table_dict.items()
                 for fk, pt in (t.fkey_col_to_pkey_table or {}).items()
                 if pt == entity and t.time_col]
+    if args.children_order == "name":
+        all_kids = sorted(all_kids, key=lambda k: k[0])
     kids = all_kids if args.children <= 0 else all_kids[: args.children]
+    if args.children <= 0 or args.children >= len(all_kids) or args.top_children:
+        pass
+    elif args.children_order == "dict":
+        # Dictionary order is not a property of the schema, it is a property of how this
+        # machine happened to build the DB. Measured: this host's first three on rel-trial
+        # are ['designs', 'eligibilities', 'drop_withdrawals'] while another's are
+        # ['conditions_studies', 'designs', 'drop_withdrawals'] -- same ten candidates,
+        # different three used, so "--children 3" names a different feature set on
+        # different machines and two runs of the "same" configuration are not comparable.
+        print(f"WARNING: taking the first {args.children} of {len(all_kids)} child tables "
+              f"in dict order, which differs between environments. Use --children-order "
+              f"name for reproducibility, or --top-children to choose on validation.",
+              flush=True)
     if args.top_children and len(all_kids) > args.top_children:
         # WHICH child tables, not how many. `--children N` sweeps the count and has been
         # swept; the identity has always been `all_kids[:N]`, which is dictionary order --
