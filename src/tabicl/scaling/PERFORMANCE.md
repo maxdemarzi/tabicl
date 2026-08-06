@@ -81,16 +81,24 @@ else. It had never set `top_k_categories` or `include_mode`, so `_category_histo
 numeric path cannot — contributed **nothing to any number in the standing table**. Wired up
 and gated (paired by seed, one variable, test-side, 5 seeds, `max_columns=2`, 3 children):
 
-| task | variant | gap | sd | positive | columns added |
-|---|---|---:|---:|:---:|---:|
-| rel-trial | categories | +0.27 | 0.42 | 4/5 | 60 |
-| rel-trial | mode | −0.09 | 0.44 | 2/5 | 6 |
-| rel-avito | mode | +0.05 | 0.15 | 3/5 | 1 |
-| rel-event | categories | +0.01 | 1.42 | 2/5 | 30 |
-| rel-event | mode | −0.39 | 1.47 | 2/5 | 3 |
+| task | variant | gap | sd | SE | positive | columns added |
+|---|---|---:|---:|---:|:---:|---:|
+| rel-trial | categories | +0.27 | 0.42 | 0.19 | 4/5 | 60 |
+| rel-trial | mode | −0.09 | 0.44 | 0.20 | 2/5 | 6 |
+| rel-avito | mode | +0.05 | 0.15 | 0.07 | 3/5 | 1 |
+| rel-event | categories | +0.01 | 1.42 | 0.63 | 2/5 | 30 |
+| rel-event | mode | −0.39 | 1.47 | 0.66 | 2/5 | 3 |
 
-**Every cell is inside the ±0.6 floor.** The categorical blocks do not pay, and the
-question is closed rather than open.
+**Every cell is inside the ±0.6 floor** — but the two tasks are not equally informative
+and the sd column alone hides that. On rel-trial and rel-avito the standard errors are
+0.07–0.20, so those are tight nulls: an effect of half a point would have shown. On
+rel-event, SE 0.63 means five seeds could only have resolved a gap of roughly 1.3 or more,
+so the honest reading there is "no effect detected by an underpowered test", not "no
+effect". rel-event's paired variance has been the widest of the four throughout.
+
+Taken together the blocks do not pay, and on the tasks where the measurement is sharp that
+is a real answer rather than a shrug. The runner now prints SE alongside sd so this
+distinction is not left to whoever reads the table.
 
 On **rel-f1 and rel-avito every categorical variant refused to run at all** — the runner
 now exits when a requested block emits zero columns rather than scoring identical frames.
