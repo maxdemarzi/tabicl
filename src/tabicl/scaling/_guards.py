@@ -26,6 +26,10 @@ __all__ = ["assert_no_perfect_feature"]
 # around 82) that anything reaching it is a mistake rather than a result.
 PERFECT_AUC = 99.5
 
+# Rows the check samples down to. Detection is unaffected -- a perfect separator is perfect
+# on any subset -- and it keeps the guard cheap enough that nobody has a reason to skip it.
+SAMPLE_ROWS = 20_000
+
 
 def assert_no_perfect_feature(
     X: np.ndarray,
@@ -61,6 +65,15 @@ def assert_no_perfect_feature(
     y = np.asarray(y)
     if len(np.unique(y)) < 2:
         return
+    # A column that separates the target perfectly does so on any large sample of it, so
+    # the guard does not need every row -- and rel-avito has 116,598 of them across five
+    # arms, which would put a minute of AUCs in front of every run. A control that is
+    # expensive enough to be worth switching off is not a control.
+    if len(y) > SAMPLE_ROWS:
+        take = np.random.default_rng(0).choice(len(y), size=SAMPLE_ROWS, replace=False)
+        X, y = X[take], y[take]
+        if len(np.unique(y)) < 2:
+            return
     offenders = []
     for j in range(X.shape[1]):
         values = X[:, j]
