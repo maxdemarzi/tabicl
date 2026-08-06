@@ -264,7 +264,12 @@ def main() -> None:
         # strongly anti-correlated column is as informative as a correlated one.
         val_rank = task.get_table("val", mask_input_cols=False).df
         truth = val_rank[target].to_numpy()
-        shuffled = np.random.default_rng(0).permutation(truth)
+        # Several permutations, averaged. The null being estimated is "the largest AUC a
+        # block this wide reaches by chance", and that maximum is itself a random variable
+        # -- one draw of it is as noisy as the thing it is correcting for. Three is enough
+        # to stop the correction from being the loudest term, and costs only AUCs.
+        rng_null = np.random.default_rng(0)
+        shuffles = [rng_null.permutation(truth) for _ in range(3)]
 
         def best_column(block, labels):
             """Largest distance from chance any single column of this block reaches."""
@@ -295,7 +300,8 @@ def main() -> None:
             # block's own column count and missingness -- so the difference is the part
             # that is about signal. Same idea as the permutation control, applied to a
             # selection step rather than to a result.
-            signal, null = best_column(block, truth), best_column(block, shuffled)
+            signal = best_column(block, truth)
+            null = float(np.mean([best_column(block, s) for s in shuffles]))
             scored.append((signal - null, signal, null, len(block.columns), spec))
         scored.sort(key=lambda r: -r[0])
         print("child ranking on validation (best column above its own permuted null):",
