@@ -75,9 +75,12 @@ def main() -> None:
     y, y_te = train[target].to_numpy(), test[target].to_numpy()
 
     tables = db.table_dict
-    kids = [(n, fk) for n, t in tables.items()
-            for fk, pt in (t.fkey_col_to_pkey_table or {}).items()
-            if pt == entity and t.time_col][: args.children]
+    all_kids = [(n, fk) for n, t in tables.items()
+                for fk, pt in (t.fkey_col_to_pkey_table or {}).items()
+                if pt == entity and t.time_col]
+    # 0 means all, matching eval_track_record. Slicing [:0] instead gave an empty list and
+    # the run reported "0 children, 0 grandchildren" as though the schema had none.
+    kids = all_kids if args.children <= 0 else all_kids[: args.children]
 
     def grandchildren_of(child_name):
         """Tables pointing at this child, which is what depth-2 would add."""

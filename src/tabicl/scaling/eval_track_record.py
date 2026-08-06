@@ -648,21 +648,14 @@ def main() -> None:
                 if len(np.unique(y[f])) < 2:
                     continue
                 rest = np.setdiff1d(order, f, assume_unique=False)
-                # Average over the same number of context draws the final model will use.
-                # The first version fitted once regardless of --resample, so the criterion
-                # could not see the very setting it was being asked to adjudicate: it
-                # returned an identical 90.37 for 1 and 3 draws. A selection criterion must
-                # exercise whatever it is selecting over.
-                probs = None
-                for d in range(max(1, args.resample)):
-                    r2 = np.random.default_rng(seed * 7919 + d)
-                    take = r2.choice(rest, size=min(size, len(rest)), replace=False)
-                    clf = TabICLClassifier(n_estimators=args.n_estimators,
-                                           device=args.device, random_state=seed,
-                                           inference_config=NOAMP).fit(X[take], y[take])
-                    p = clf.predict_proba(X[f])[:, 1]
-                    probs = p if probs is None else probs + p
-                scores.append(roc_auc_score(y[f], probs / max(1, args.resample)) * 100)
+                # Reuse `score`, which already averages over --resample draws. The first
+                # version built its own classifier call: it ignored --resample (returning an
+                # identical 90.37 for 1 and 3 draws, so the criterion was blind to the very
+                # setting it judged) and then threw a torch TypeError the main path never
+                # hits. A selection criterion should exercise the scoring path it selects
+                # for, not a parallel reimplementation of it.
+                take = rng.choice(rest, size=min(size, len(rest)), replace=False)
+                scores.append(score(X, X[f], take, seed, truth=y[f]))
             return float(np.mean(scores)) if scores else 0.0
 
         results = []
