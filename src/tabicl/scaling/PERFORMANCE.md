@@ -71,6 +71,42 @@ AMP off, selection and scoring at the same `n_estimators`. The published figures
 presumably single-configuration, so this is the like-for-like column — an earlier
 per-task-maximum table selected on test ran about a point higher and was not comparable.
 
+## CORRECTION — our rank against the full field (2026-08-06)
+
+**The comparison table above uses three published methods. The report's Table 14 has ten
+comparable ones, and the omitted ones include methods that beat us.** RelGT is ahead on
+three of our four original tasks and has never appeared in this file. Reporting a −3.71 gap
+"vs best" while the actual field contains four methods above us is a flattering
+presentation, and it was not deliberate — it came from copying the paper's *headline*
+systems rather than its full table.
+
+Seven tasks now measured, ranked against every method the report does **not** flag as
+following a different protocol (KumoRFMv1 and RTzero are excluded on the report's own
+advice; ten methods remain, including us):
+
+| task | ours | rank | best in field | methods above us |
+|---|---:|---:|---:|---|
+| rel-event / user-repeat ◆ | 77.89 | **3 of 10** | 79.61 RelGNN | RelGNN, KumoRFMv2 |
+| rel-trial / study-outcome | 72.26 | **4 of 10** | 76.43 TabPFN-REL | TabPFN-REL, RDBLearn+v2.5, RDBLearn+v3 |
+| rel-f1 / driver-top3 | 81.98 | 6 of 10 | 85.69 RelGNN | RelGNN, RelGT, RDBLearn+v3, Griffin, KumoRFMv2 |
+| rel-event / user-ignore | 80.98 | 7 of 10 | 86.18 RelGNN | RelGNN, TabPFN-REL, Griffin, RDBLearn, GraphSAGE, RelGT |
+| rel-avito / user-visits | 65.54 | 8 of 10 | 69.41 KumoRFMv2 | KumoRFMv2, RelGT, RDBLearn+v3, TabPFN-REL, RDBLearn+v2.5, GraphSAGE, RelGNN |
+| rel-avito / user-clicks ◆ | 65.89 | 8 of 10 | 69.06 RDBLearn+v3 | RDBLearn+v3, RDBLearn, RelGT, RelGNN, KumoRFMv2, TabPFN-REL, GraphSAGE |
+| rel-f1 / driver-dnf ◆ | 69.66 | 9 of 10 | 75.87 RelGT | RelGT, RelGNN, GraphSAGE, KumoRFMv2, RDBLearn+v2.5, RDBLearn+v3, RDBLearn, TabPFN-REL |
+
+◆ new on 2026-08-06. **Median rank 7 of 10.** Ranks: 3, 4, 6, 7, 8, 8, 9.
+
+**This is a materially worse position than this file has been describing**, and the three
+new tasks are why it is now visible: running only four tasks, two of which we happen to do
+comparatively well on, made the pipeline look stronger than it is. `user-repeat` at 3rd was
+the first new result and was flattering; `driver-dnf` at 9th and `user-clicks` at 8th are
+the corrective.
+
+**One diagnostic worth keeping from `user-clicks`:** its untuned `base` arm scores **67.18**
+against the calibrated **65.89** — validation chose `+struct` (66.08) over `base` and test
+punished it by 1.29, which is four places in the field. Calibration made that task worse,
+which is the same selection bias documented throughout, showing up where it costs a rank.
+
 ## What to expect before and after calibrating (2026-08-06)
 
 The table above is the **after** column: every setting chosen on a validation split. Most
