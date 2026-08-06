@@ -73,6 +73,35 @@ five points. Pair everything.
 
 ## Run log
 
+### 2026-08-05 — selection machinery closed out: CV cannot judge resampling, at any fold scheme
+Forward-chaining folds were built because random k-folds train on the future to predict the
+past. They fail identically:
+
+| criterion | resample=1 | resample=3 |
+|---|---:|---:|
+| CV, random folds | 90.37 | **95.67** |
+| CV, time-ordered | 86.76 | **94.23** |
+| **test** | **81.69** | 80.25 |
+
+**The fold scheme was never the problem.** Both criteria gain ~7.5 points on resampling
+while test falls 1.44. The cause is structural: resampling averages over draws from the
+*training pool*, which improves in-distribution coverage substantially and transfers poorly
+to a later period. **Any criterion scored on held-out train rows will overvalue it**, so no
+arrangement of those rows fixes this.
+
+**And resampling's gain was arm-dependent.** With the arm held at `base`, resampling *hurts*
+on test: 81.69 → 80.25. The earlier +1.26 came with `+struct` selected. So "averaging over
+context draws reduces variance and helps" was too general a claim — it interacts with which
+features are present, which is not what a pure variance-reduction argument predicts and is
+reason enough to distrust the mechanism story I attached to it.
+
+**Both threads are closed.** Resampling is not adopted. No further selection machinery is
+worth building: the honest position is that a 0.3–1.3 effect cannot be selected on this
+benchmark by any instrument available here, and four measured effects stay unclaimed —
+child count (+0.87), per-key selection (+0.67), resampling on two arms. They are recorded
+as *measured but unselectable*, which is a different and more useful statement than
+"measured and adopted" or "not real".
+
 ### 2026-08-05 — context resampling: works on test, unadoptable, and CV made it worse
 Averaging predictions over independent context draws. Test improves on **3/3** tasks and the
 spread collapses on **3/3** — rel-event 80.16 → 81.42 with sd 1.98 → 0.43, rel-trial 72.32 →
