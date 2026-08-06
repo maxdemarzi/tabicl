@@ -315,8 +315,17 @@ def main() -> None:
 
         g = np.array(gaps)
         sd = g.std(ddof=1) if len(g) > 1 else 0.0
+        # Report the standard error, not only the spread. The ±0.6 floor is about a
+        # *paired gap on these tasks*, and how far a mean must sit from zero to clear it
+        # depends on the seed count: rel-event's paired sd is around 1.4, so five seeds
+        # give SE 0.63 and a gap there needs roughly 1.3 to be readable, while rel-trial's
+        # 0.44 gives SE 0.20. Two gaps of +0.5 on different tasks are not the same result,
+        # and the sd column alone invites reading them as though they were.
+        se = sd / np.sqrt(len(g)) if len(g) > 1 else 0.0
+        verdict = "clears" if abs(g.mean()) > max(0.6, 2 * se) else "inside noise"
         print(f"GATEROW\t{args.dataset}/{args.task}\t{variant}\t{g.mean():+.2f}\t"
-              f"{sd:.2f}\t{(g > 0).sum()}/{len(g)}\t{n_changed}", flush=True)
+              f"{sd:.2f}\tSE {se:.2f}\t{(g > 0).sum()}/{len(g)}\t{n_changed}\t{verdict}",
+              flush=True)
 
     print("\nGate only. +-0.6 floor, and this is test-side -- a pass earns a calibrated "
           "run, not a table entry.", flush=True)
