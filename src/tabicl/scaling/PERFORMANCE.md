@@ -399,6 +399,40 @@ those values were never validated either. And windows nearly triple the feature 
 (44 → 122 on rel-f1) and roughly double build time (27 s → 55 s on rel-avito) for a
 difference inside noise, which makes the cost argument stronger than the accuracy one.
 
+### 2026-08-06 — ensembling over configurations: no accuracy effect
+
+The idea was to route around the constraint rather than fix it. Nine effects are real on
+test and the validation split cannot rank them reliably; three instruments built to repair
+that all failed. Ensembling never has to choose — average the top N configurations by
+validation score instead of taking the argmax.
+
+Calibrated, 5 replicates, `--max-columns 4`:
+
+| task | argmax | ensemble N=5 | Δ mean | sd |
+|---|---:|---:|---:|---|
+| rel-event | 81.72 | 81.41 | **−0.31** | 1.06 → **1.45** |
+| rel-f1 | 82.18 | 82.19 | +0.01 | 1.04 → **0.41** |
+| rel-trial | 72.32 | 72.33 | +0.01 | 1.08 → 1.04 |
+
+*(rel-event at N=3: 81.45, sd 1.18 — monotone between the two.)*
+
+**No accuracy effect anywhere**, and the variance effect is inconsistent: down 2.5× on
+rel-f1, up on rel-event, flat on rel-trial. That pattern tracks how homogeneous each task's
+candidate pool is, not anything about the method — rel-f1's six candidates are near
+duplicates, so averaging removes the seed-to-seed noise of *which* gets picked, while
+rel-event's nine include genuinely weaker configurations that N=5 drags into the average.
+
+**In hindsight the null is unsurprising and the test was badly aimed.** The candidates the
+sweep offers are arms × context sizes, which sit close together; averaging configurations
+that already agree cannot produce information. The 3.9-point gap that motivated this was
+between context *orders*, which were not in the pool.
+
+So the question is narrower than it was posed: does ensembling help when the pool is
+**heterogeneous** and the argmax is **wrong**? rel-event with `--context-orders` is the one
+case in this project where both hold — the argmax there picks `recent@10000` (test 79.75)
+over `random@10000` (~82). Ensembling can only ever help by diluting a bad argmax, and the
+test above never presented it with one.
+
 ## Session close, 2026-08-06 — the table is unchanged, and that is the finding
 
 **rel-f1 81.98 · rel-event 80.98 · rel-avito 65.54 · rel-trial 72.26.** Nothing entered.
