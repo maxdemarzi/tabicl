@@ -486,6 +486,46 @@ column does **not** reproduce it, so the trigger is more specific than that. Lef
 rather than fixed: it is core inference code, a blind fix there is riskier than the bug, and
 the measurement above says we do not want NaN input regardless.
 
+### 2026-08-06 — the selection problem is BIAS, not noise, and that closes ensembling
+
+The strong version of the ensembling test: rel-event with `--context-orders` in the
+candidate pool, so the ranking spans genuinely different configurations and the argmax is
+known to pick badly there.
+
+| | argmax | ensemble N=5 |
+|---|---:|---:|
+| test | 80.30 ± 1.24 | 80.84 ± 1.52 |
+
+**+0.54 at roughly 0.5 SE on 3 replicates — null**, like the weak version before it. But
+the *reason* is visible in what it averaged. The top five by validation, every replicate:
+
+```
++struct@10000/recent, +counts@5000/recent-half, +counts@10000/recent,
++struct@5000/recent-half, +struct@10000/recent-half
+```
+
+Almost entirely recency configurations, and the argmax chose `recent` 3/3. **The whole top
+of the ranking is wrong, not just its first element.**
+
+**That is the distinction this project has been missing.** Ensembling defends against a
+*noisy* ranking — one whose ordering wobbles around the truth. rel-event's validation is
+not noisy, it is **biased**: it systematically prefers recency and larger contexts, because
+it observes a period nearer to train than test is. Averaging the top of a biased ranking
+averages several versions of the same mistake.
+
+Noise can be averaged away. Bias cannot. This explains, in one sentence, why:
+
+* three selection instruments failed, the last anti-correlated with the truth;
+* ensembling was never going to work, in either version;
+* nine effects are real on test and unclaimable;
+* and the failures were *consistent in direction* rather than scattered, which noise would
+  not produce.
+
+**Ensembling is closed.** So is the search for a better instrument built from the same
+validation split — anything derived from a biased signal inherits the bias. An instrument
+that worked would need information the split does not contain: either a later validation
+period, or knowledge of how the test distribution differs.
+
 ## Session close, 2026-08-06 — the table is unchanged, and that is the finding
 
 **rel-f1 81.98 · rel-event 80.98 · rel-avito 65.54 · rel-trial 72.26.** Nothing entered.
