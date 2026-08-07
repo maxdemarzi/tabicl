@@ -1284,11 +1284,35 @@ joint-worst placing at 8 of 10:
 it lands on the task that most needed it. Three of four user-clicks arms move together, two
 of them by about a point, which is the pattern a real feature makes rather than a lucky draw.
 
-**It is four replicates and I am not going to call it settled.** sd 0.54 and 0.60, so the
-standard error on each arm is around 0.28 and on an unpaired difference around 0.4 — a +0.66
-at that precision is suggestive, not decisive. Every large-looking result in this session
-that got more replicates moved: categories' −0.44 became +0.15, its +0.60 became +0.09. The
-confirmation run at higher replicate count is the number that counts.
+**CONFIRMED AT TWELVE REPLICATES, AND IT SHRANK: +0.39, NOT +0.66.** Paired by seed, which
+is the only denominator this file accepts:
+
+```
+depth 1  66.15 (sd 0.50)   ->   depth 2  66.54 (sd 1.03)
+paired delta +0.39   SE 0.28   t +1.37   9 of 12 positive
+per-seed:  -0.04  +1.27  +0.80  +0.59  +0.55  +0.38
+           +0.82  -0.35  +0.60  +1.66  +0.60  -2.23
+```
+
+**The reading was fixed before the run and it lands in the middle band: positive, under the
+±0.6 floor, NOT table-eligible.** So depth-2 does not enter the headline table, and
+user-clicks stays at 65.89. Writing that down beforehand is the only reason it is not being
+argued into the table now — +0.39 with 9 of 12 positive is exactly the shape that invites a
+generous reading.
+
+**The variance is the more interesting cost, and it is not visible in the mean.** Depth-2
+roughly **doubles the spread** (sd 0.50 → 1.03) and its worst seed is **63.89** against a
+depth-1 worst of 65.34. One seed loses 2.23 — larger than the mean gain, and it alone moves
+the average from +0.63 to +0.39. Seventy-five extra columns buy a better centre and a much
+worse tail, which for a default is the wrong trade even where the mean is positive.
+
+**Dropping that seed gives +0.63 and 9 of 11 positive. That is not the result** — it is
+recorded only so the number cannot be quietly rediscovered later by someone excluding an
+outlier. The result is +0.39.
+
+Every large-looking result in this session shrank on re-measurement: categories' −0.44 became
++0.15, its +0.60 became +0.09, and now +0.66 becomes +0.39. That is now four for four, and
+it is a property of how these estimates are made rather than bad luck.
 
 **Neither control moved, and both were predicted in advance.** user-visits is the same
 database and the *same* depth-2 path, and it is flat (−0.06). rel-event/user-ignore gives
