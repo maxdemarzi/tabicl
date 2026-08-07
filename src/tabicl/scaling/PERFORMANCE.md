@@ -141,19 +141,36 @@ of the column is to set an expectation a user can hold us to. Rows are therefore
 re-measured at the current default, and every row says which default it was measured at
 rather than blending the two.
 
-| task | out of the box | best block | calibrated | calibration is worth | at `max_columns` |
+| task | out of the box | best block | calibrated | calibration is worth | `max_columns` |
 |---|---:|---:|---:|---:|:--:|
-| rel-event / user-ignore | 80.22 | **82.09** `+struct` | 81.98 | **+1.76** | **4** |
-| rel-event / user-repeat | 77.13 | 77.32 `+struct` | 77.89 | +0.76 | **4** |
-| rel-f1 / driver-dnf | **69.19** | 69.19 (base only) | 68.90 | **−0.29** | **4** |
-| rel-f1 / driver-top3 | *pending* | *pending* | *pending* | *pending* | **4** |
+| rel-event / user-ignore | 80.22 | **82.09** `+struct` | 81.98 | **+1.76** | **4** (shipped) |
+| rel-event / user-repeat | 77.13 | 77.32 `+struct` | 77.89 | +0.76 | **4** (shipped) |
+| rel-f1 / driver-top3 | 82.19 | **82.66** `+struct` | 82.13 | **−0.06** | `none` ✦ |
+| rel-f1 / driver-dnf | **69.19** | 69.19 (base only) | 68.90 | **−0.29** | `none` ✦ |
 | rel-trial / study-outcome | *pending* | *pending* | *pending* | *pending* | **4** |
 | rel-avito / user-visits | *pending* | *pending* | *pending* | *pending* | **4** |
-| rel-avito / user-clicks | *pending* | *pending* | *pending* | *pending* | **4** |
+| rel-avito / user-clicks | *queued* | *queued* | *queued* | *queued* | **4** |
 
-**Three of seven measured at the current default: +1.76, +0.76, −0.29 — mean +0.74.** The
-four remaining are running or queued; `driver-top3` is the one that decides the shape of the
-answer, because it carried the +8.48 that dominated the old table.
+✦ **These two rows are NOT "out of the box" and the column header would mislead without
+this.** Both rel-f1 runs passed `--max-columns none`, the schema-level standing flag for that
+dataset, so they answer *"is calibration worth anything once the budget is already right?"*
+rather than *"what does a user get from shipped settings?"* The answer to the first is
+**no — −0.06 and −0.29**. The second needs a run at the shipped 4, which is queued. I
+labelled both rows `4` when first writing this table; that was wrong and is corrected here.
+
+**THE DECISIVE RESULT, and it splits the prediction rather than settling it.** driver-top3
+carried the +8.48 that dominated the old table, and I predicted that fixing the budget would
+collapse it. **On driver-top3 it collapses completely: +8.48 → −0.06.** Almost the entire
+apparent value of calibration on that task was one global default being wrong for that
+schema. That is the mechanism, confirmed on the task it was proposed for.
+
+**But it does not generalise, and the rel-event tasks are the counterexample.** There the
+budget was never the issue and calibration is worth *more* at the better default (+1.76,
++0.76), because a wider budget widens the gap between the default arm and the best arm. So
+the honest statement is neither "calibration is budget repair" nor "calibration is worth
++0.74": **where a global default is wrong for your schema, calibration is repairing it and
+is worth a great deal; where the defaults already fit, it is worth between −0.3 and +1.8 and
+the sign varies.** Four measured, mean **+0.54**.
 
 **The legacy figures, kept because they are what the earlier conclusions were drawn from.**
 At `max_columns=2`: driver-top3 73.50 → 81.98 (**+8.48**), rel-trial 69.56 → 72.26 (+2.70),
@@ -2420,6 +2437,13 @@ it uses for label history, so three of the seven come free.
 disappears, and the seven-task mean lands at or below zero. If instead it survives at 4,
 then per-task selection is doing something the regret analysis missed, and the central
 finding needs revisiting rather than restating.
+
+**RESOLVED — the prediction was right on the task it was made for and wrong elsewhere.** On
+rel-f1/driver-top3, the task whose +8.48 motivated the whole idea, calibration with the
+budget already correct is worth **−0.06**: the effect collapses entirely and it *was* budget
+repair. On the rel-event tasks, where the budget was never the problem, calibration is worth
+**more** at the better default, not less. See the rebuilt expectations table above. The
+paragraphs below are what was written before driver-top3 landed and are kept as the record.
 
 **THE PREDICTION IS WRONG so far, on both tasks measured at the new default.** At
 `max_columns=4`, calibration is worth **+1.76** on rel-event/user-ignore (untuned `base`
