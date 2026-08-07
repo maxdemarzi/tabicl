@@ -129,16 +129,45 @@ The table above is the **after** column: every setting chosen on a validation sp
 users will not calibrate on the first attempt, so here is what the package gives with no
 tuning at all, and what tuning on your own workload is worth.
 
-All figures are test ROC-AUC×100, 5 seeds, AMP off. "Out of the box" is the base feature
-set at shipped settings, no per-task sweep. "Best block" is the best of the optional
-feature arms, still without calibration. "Calibrated" is the standing table.
+All figures are test ROC-AUC×100, AMP off. "Out of the box" is the base feature set at
+**shipped** settings with no per-task sweep. "Best block" is the best optional feature arm,
+still uncalibrated. "Calibrated" is settings chosen on a validation split.
 
-| task | out of the box | best block | calibrated | calibration is worth |
-|---|---:|---:|---:|---:|
-| rel-f1 / driver-top3 | 73.50 | 74.05 `+struct` | **81.98** | **+8.48** |
-| rel-trial / study-outcome | 69.56 | **72.20** `+rate` | 72.26 | +2.70 |
-| rel-event / user-ignore | **80.80** | 80.39 `+struct` | 80.98 | +0.18 |
-| rel-avito / user-visits | **65.81** | 65.81 (base wins) | 65.54 | **−0.27** |
+**This table was rebuilt on 2026-08-06 and the reason matters.** Its first version covered
+four tasks at `max_columns=2`, and that is no longer the shipped default — it is now **4**,
+chosen on validation across four tasks by worst-case regret. A "what you get out of the box"
+table describing a budget we no longer ship is worse than no table, because the whole point
+of the column is to set an expectation a user can hold us to. Rows are therefore being
+re-measured at the current default, and every row says which default it was measured at
+rather than blending the two.
+
+| task | out of the box | best block | calibrated | calibration is worth | at `max_columns` |
+|---|---:|---:|---:|---:|:--:|
+| rel-event / user-ignore | 80.22 | **82.09** `+struct` | 81.98 | **+1.76** | **4** |
+| rel-event / user-repeat | 77.13 | 77.32 `+struct` | 77.89 | +0.76 | **4** |
+| rel-f1 / driver-dnf | **69.19** | 69.19 (base only) | 68.90 | **−0.29** | **4** |
+| rel-f1 / driver-top3 | *pending* | *pending* | *pending* | *pending* | **4** |
+| rel-trial / study-outcome | *pending* | *pending* | *pending* | *pending* | **4** |
+| rel-avito / user-visits | *pending* | *pending* | *pending* | *pending* | **4** |
+| rel-avito / user-clicks | *pending* | *pending* | *pending* | *pending* | **4** |
+
+**Three of seven measured at the current default: +1.76, +0.76, −0.29 — mean +0.74.** The
+four remaining are running or queued; `driver-top3` is the one that decides the shape of the
+answer, because it carried the +8.48 that dominated the old table.
+
+**The legacy figures, kept because they are what the earlier conclusions were drawn from.**
+At `max_columns=2`: driver-top3 73.50 → 81.98 (**+8.48**), rel-trial 69.56 → 72.26 (+2.70),
+user-ignore 80.80 → 80.98 (+0.18), user-visits 65.81 → 65.54 (**−0.27**), user-clicks 67.18
+→ 65.89 (**−1.29**), driver-dnf 68.99 → 69.66 (+0.67). **Mean over the four originals:
+−0.18.** Almost all of driver-top3's +8.48 was the column budget being wrong for that schema
+by 12.58 on validation — which is a bad global default repaired per task, not per-task
+selection earning its keep, and is exactly why the default was changed.
+
+**A user-facing summary that survives both tables.** Calibration is worth somewhere between
+−1.3 and +8.5 depending on your schema, it is **negative on two of seven tasks**, and the
+single biggest determinant is whether the shipped column budget suits your child tables. If
+you have a wide child table like rel-f1's `results`, tune; if your tables are narrow, the
+defaults are close to what tuning would find.
 
 **The lever that matters is schema-dependent, and that is the useful thing to tell someone
 before they start:**
@@ -159,8 +188,8 @@ So the honest expectation to set is a **range, not an uplift**: somewhere betwee
 tables are narrow will see little; one with a wide child table like rel-f1's `results` will
 see a lot.
 
-**Caveat on "out of the box", and it is a real one.** These figures use
-`eval_track_record`'s defaults — `max_columns=2`, windows on, three child tables. The
+**Caveat on "out of the box", and it is a real one.** The legacy figures use
+`eval_track_record`'s old defaults — `max_columns=2`, windows on, three child tables. The
 library's `Table` defaults are **not the same**: `max_columns=None` and `windows=()`. A user
 calling `flatten_relational` directly therefore gets no windows and no column budget, which
 on rel-f1 should land *closer* to 81.98 than the 73.50 above. The three places that define
@@ -2189,6 +2218,48 @@ Worth noting what it may also explain: RelGNN and RelGT — the two methods abov
 often — are graph models over a schema that includes the task table, so past labels can
 reach a node through message passing without anyone designing a feature. Our two worst
 placings are both rel-f1, and rel-f1 is where this signal is strongest.
+
+### 2026-08-06 — categories on user-repeat: the first effect validation agrees with
+
+Seven effects here are real-on-test and unselectable, because validation sits near train and
+test sits far. `--categories 8` on rel-event/user-repeat is the first candidate in a long
+while where **validation moves in the same direction as test**. Both arms calibrated,
+8 replicates, paired by seed:
+
+| | defaults | `--categories 8` | paired Δ | SE | t | positive |
+|---|---:|---:|---:|---:|---:|---:|
+| **validation** | 72.45 | 72.65 | **+0.20** | 0.15 | +1.34 | 5/8 |
+| **test** | 77.89 | 78.85 | **+0.96** | 0.24 | **+4.05** | 7/8 |
+
+Compare calendar, the archetype of the unselectable class: Δtest **+3.00** against Δval
+**−1.91**. Here the signs agree. Test is decisive at t = 4.05 and well outside the ±0.6
+floor; validation is positive but weak.
+
+**What the selection rule actually delivers, simulated per seed rather than assumed.**
+Choosing per replicate by validation score:
+
+* always defaults → 77.89
+* **selected on validation → 78.37** (validation picked categories 5/8)
+* always categories → 78.85
+
+**+0.48 over standing, at paired SE 0.24 — and selection leaves exactly half the available
++0.96 on the table.** That is the honest claimable number under this project's rule, and it
+is a *weaker* claim than the test-side +0.96 that would be tempting to quote.
+
+**Which points at the better move: make it a default, not a selection.** A validation signal
+this weak (t = 1.34) will keep discarding half the effect. `max_columns` was settled the same
+way — chosen across tasks by worst-case regret rather than per task — and that is the
+procedure `eval_defaults.py` already implements. Categories has now cleared on **two**
+schemas (rel-trial +0.90 at ten children, user-repeat +0.96 here) after being written off
+once on a `--children 3` measurement. **Next: run categories through the worst-case-regret
+default selection across all seven tasks.** If it is never much worse and sometimes +1, it
+belongs on by default and no selection rule is needed.
+
+**Not yet in the headline table.** 78.37 would still be 3rd of 10 on this task (RelGNN 79.61,
+KumoRFMv2 79.34), so no rank changes either way; the number goes in when the default question
+is settled, not before. One caveat travels with it: `--categories 8` produced **no columns at
+all** on rel-f1/driver-dnf and the empty-block guard refused the run rather than reporting a
+null — so "on by default" cannot mean "assume it emits something".
 
 ### 2026-08-06 — IDEA 1 REFUTED: a feature that beats the pipeline standalone adds nothing
 
