@@ -264,6 +264,28 @@ the sort broke. The accurate summary is **consistently mid-field, never leading.
 `PERFORMANCE.md` also carries the DFS baseline, a labelled best-configuration upper bound,
 and what to expect *before* calibrating.
 
+### Is tuning worth it? Measured on all seven, at shipped defaults (2026-08-06)
+
+| tuning gains | tasks |
+|---|---|
+| **+2.74, +1.76, +1.48** | rel-trial, rel-event/user-ignore, rel-f1/driver-dnf |
+| +0.76, +0.63 | rel-event/user-repeat, rel-f1/driver-top3 |
+| **−0.11, −1.29** | rel-avito/user-visits, **rel-avito/user-clicks** |
+
+Mean **+0.85**, negative on two of seven. **The number to give a customer is not the mean —
+it is the rule that predicts their case: tuning pays where the optional feature blocks pay.**
+rel-trial's best block is worth +2.63 over the default one and rel-event's +1.87; on
+rel-avito the best is +0.24 on one task and *nothing* on the other. Where there is nothing
+worth choosing between, selection picks among near-identical options on a small validation
+split and fits noise. `user-clicks` loses **1.29** that way — four places in the published
+field — and it reproduced across two independent rounds at two different defaults, so it is
+a property of the task rather than a bad draw.
+
+So: **if your schema gives the pipeline options, tune; if it does not, the shipped defaults
+are already what tuning would find, and tuning can cost you.** `--abstain` is the in-progress
+attempt to detect that case automatically rather than leaving it to judgement — it keeps a
+tuned choice only when the validation ranking still holds on a later slice of validation.
+
 **We win no task, and we hold no best cell in the field on any of the seven.** Our best
 showings are rel-event/user-repeat (3rd) and rel-trial (4th); our worst is rel-f1/driver-dnf
 at 9th, 6.21 behind. rel-trial moved 66.50 → 69.36 → 72.26 across 2026-08-04/05 and rose
