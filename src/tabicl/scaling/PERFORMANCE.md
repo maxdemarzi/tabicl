@@ -1257,12 +1257,31 @@ database and the *same* depth-2 path, and it is flat (−0.06). rel-event/user-i
 | rel-avito / user-visits | same path | −0.06 |
 | rel-event / user-ignore | best column 52.2 | +0.18, arms down |
 
-**The gate was informative here, which it was not for label history.** It said rel-event had
-nothing and rel-event had nothing. The difference from the label-history case is worth
-naming: there, the feature duplicated information the pipeline already held through
-`key_target_history`, so a high standalone score meant nothing. Here the grandchild table is
-one the pipeline never touches at any depth, so there is no incumbent for it to be redundant
-with — and that, not the size of the gate number, is what made the gate worth believing.
+**There is a better explanation than the gate, and it is structural.** Walking the
+foreign-key graph outward from the entity:
+
+| dataset | hop 1 | hop 2 | hop 3 |
+|---|---|---|---|
+| rel-avito | PhoneRequestsStream, SearchInfo, VisitStream | **SearchStream** | *none* |
+| rel-event | event_attendees, event_interest, events, user_friends | *nothing new* | *none* |
+
+**On rel-event, `event_attendees` is ALREADY a direct child of `users`** — the pipeline
+aggregates it at depth 1 on every run. The "depth-2" path `users → events → event_attendees`
+reaches a table we already had, so it added a second view of the same rows and the arms went
+slightly down, which is what paying in columns for nothing looks like. On rel-avito,
+`SearchStream` is reachable **only** at hop 2. It is the one genuinely new table, and it is
+the one that moved.
+
+**That is the same mechanism as the label-history null, and it now explains both.** Where the
+pipeline already holds the information by another route, a new view of it is worth nothing or
+less than nothing; where it does not, the feature can pay. It also gives a cheaper test than
+gating: **before building a feature, check whether the information is already reachable.**
+Label history duplicated `key_target_history`; rel-event's depth-2 duplicates a depth-1
+child. Neither needed a GPU to predict.
+
+**And depth-3 does not exist on either database**, so the natural follow-up is closed before
+it was started: RDBLearn's 2–4 hops must be reaching depth on RelBench databases we do not
+run. On these four, hop 2 is the end of the schema.
 
 **And user-visits not moving is the useful control.** Same database, same path, different
 label. `SearchStream` is the record of what was shown and clicked, so it helping *clicks* and
