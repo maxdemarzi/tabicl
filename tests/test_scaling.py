@@ -2779,3 +2779,50 @@ def test_entity_label_history_preserves_query_order():
     straight = entity_label_history(ent, vals, times, ent, times,
                                     label_horizon=pd.Timedelta(days=30))
     assert list(out["self__n_prior"]) == list(straight["self__n_prior"].iloc[order])
+
+
+# --------------------------------------------------------------------------------------
+# temporal_shift_grid -- the control's shift has to withhold something.
+#
+# rel-avito's grid degenerated to (0, 1) against a 4-day horizon: the first "control" was
+# the unshifted setting and the second withheld nothing, yet the resulting 0.0053 difference
+# was reported as a leak and excluded the whole +rate family from selection on that dataset.
+# --------------------------------------------------------------------------------------
+
+def test_temporal_shift_grid_never_returns_zero():
+    from tabicl.scaling.eval_track_record import temporal_shift_grid
+    # rel-avito: 8-day span. round(0.05*8)=0 and round(0.15*8)=1 under the old rule.
+    for horizon in (4.0, 7.0):
+        got = temporal_shift_grid(8.0, horizon)
+        assert 0 not in got, got
+        assert got, "a positive shift must exist"
+
+
+def test_temporal_shift_grid_respects_the_label_horizon():
+    from tabicl.scaling.eval_track_record import temporal_shift_grid
+    # Nothing is withheld by a shift shorter than the horizon, so no shift may be.
+    for span, horizon in ((8.0, 4.0), (8.0, 7.0), (3000.0, 365.0), (147.0, 7.0)):
+        got = temporal_shift_grid(span, horizon)
+        assert all(s >= horizon for s in got), (span, horizon, got)
+
+
+def test_temporal_shift_grid_leaves_the_long_span_tasks_alone():
+    from tabicl.scaling.eval_track_record import temporal_shift_grid
+    # rel-event (147d span, 7d horizon) and rel-f1 already had valid grids; changing the
+    # rule must not silently re-open verdicts that were reached under the old one.
+    assert temporal_shift_grid(147.0, 7.0) == (7, 22)
+    assert temporal_shift_grid(20000.0, 30.0) == (1000, 3000)
+
+
+def test_temporal_shift_grid_deduplicates():
+    from tabicl.scaling.eval_track_record import temporal_shift_grid
+    # Both fractions clamp to the horizon on a short span: that is ONE control, not two.
+    assert temporal_shift_grid(8.0, 4.0) == (4,)
+    got = temporal_shift_grid(100.0, 10.0)
+    assert len(got) == len(set(got))
+
+
+def test_temporal_shift_grid_without_a_horizon_still_moves():
+    from tabicl.scaling.eval_track_record import temporal_shift_grid
+    # --no-horizon passes 0.0; a one-day floor still beats a zero shift.
+    assert temporal_shift_grid(8.0, 0.0) == (1,)

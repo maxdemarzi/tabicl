@@ -126,6 +126,37 @@ def _numeric(df: pd.DataFrame, fit: bool = False, tag: str = "") -> np.ndarray:
     return np.nan_to_num(out.to_numpy(dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
 
 
+def temporal_shift_grid(span_days: float, horizon_days: float) -> tuple[int, ...]:
+    """How far back to move cutoffs when testing whether a feature reads the future.
+
+    A temporal control withholds outcomes by rewinding every cutoff and checking the score
+    does not improve. The shift has to land between two failure modes, and this project has
+    now hit both:
+
+    **Too large** removes every usable label, the feature goes constant, and the control
+    passes at 0.5 having tested nothing — which a hardcoded 180/365 days did on rel-event,
+    whose horizon is 7 days. Hence scaling to the task's own span.
+
+    **Too small withholds nothing**, because an outcome only becomes readable one horizon
+    after it is recorded. On rel-avito, span 8 days gave ``round(0.05*8) = 0`` and
+    ``round(0.15*8) = 1``: the first "control" was the unshifted setting itself, and the
+    only real shift was 1 day against a 4-day horizon. Coverage moved 0.572 → 0.571 — nothing
+    was withheld — and the resulting 0.0053 difference was reported as a leak, which
+    **excluded the entire `+rate` family from selection on that dataset.** rel-trial had the
+    same defect more quietly: a 150-day first shift under a 365-day horizon.
+
+    So: at least one horizon, at least one day, never zero, and deduplicated — two shifts
+    that round to the same number are one control, not two.
+
+    Returns the positive shifts only. The caller prepends 0.0, which `temporal_control`
+    requires as its unshifted reference. An empty return means no valid shift exists and the
+    control cannot say anything.
+    """
+    floor_days = max(float(horizon_days), 1.0)
+    return tuple(sorted({round(max(f * float(span_days), floor_days))
+                         for f in (0.05, 0.15)} - {0}))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("dataset", nargs="?", default="rel-trial")
@@ -794,16 +825,33 @@ def main() -> None:
     # the control passes at exactly 0.5 having tested nothing -- which is what a hardcoded
     # 180/365 days did on rel-event, whose horizon is 7 days. Coverage is printed so a
     # vacuous pass is visible rather than reassuring.
+    # ...and a shift far SMALLER than the label horizon withholds nothing, because an
+    # outcome only becomes readable one horizon after it is recorded. On rel-avito this grid
+    # degenerated completely: train span is 8 days, so round(0.05*8)=0 and round(0.15*8)=1.
+    # The first "control" was the unshifted setting itself, and the only real shift was 1 day
+    # against a 4-day horizon -- coverage moved 0.572 to 0.571, i.e. nothing was withheld --
+    # yet the 0.0053 difference that produced tripped the leak verdict and EXCLUDED the whole
+    # `+rate` family from selection on that dataset. Both ends now have a guard.
     span_days = float((train[tcol].max() - train[tcol].min()) / pd.Timedelta(days=1))
-    shifts = (0.0, round(0.05 * span_days), round(0.15 * span_days))
-    print(f"control 2: temporal (span {span_days:.0f}d, shifts {shifts[1:]}d)", flush=True)
+    horizon_days = (float(horizon / pd.Timedelta(days=1)) if horizon is not None else 0.0)
+    candidates = temporal_shift_grid(span_days, horizon_days)
+    shifts = (0.0, *candidates)
+    print(f"control 2: temporal (span {span_days:.0f}d, horizon {horizon_days:.0f}d, "
+          f"shifts {tuple(candidates)}d)", flush=True)
+    if not candidates:
+        print("  *** control CANNOT RUN: no shift is both positive and at least one "
+              "horizon. Any verdict here would be about nothing.", flush=True)
     base_cov = float(rate_block(y).notna().mean())
-    for s in shifts[1:]:
+    for s in candidates:
         cov = float(rate_block(y, shift=s).notna().mean())
         print(f"  coverage at -{s:.0f}d: {cov:.3f} (unshifted {base_cov:.3f})", flush=True)
         if base_cov > 0 and cov < 0.1 * base_cov:
             print("  *** control is VACUOUS at this shift -- nearly all labels removed, "
                   "so a pass proves nothing", flush=True)
+        elif base_cov > 0 and abs(cov - base_cov) < 0.01 * base_cov:
+            print("  *** shift withholds essentially NOTHING (coverage moved <1%), so a "
+                  "LEAK verdict here is an artefact of the fill value, not evidence",
+                  flush=True)
     temporal = temporal_control(lambda days: rate_only_score(y, shift=days), shifts=shifts)
     print(f"  {temporal!r}", flush=True)
 
