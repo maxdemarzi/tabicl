@@ -378,6 +378,16 @@ def main() -> None:
                          "has exactly one outcome and coverage is 0.0%%. The pool is the "
                          "fitting split only, and a row cannot read its own label because "
                          "that label resolves one horizon after its own cutoff.")
+    ap.add_argument("--explicit-blocks", action="store_true", default=True,
+                    help="treat an empty feature block as a fatal error (the default). A "
+                         "block that was asked for and emitted nothing reports +0.00 with "
+                         "sd 0.00 and reads exactly like a clean null -- that is how depth-2 "
+                         "was 'measured at no effect' for a week. Pass --no-explicit-blocks "
+                         "when a block is enabled as a DEFAULT rather than requested, since "
+                         "categories emits nothing on four of the seven tasks here and a "
+                         "default must not crash on a schema it does not fit.")
+    ap.add_argument("--no-explicit-blocks", dest="explicit_blocks", action="store_false",
+                    help="see --explicit-blocks.")
     ap.add_argument("--abstain", action="store_true",
                     help="don't tune when the validation ranking cannot be trusted. Splits "
                          "validation by time, picks the winner on the EARLY half, and keeps "
@@ -624,12 +634,27 @@ def main() -> None:
             reported.add(label)
             got = [c for c in frame.columns if c.endswith(suffix)]
             if not got:
-                raise SystemExit(
-                    f"--{label.split()[0]} was requested but the {label} emitted no columns, "
-                    f"so any gap measured here would be an artefact of an empty block. "
-                    f"Likely the --category-share gate ({args.category_share}) rejected "
-                    f"every categorical column as free text."
+                # ABORT when a human asked for the block, SKIP when it is only a default.
+                # An explicitly requested empty block reporting +0.00 is how depth-2 was
+                # "measured at no effect" for a week, so that case must stop the run. But a
+                # default cannot abort: categories emits nothing on FOUR of the seven tasks
+                # here -- both rel-avito and both rel-f1, where --category-share rejects
+                # every categorical column as free text -- and a user on such a schema would
+                # get a crash instead of a model.
+                message = (
+                    f"the {label} emitted no columns. Likely the --category-share gate "
+                    f"({args.category_share}) rejected every categorical column as free "
+                    f"text, which is a fact about this schema rather than a failure."
                 )
+                if args.explicit_blocks:
+                    raise SystemExit(
+                        f"--{label.split()[0]} was requested but {message} Any gap measured "
+                        f"here would be an artefact of an empty block."
+                    )
+                print(f"NOTE: {message} Continuing without it -- this arm is therefore "
+                      f"identical to the one without the flag, and any difference between "
+                      f"them is noise.", flush=True)
+                continue
             print(f"{label}: {len(got)} columns over "
                   f"{len({c.split('__')[0] for c in got})} child tables", flush=True)
 

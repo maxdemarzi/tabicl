@@ -2340,13 +2340,39 @@ categorical column as free text and the empty-block guard refuses the run rather
 reporting the +0.00 that an empty block would otherwise produce. That refusal is a result
 about the schema, not a failure.
 
-**Which looks like a clean case for switching it on by default, and is not yet one.** All of
-the above is **test-side**, and choosing a default from test is the trap this file exists to
-avoid. `max_columns=4` was settled on validation across four tasks by worst-case regret;
-categories has to be settled the same way or it is not settled. The one task with both
-numbers is user-repeat: validation **+0.20** (t 1.34) against test +0.96 (t 4.05) — the same
-sign, but far weaker on the side that is allowed to decide. Validation runs for user-ignore
-and rel-trial are in flight.
+**Settled on validation, as a default must be — and the answer is less clean than the
+test-side table.** Paired per seed on the `base` arm at matched context, under the calibrated
+protocol:
+
+| task | **validation** Δ | SE | positive | calibrated **test** Δ |
+|---|---:|---:|---:|---:|
+| rel-trial / study-outcome | **+1.12** | 0.22 | 21/24 | +0.60 |
+| rel-event / user-repeat | +0.25 | 0.07 | 24/36 | **+0.93** |
+| rel-event / user-ignore | +0.26 | 0.18 | 13/18 | **−0.44** |
+
+**Validation is positive on all three and negative on none, so the worst-case regret of
+switching categories on — measured the way `max_columns=4` was — is zero.** That is a
+legitimate basis for a default, and it is the only evidence allowed to choose one.
+
+**But test disagrees on rel-event/user-ignore, and I am not going to hide behind the
+procedure.** Validation says +0.26 there; the calibrated test result is **−0.44**. Note also
+that categories *helped* that task's plain arms (+1.02 on `base`, +0.75 on `+struct`) and
+still lost once selection was in the loop — the wider grid changed what validation picked,
+for the worse. Across the three applicable tasks the test mean is **+0.36**; across all seven
+it is **+0.16**, since four cannot use it at all.
+
+**So the honest position is that the evidence is mixed, and the procedure that says
+"switch it on" is the same procedure this file has spent the session showing is
+systematically wrong on this benchmark.** Choosing a user-facing default on the weaker signal
+purely because it is the admissible one would be following the letter of the discipline
+against its point. **Recommended but not flipped; this is the maintainer's call**, and it
+should be made knowing that one of three measurable tasks gets worse.
+
+**user-repeat is confirmed at 12 replicates**: +0.93 test (against +0.96 at 8), so that one
+is solid rather than a lucky draw. **rel-trial's 73.39** is its best number recorded here,
+but it is `--children 0 --categories 8` — the child-table change is worth +0.53 of it and
+categories +0.60, so it is not a categories result alone and does not belong in the headline
+table as one.
 
 **A design consequence that holds regardless of how that lands.** The empty-block guard
 currently **aborts** the run, which is right for an explicitly requested block — an empty one
