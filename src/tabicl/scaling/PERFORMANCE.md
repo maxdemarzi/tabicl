@@ -1221,6 +1221,51 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-07 — CORRECTION: depth-2 is available on half the benchmark, and our own guard is what blocks it
+
+The entry below concludes depth-2 is "not available, on all four tasks, for three different
+reasons". **Two of those three reasons are ours, not the data's**, and reading RDBLearn —
+whose default is `max_depth: 2` — is what forced the re-check. Its own table says so plainly:
+rel-event and rel-avito are listed as blocked by the **"ambiguous-cutoff guard"**, which is
+this package refusing to build depth-2 when entity keys repeat, because `flatten_relational`
+supports depth-2 only for unique entity keys and `asof_statistics` — the path that *does*
+handle repeated keys via per-row cutoffs — has no depth-2 at all.
+
+That is a limitation of our implementation. The data is there:
+
+| dataset | depth-2 path | grandchild rows | (grandchild, cutoff) pairs | **precede the cutoff** |
+|---|---|---:|---:|---:|
+| rel-event | `users → events → event_attendees` | 8,430,002 | 2,546,594 | **25.8%** |
+| rel-event | `users → events → event_interest` | 14,978 | 535 | **33.8%** |
+| rel-avito | `UserInfo → SearchInfo → SearchStream` | 7,107,277 | 15,774,915 | **23.8%** |
+
+**About a quarter of the depth-2 data is legitimately usable on both datasets**, against
+**0 of 158,246** on rel-trial. The rel-trial finding below is correct and stands — that
+subtree *is* the label. It simply does not generalise, and the entry below treats one proven
+case and two guard-hits as though they were the same finding.
+
+**What the corrected statement is:**
+
+* **rel-f1** — genuinely unavailable, the schema has no timestamped depth-2. Unchanged.
+* **rel-trial** — genuinely unavailable, the whole subtree postdates the cutoff. Unchanged.
+* **rel-event and rel-avito** — **available, roughly a quarter of pairs usable, and unbuilt.**
+
+**This covers four of our seven tasks, including both rel-avito tasks — our two worst
+placings at 8 of 10.** And the specific unused table there is `SearchStream`, the stream of
+items shown in searches, on a task about whether the user *clicks*. rel-event's is
+`event_attendees`, on tasks about whether a user engages with events.
+
+**The construction is simpler than the general depth-2 problem**, which is why the guard was
+overcautious. A single cutoff governs the whole query: for an entity at cutoff *t*, take
+grandchild rows with their own timestamp before *t*, reached through the child link. That is
+a two-hop link materialisation followed by an ordinary depth-1 as-of aggregation keyed by
+entity — no per-child cutoff arithmetic, so no ambiguity for repeated keys. The child link
+should be time-filtered too (`link_times`, as `key_target_history` already does), so a
+membership formed after *t* cannot admit its grandchildren.
+
+Cost is the real constraint: 15.8M pairs on rel-avito. The as-of scan is `O(n log n)` and
+`max_columns` already bounds width, so it is affordable, but it is the first thing to measure.
+
 ### 2026-08-05 — depth-2 cannot be measured on this benchmark, and now for a proven reason
 
 Not "measured at no effect". Not available, on all four tasks, for three different reasons:
