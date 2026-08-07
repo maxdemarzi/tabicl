@@ -2266,6 +2266,48 @@ often — are graph models over a schema that includes the task table, so past l
 reach a node through message passing without anyone designing a feature. Our two worst
 placings are both rel-f1, and rel-f1 is where this signal is strongest.
 
+### 2026-08-07 — RDBLearn teardown: four concrete differences, and we already tried two of them
+
+The backbone ladder said our 2.60 deficit is not the model, which points at featurization.
+RDBLearn is the right comparison — same shape as us, beats our average — and until now this
+file's understanding of it came from one sentence in the TabPFN-3 report
+(*"automatically flattening the underlying database into a table"*). It has its own paper
+(arXiv 2602.18495) and a repository. Read against what we do:
+
+| | RDBLearn | us |
+|---|---|---|
+| depth | **DFS `max_depth: 2`** by default; the report says 2–4 hops per task | **1 hop** — depth-2 closed here as unavailable |
+| label history | **on by default** — training `X` and `y` injected as a *table into the database*, so DFS aggregates outcomes at depth ("mean past CTR per ad") | both pieces exist (`key_target_history`, `entity_label_history`), both **off**, per-entity only |
+| timestamps | **on by default** — absolute time columns converted to differences from the cutoff | entity datetime columns are **dropped entirely** ([`eval_track_record.py:577`]) |
+| context | `max_train_samples: 10_000` | 10,000 — same |
+
+**The timestamp difference is real and I gated it immediately, because it is the cheapest of
+the three: we throw the information away and they keep it.** Standalone test AUC of
+`cutoff − value` in days, on the entity columns we discard:
+
+| task | column dropped | AUC | coverage | after cutoff |
+|---|---|---:|---:|---:|
+| rel-event / user-ignore | `joinedAt` (account tenure) | **57.90** | 100% | 0.0% |
+| rel-f1 / driver-top3 | `dob` (driver age) | 54.23 | 100% | 0.0% |
+| rel-trial / study-outcome | `start_date` | 49.11 | 100% | 0.0% |
+| rel-avito / user-clicks | *none exist* | — | — | — |
+
+**Weak, and clean.** No column has any value after its cutoff, so there is no leak here —
+this is genuinely discarded signal, not avoided risk. But one column per task on three of
+four datasets, topping out at 57.90, is a small lever. Today's label-history result forbids
+reading that either way: 85.35 standalone became +0.08, and 65.20 became +0.79, so standalone
+AUC does not bound marginal contribution in *either* direction. It is a three-line change, so
+it is worth an A/B rather than an argument — but it is not where 2.60 points are.
+
+**The two that matter are depth and label history, and we have run at both.** Label history
+was measured today and contributed +0.08 on the arm the protocol selects — but *our* version
+was per-entity, while theirs is injected as a table so aggregations reach it **through the
+schema at depth**, which is a strictly larger feature class and the one thing our version
+could not express. **Depth-2 was closed here as structurally unavailable** — on rel-trial 0
+of 158,246 grandchild rows precede the cutoff — and RDBLearn's *default* is depth 2. Those
+two statements are hard to reconcile and one of them is wrong. That is the thread worth
+pulling next.
+
 ### 2026-08-06 — DEFAULT CHANGED: `--children` 3 → 0, because 3 was not reproducible
 
 `--children 3` was a hardcoded slice that "was never chosen". Counting what it actually does
