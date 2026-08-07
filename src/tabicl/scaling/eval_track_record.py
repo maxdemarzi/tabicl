@@ -1204,7 +1204,18 @@ def main() -> None:
         v_order = np.argsort(val[tcol].to_numpy(), kind="stable")
         va_cut = max(1, int(0.6 * len(v_order)))
         va_early, va_late = v_order[:va_cut], v_order[va_cut:]
-        if args.abstain:
+        # Abstention needs an ordinary validation column to split. `--cv-folds` scores on
+        # train folds and `--gap-validation` on a pseudo-validation set carved out of train,
+        # so neither produces the val predictions this reads -- and gap-validation is
+        # refuted anyway.
+        split_halves = bool(args.abstain) and not args.cv_folds and not args.gap_validation
+        if args.abstain and not split_halves:
+            raise SystemExit(
+                "--abstain needs the ordinary validation column and cannot be combined with "
+                "--cv-folds or --gap-validation. Silently ignoring it would report an "
+                "abstention run that never abstained."
+            )
+        if split_halves:
             print(f"\nabstention: validation split by time into {len(va_early)} early / "
                   f"{len(va_late)} late rows", flush=True)
 
@@ -1251,6 +1262,19 @@ def main() -> None:
                             # features are identical to the ones test will see.
                             v = score(arms[name][0], arms[name][0][pseudo_val], rows, seed,
                                       truth=y[pseudo_val])
+                        elif split_halves:
+                            # ONE fit, then three AUCs off the same predictions: the whole
+                            # validation set and each time-ordered half. Taking the probs
+                            # and deriving `v` from them is what makes --abstain free; a
+                            # second `score()` call here would refit the model and double
+                            # the grid's cost, which is what it did when first written.
+                            p_va = score(arms[name][0], val_arms[name], rows, seed,
+                                         truth=y_va, return_probs=True)
+                            v = roc_auc_score(y_va, p_va) * 100
+                            split_val[(name, size, order)] = tuple(
+                                roc_auc_score(y_va[idx], p_va[idx]) * 100
+                                if len(np.unique(y_va[idx])) > 1 else float("nan")
+                                for idx in (va_early, va_late))
                         else:
                             v = score(arms[name][0], val_arms[name], rows, seed, truth=y_va)
                         label = f"{name}/{order}" if len(orders) > 1 else name
@@ -1259,20 +1283,9 @@ def main() -> None:
                         candidates.append((v, name, size, order))
                         if best is None or v > best[0]:
                             best = (v, name, size, order)
-                        if args.abstain and not args.cv_folds and not args.gap_validation:
-                            # Same fit, scored on each half of validation separately, so
-                            # this costs one extra AUC rather than another model.
-                            p_va = score(arms[name][0], val_arms[name], rows, seed,
-                                         truth=y_va, return_probs=True)
-                            halves = []
-                            for idx in (va_early, va_late):
-                                halves.append(roc_auc_score(y_va[idx], p_va[idx]) * 100
-                                              if len(np.unique(y_va[idx])) > 1
-                                              else float("nan"))
-                            split_val[(name, size, order)] = tuple(halves)
             val_auc, name, size, order = best
 
-            if args.abstain and split_val:
+            if split_halves and split_val:
                 # Pick on the EARLY half, then ask whether that pick survives on the LATE
                 # half against the untuned arm. A winner that cannot beat `base` out of
                 # sample is a winner the ranking invented, and taking it is how user-clicks
