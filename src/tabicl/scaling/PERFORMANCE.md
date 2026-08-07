@@ -1221,6 +1221,52 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-07 — RE-MEASURED on fixed arms: the features work, the selection step eats most of it
+
+Every A/B here was re-paired from per-seed tables that were already in the logs — no GPU, the
+data was printed all along and read from the wrong block. On fixed configurations the arms
+correlate at **r = 0.87–0.99**, so these standard errors are the real ones:
+
+| comparison | arm | calibrated (as reported) | **fixed arms** | SE | t | r |
+|---|---|---:|---:|---:|---:|---:|
+| depth-2, user-clicks | `+struct` | *(+0.39 overall)* | **+1.03** | 0.46 | +2.23 | +0.95 |
+| depth-2, user-clicks | `+counts` | | **+0.98** | 0.33 | +2.94 | +0.97 |
+| depth-2, user-clicks | `base` | | +0.22 | 0.15 | +1.49 | +0.99 |
+| siblings, driver-dnf | `base` | +0.61 (t 0.81) | **+1.81** | 0.60 | +3.00 | −0.22 |
+| categories, user-ignore | `base` | +0.15 | **+1.02** | 0.32 | +3.19 | +0.93 |
+| depth-2, user-visits | all | −0.06 | +0.39 / −0.12 / +0.33 | | | |
+| siblings, driver-top3 | `base` | −4.01 | **−4.52** | 0.37 | −12.4 | +0.13 |
+
+**The features are real and roughly three times larger than I reported.** depth-2 is worth
+about **+1.0** on the two arms that carry it, not +0.39. Siblings are worth **+1.81** on
+driver-dnf, not +0.61. Both clear the ±0.6 floor comfortably; neither did when measured
+through the selection step.
+
+**And that gap is itself the finding.** A feature worth +1.0 on a fixed configuration
+delivers **+0.39** once the calibrated protocol picks the configuration. The selection step
+is not merely noisy — it is *losing roughly 60% of a real gain*, which is the same
+"selection is the binding constraint" conclusion this file reached from the other direction,
+now with a number attached.
+
+**Both measurements are needed and they answer different questions.** Fixed arms say *does
+the feature work* (yes, +1.0). Calibrated says *does it reach a user* (+0.39). **The headline
+table must keep using the calibrated number**, because that is what ships — so depth-2 still
+does not enter it, and user-clicks stays at 65.89. Nothing about this re-analysis promotes a
+number into the table; it changes what we know about the features, not what we can claim.
+
+**Caveats that survive.** depth-2's arms are 4 seeds (t = 2.94 is p ≈ 0.06). The
+winner's-curse discount applies to all of it, since these are quantities I chose to re-examine
+because they looked promising. And siblings on driver-dnf shows r = −0.22 even on a fixed
+arm — that task's baseline is genuinely unstable (sd 2.05), so its +1.81 rests on 8 noisy
+pairs.
+
+**The parser that produced this table was wrong on its first run and reported +17.66 on a
+task whose entire range is two points**, because it flushed a pending seed table only at the
+next arm header and never at a block boundary, so one task's last arm was paired against the
+next task's first. It now asserts that no delta exceeds 8 points — on this benchmark any such
+number is a parsing bug, not a discovery. Caught by the size being absurd, which is luck; a
+two-point misattribution would have read as a result.
+
 ### 2026-08-07 — we have been measuring through the selection step, and it costs a factor of three
 
 Every effect measured this session shrank on re-measurement — +0.66→+0.39, +0.60→+0.09,
