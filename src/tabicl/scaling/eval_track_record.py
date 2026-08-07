@@ -30,6 +30,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import sys
 import math
 import time
 import warnings
@@ -91,8 +92,12 @@ STANDING_FLAGS = {
     # exactly three timestamped child tables, so the old default took all of them and the
     # flag changed nothing; naming it there would imply a difference that does not exist and
     # send someone hunting for it.
-    "rel-trial": ["--max-columns 2", "--children 3"],
-    "rel-event": ["--timed-links-only", "--max-columns 2"],
+    # `--categories 0` is listed for rel-trial and rel-event only: the default moved 0 -> 8
+    # and those are the two datasets where categories emits anything at all. On rel-avito and
+    # rel-f1 the block is empty either way, so naming it there would imply a difference that
+    # does not exist.
+    "rel-trial": ["--max-columns 2", "--children 3", "--categories 0"],
+    "rel-event": ["--timed-links-only", "--max-columns 2", "--categories 0"],
     "rel-avito": ["--max-columns 2"],
     "rel-f1": ["--max-columns none"],
 }
@@ -292,12 +297,19 @@ def main() -> None:
                          "children, not how many -- the count has been swept, the identity "
                          "never has. --top-keys does exactly this for link tables and "
                          "measured them 53 to 82 apart on rel-event.")
-    ap.add_argument("--categories", type=int, default=0,
+    ap.add_argument("--categories", type=int, default=8,
                     help="emit a per-category proportion block for each categorical child "
                          "column: the N most frequent values plus an 'other' bucket. 0 is "
-                         "off, which is what every standing number was measured under -- "
-                         "this runner has never set top_k_categories, so the histogram has "
-                         "been dead code in production since it was written.")
+                         "off. DEFAULT CHANGED 0 -> 8 on 2026-08-07. Chosen on VALIDATION "
+                         "across the three tasks where it applies, as max_columns was: "
+                         "rel-trial +1.12 (SE 0.22), user-repeat +0.25 (SE 0.07), "
+                         "user-ignore +0.26 (SE 0.18) -- positive on all three, negative on "
+                         "none, worst-case regret zero. Calibrated TEST at 12 replicates "
+                         "agrees: +0.93, +0.09, +0.15, none negative, though only "
+                         "user-repeat clears the +-0.6 floor. On the other FOUR tasks (both "
+                         "rel-avito, both rel-f1) it emits no columns at all and is skipped "
+                         "with a note, so it cannot hurt them. Every standing number "
+                         "predates this and was measured at 0.")
     ap.add_argument("--category-share", type=float, default=0.5,
                     help="minimum share of non-null rows the codebook must capture before a "
                          "column gets a histogram. Below it the column is free text in "
@@ -659,7 +671,13 @@ def main() -> None:
                     f"({args.category_share}) rejected every categorical column as free "
                     f"text, which is a fact about this schema rather than a failure."
                 )
-                if args.explicit_blocks:
+                # Was this block ASKED FOR, or is it just on by default? argparse cannot
+                # tell -- `--categories 8` and the default 8 are the same namespace -- and
+                # the distinction decides whether an empty block aborts or is skipped.
+                # sys.argv can tell, so it does.
+                flag = "--" + label.split()[0]
+                asked = any(a.split("=")[0] == flag for a in sys.argv[1:])
+                if args.explicit_blocks and asked:
                     raise SystemExit(
                         f"--{label.split()[0]} was requested but {message} Any gap measured "
                         f"here would be an artefact of an empty block."
