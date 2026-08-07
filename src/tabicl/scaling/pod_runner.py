@@ -19,6 +19,7 @@ makes this scriptable without touching the web console.
 
 from __future__ import annotations
 
+import os
 import argparse
 import pathlib
 import subprocess
@@ -31,7 +32,12 @@ HOME = pathlib.Path.home()
 TOKEN = HOME / ".runpod" / "token.txt"
 PUBKEY = HOME / ".ssh" / "id_ed25519.pub"
 KEY = HOME / ".ssh" / "id_ed25519"
-NAME = "tabicl-bench"
+# One name per concurrent run. `_find` matches on this and `terminate` kills what it finds,
+# so two cycles sharing a name means either can tear down the other's pod mid-experiment --
+# and a pod that outlives its job bills by the second. Set TABICL_POD_NAME to run more than
+# one at a time; the default is unchanged, so an existing cycle with the variable unset
+# behaves exactly as before and can still find and terminate its own pod.
+NAME = os.environ.get("TABICL_POD_NAME", "tabicl-bench")
 
 # 48 GB matches the card the memory numbers in DESIGN.md were measured on, at a third of
 # the L40S price. Ampere is slower per-flop but the workload was 90s there, so it is not

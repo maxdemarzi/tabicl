@@ -841,17 +841,30 @@ def main() -> None:
     if not candidates:
         print("  *** control CANNOT RUN: no shift is both positive and at least one "
               "horizon. Any verdict here would be about nothing.", flush=True)
-    base_cov = float(rate_block(y).notna().mean())
+    base_vals = rate_block(y)
+    base_cov = float(base_vals.notna().mean())
+    # Coverage is a poor proxy for "did this shift withhold anything". On rel-avito a full
+    # 4-day rewind moves coverage only 0.572 -> 0.568, because users have dense histories and
+    # dropping four days rarely removes a user's LAST event -- but it can still change what
+    # every rate is computed over. What matters is whether the feature VALUES moved.
+    moved = 0.0
     for s in candidates:
-        cov = float(rate_block(y, shift=s).notna().mean())
-        print(f"  coverage at -{s:.0f}d: {cov:.3f} (unshifted {base_cov:.3f})", flush=True)
+        sh = rate_block(y, shift=s)
+        cov = float(sh.notna().mean())
+        a, b = base_vals.to_numpy(dtype=float), sh.to_numpy(dtype=float)
+        both_nan = np.isnan(a) & np.isnan(b)
+        changed = float(np.mean(~(both_nan | np.isclose(np.nan_to_num(a), np.nan_to_num(b)))))
+        moved = max(moved, changed)
+        print(f"  coverage at -{s:.0f}d: {cov:.3f} (unshifted {base_cov:.3f}); "
+              f"{changed:.1%} of rows changed value", flush=True)
         if base_cov > 0 and cov < 0.1 * base_cov:
             print("  *** control is VACUOUS at this shift -- nearly all labels removed, "
                   "so a pass proves nothing", flush=True)
-        elif base_cov > 0 and abs(cov - base_cov) < 0.01 * base_cov:
-            print("  *** shift withholds essentially NOTHING (coverage moved <1%), so a "
-                  "LEAK verdict here is an artefact of the fill value, not evidence",
-                  flush=True)
+    # A control that changed almost nothing tested almost nothing, and must not be allowed to
+    # veto an arm. Excluding a feature on an untested basis is treating absence of evidence
+    # as evidence -- which is exactly what barred rel-avito's `+rate` family, on a 0.0053
+    # difference produced by a 1-day rewind against a 4-day horizon.
+    temporal_informative = moved >= 0.05
     temporal = temporal_control(lambda days: rate_only_score(y, shift=days), shifts=shifts)
     print(f"  {temporal!r}", flush=True)
 
@@ -903,13 +916,21 @@ def main() -> None:
     # features. A pure text embedding derives from entity columns, not from any label, so
     # the permutation and temporal controls have nothing to say about it -- and a control
     # that cannot make a feature's value move cannot clear it either.
-    ok = {"base": True,
-          "+text": True,
-          "+text+rate": perm.passed and temporal.passed and temporal_counts.passed,
+    # An indeterminate temporal control does not veto. See `temporal_informative` above:
+    # a control whose shift changed under 5% of feature values tested almost nothing, and
+    # excluding an arm on that basis treats absence of evidence as evidence.
+    temporal_ok = temporal.passed or not temporal_informative
+    if not temporal.passed and not temporal_informative:
+        print(f"  NOTE: the temporal control returned LEAK but changed only {moved:.1%} of "
+              f"feature values, so it is INDETERMINATE and is not excluding anything. Any "
+              f"arm below carrying `+rate` is untested on this axis, not cleared by it.",
+              flush=True)
+    ok = {"base": True, "+text": True,
+          "+text+rate": perm.passed and temporal_ok and temporal_counts.passed,
           "+struct": temporal_struct.passed,
           "+counts": temporal_counts.passed,
-          "+rate": perm.passed and temporal.passed and temporal_counts.passed,
-          "+history": perm.passed and temporal.passed and temporal_counts.passed
+          "+rate": perm.passed and temporal_ok and temporal_counts.passed,
+          "+history": perm.passed and temporal_ok and temporal_counts.passed
                       and temporal_struct.passed}
     print(f"\narm eligibility: {ok}", flush=True)
     if not any(v for k, v in ok.items() if k != "base"):
