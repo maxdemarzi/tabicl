@@ -27,13 +27,13 @@ field is shown here, with our rank in it.
 
 | task | **ours** | rank | best-cfg ‡ | DFS † | RelGNN | RelGT | GraphSAGE | Griffin | RDBLearn | +v2.5 | +v3 | KumoRFMv2 | TabPFN-REL |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| rel-event / user-repeat ◆ | **77.89** | **3/10** | — | — | **79.61** | 76.09 | 76.89 | 71.88 | 75.04 | 75.55 | 76.81 | 79.34 | 77.11 |
+| rel-event / user-repeat ◆ | **77.89** | **3/10** | 78.58 ⁿ²¹ | — | **79.61** | 76.09 | 76.89 | 71.88 | 75.04 | 75.55 | 76.81 | 79.34 | 77.11 |
 | rel-trial / study-outcome | **72.26** | **4/10** | 73.56 | 69.12 | 71.24 | 68.61 | 68.60 | 51.00 | 71.58 | 72.90 | 72.89 | 72.03 ˟ | **76.43** |
 | rel-f1 / driver-top3 | **81.98** | 6/10 | 84.61 | 76.81 | **85.69** | 83.52 | 75.54 | 82.50 | 79.69 | 77.60 | 82.72 | 82.09 | 79.98 |
 | rel-event / user-ignore | **80.98** | 7/10 | 86.77 | 77.95 | **86.18** | 81.57 | 81.62 | 83.27 | 82.52 | 78.65 | 73.70 | 78.86 | 85.38 |
 | rel-avito / user-visits | **65.54** | 8/10 | 66.21 | 65.81 | 66.18 | 66.78 | 66.20 | 60.70 | 65.49 | 66.47 | 66.76 | **69.41** ˟ | 66.68 |
 | rel-avito / user-clicks ◆ | **65.89** | 8/10 | 68.19 ⁿ²⁰ | — | 68.23 | 68.30 | 65.90 | 45.90 | 69.04 | 65.72 | **69.06** | 67.42 ˟ | 67.09 |
-| rel-f1 / driver-dnf ◆ | **69.66** | 9/10 | — | — | 75.29 | **75.87** | 72.62 | 57.70 | 70.87 | 71.72 | 71.72 | 72.03 | 70.74 |
+| rel-f1 / driver-dnf ◆ | **69.66** | 9/10 | 69.95 ⁿ⁶ | — | 75.29 | **75.87** | 72.62 | 57.70 | 70.87 | 71.72 | 71.72 | 72.03 | 70.74 |
 | **average** ¶ | **73.46** | **6/10** | — | — | **76.06** | 74.39 | 72.48 | 64.71 | 73.46 | 72.66 | 73.38 | 74.45 | 74.77 |
 
 **Median rank 7 of 10.** Ranks: 3, 4, 6, 7, 8, 8, 9. Bold in the comparison columns marks
@@ -2212,11 +2212,28 @@ Calibrated: user-ignore 81.98 → 82.28 (**+0.30**), user-repeat 77.89 → 77.07
 positive on 1 of 8, 1 of 8 and 0 of 8. On user-ignore it helps only on `base` and does
 nothing on `+struct`, which is the arm the calibrated protocol actually selects.
 
+**The control confirms it from the opposite direction.** rel-f1/driver-dnf was included as a
+control because its test-side gate was the *weakest* of the three — 65.20 standalone against
+a 69.66 pipeline, 35% coverage, and a median staleness of 2,486 days. It is the only one of
+the three where label history **helps**: `base` 69.19 → 69.98 (**+0.79**), calibrated 68.90
+→ 69.24 (+0.34, 5 replicates, inside the floor).
+
+| task | standalone test AUC | Δ on `base` | Δ on the selected arm |
+|---|---:|---:|---:|
+| rel-event / user-ignore | **85.35** (best) | +0.90 | +0.08 |
+| rel-event / user-repeat | 78.61 | −0.62 | **−0.71** |
+| rel-f1 / driver-dnf | **65.20** (worst) | **+0.79** | +0.34 |
+
+**The ordering by standalone AUC is the reverse of the ordering by contribution.** Best
+standalone contributes nothing; worst standalone contributes most.
+
 **The mechanism is redundancy, and it is legible.** `+struct` is the `key_target_history`
 block — other entities' outcomes reached through a shared key, plus structural counts. Where
 that block is present, label history adds +0.08; where it is absent (`base`), it adds +0.90.
-It is recovering information the pipeline already had in another form, not contributing new
-information.
+And **rel-f1 has no candidate keys at all** — its `means:` line carries only a `base` arm,
+because there is no shared-key track record to build. That is exactly the schema where this
+feature is not redundant, and it is exactly the schema where it helps. Three tasks, one
+mechanism, no exceptions.
 
 **THE LESSON, and it qualifies the rule this whole project runs on.** "Gate before you
 build" has been the standing discipline here and it is still right, but a gate measures
@@ -2227,11 +2244,19 @@ better than our entire pipeline, better than eight of the ten published methods 
 quantity that matters and only a paired A/B against the real feature set measures it.
 Nothing about the earlier gates was wrong; they simply cannot answer this.
 
-**Kept, not reverted.** `entity_label_history` and `--label-history` stay in the tree, off
-by default, with this entry attached. The construction is correct, the tests pin the
-self-exclusion guarantee, and it is the natural feature for a schema *without* a shared-key
-track record — which is what `base` at +0.90 measures. On rel-trial it remains structurally
-unavailable. It does not enter the headline table on any task.
+**Kept, not reverted, and now with a rule for when to reach for it.** `entity_label_history`
+and `--label-history` stay in the tree, off by default. The construction is correct, the
+tests pin the self-exclusion guarantee, and the three tasks agree on when it earns its
+place: **use it when the schema has no shared foreign key to build a track record from, and
+skip it when `key_target_history` already applies.** rel-f1 is the first case, rel-event the
+second, and rel-trial cannot use it at all. Nothing here is table-eligible: +0.34 on
+driver-dnf at 5 replicates is inside the ±0.6 floor and the calibrated protocol did not
+select it.
+
+**One number in the earlier entries is now known to be a poor predictor and stays on the
+page anyway.** The 85.35 that motivated all of this is a correct measurement of the wrong
+quantity, and leaving it visible with the outcome attached is more useful than editing it
+down to look prescient.
 
 ### 2026-08-06 — best-cfg for rel-avito/user-clicks, and two tasks I threw away
 
@@ -2314,11 +2339,19 @@ when the default improved, not less.
 The reason is visible in the arms: the untuned `base` number barely moved (80.80 → 80.22)
 while the calibrated number rose a full point (80.98 → 81.98). A wider column budget did not
 make the default configuration better — it enlarged the gap between the default arm and the
-best arm, and selection is what captures that. So "fix the defaults and stop selecting" is
-**not** supported by these two tasks, and the recorded prediction should be read as refuted
-rather than quietly dropped. rel-avito and rel-f1 at the new default are still outstanding
-and could move the average back; that is the remaining test, not a reason to restate the
-conclusion now.
+best arm, and selection is what captures that.
+
+**rel-f1/driver-dnf, measured in the same round, goes the other way: −0.29** (untuned `base`
+69.19 against calibrated 68.90). Three tasks at current defaults now read **+1.76, +0.76,
+−0.29 — mean +0.74**, against −0.18 for the four measured at `max_columns=2`.
+
+So "fix the defaults and stop selecting" is **not** supported, and the recorded prediction
+should be read as refuted rather than quietly dropped. The honest current statement is
+narrower than either the prediction or its opposite: **per-task calibration is worth roughly
++0.7 on average with the sign flipping by task, and it is worth more at a better default,
+not less.** rel-avito and rel-trial at `max_columns=4` are outstanding and both were
+*negative* at the old default, so the mean can still move. What is already clear is that the
+mechanism I proposed — calibration as budget repair — is not what is happening.
 
 ### 2026-08-06 — label history on TEST: the gate ranked the tasks backwards
 
