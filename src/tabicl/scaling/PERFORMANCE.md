@@ -2284,6 +2284,26 @@ time I did it after writing the other four up.** The earlier four were `tail -60
 `tee`s the run to `/workspace/work.log` on the pod, so a truncated local log is survivable
 as long as the pod is still up, and the launcher no longer pipes through `tail` at all.
 
+**A NEW LEAD, and the strongest thing in this round: `--categories 8` on
+rel-event/user-repeat.** Its three arms score 78.49 / 78.58 / 78.56 against 77.07 / 77.26 /
+77.11 at defaults — **about +1.4, consistent across all three arms**, comfortably outside the
+±0.6 floor, and it supplies the whole of that task's best-cfg cell. Categorical blocks were
+written off here once already on a `--children 3` measurement and then cleared at ten
+children on rel-trial (+0.90), so this is the second schema where they matter and the first
+where the margin is this size. It is a **test-side** number, which on this benchmark is the
+beginning of the question rather than the end — seven effects are already real-on-test and
+unselectable. The next run should be a calibrated one on user-repeat with categories in the
+grid, to find out which of those two things this is.
+
+**The parser I wrote to avoid transcription errors made a worse one.** It read the reference
+suffix on rel-event's output lines — `(ours 77.89, TabPFN-REL 77.11, RelGNN 79.61, ...)` —
+as though those were our own configurations, and reported **BEST-CFG 79.61**, which is
+RelGNN's published score, as ours. It was caught only because the winning "configuration"
+was named `topkeys/RelGNN`. A competitor's number that did not carry a method name in the
+label would have passed straight into the table. Fixed by stripping everything from the
+first `(`. Twelfth defect in this project, and the second where a tool built to enforce
+care was itself the thing that was careless.
+
 **A note on what `best-cfg` is worth as a number.** It is a max over 21 noisy scores, and a
 max over K noisy draws is biased upward with the bias growing in K. The original four tasks'
 cells came from every variant ever run on them — far more than 21 — so those cells are
