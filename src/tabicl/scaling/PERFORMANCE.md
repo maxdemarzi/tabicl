@@ -143,20 +143,22 @@ rather than blending the two.
 
 | task | out of the box | best block | calibrated | calibration is worth | `max_columns` |
 |---|---:|---:|---:|---:|:--:|
+| rel-trial / study-outcome | 69.56 | **72.19** `+rate` | 72.30 | **+2.74** | **4** (shipped) |
 | rel-event / user-ignore | 80.22 | **82.09** `+struct` | 81.98 | **+1.76** | **4** (shipped) |
 | rel-event / user-repeat | 77.13 | 77.32 `+struct` | 77.89 | +0.76 | **4** (shipped) |
-| rel-f1 / driver-top3 | 82.19 | **82.66** `+struct` | 82.13 | **−0.06** | `none` ✦ |
-| rel-f1 / driver-dnf | **69.19** | 69.19 (base only) | 68.90 | **−0.29** | `none` ✦ |
-| rel-trial / study-outcome | *pending* | *pending* | *pending* | *pending* | **4** |
-| rel-avito / user-visits | *pending* | *pending* | *pending* | *pending* | **4** |
-| rel-avito / user-clicks | *queued* | *queued* | *queued* | *queued* | **4** |
+| rel-f1 / driver-top3 | 82.19 | **82.66** `+struct` | 82.13 | −0.06 | `none` ✦ |
+| rel-avito / user-visits | 65.61 | **65.85** `+rate` | 65.50 | −0.11 | **4** (shipped) |
+| rel-f1 / driver-dnf | **69.19** | 69.19 (base only) | 68.90 | −0.29 | `none` ✦ |
+| rel-avito / user-clicks | *running* | *running* | *running* | *running* | **4** |
+
+**Six of seven: mean +0.80, negative on three, and inside the ±0.6 floor on three.**
 
 ✦ **These two rows are NOT "out of the box" and the column header would mislead without
 this.** Both rel-f1 runs passed `--max-columns none`, the schema-level standing flag for that
 dataset, so they answer *"is calibration worth anything once the budget is already right?"*
 rather than *"what does a user get from shipped settings?"* The answer to the first is
-**no — −0.06 and −0.29**. The second needs a run at the shipped 4, which is queued. I
-labelled both rows `4` when first writing this table; that was wrong and is corrected here.
+**no — −0.06 and −0.29**. Runs at the shipped 4 are in flight. I labelled both rows `4` when
+first writing this table; that was wrong and is corrected here.
 
 **THE DECISIVE RESULT, and it splits the prediction rather than settling it.** driver-top3
 carried the +8.48 that dominated the old table, and I predicted that fixing the budget would
@@ -164,13 +166,27 @@ collapse it. **On driver-top3 it collapses completely: +8.48 → −0.06.** Almo
 apparent value of calibration on that task was one global default being wrong for that
 schema. That is the mechanism, confirmed on the task it was proposed for.
 
-**But it does not generalise, and the rel-event tasks are the counterexample.** There the
-budget was never the issue and calibration is worth *more* at the better default (+1.76,
-+0.76), because a wider budget widens the gap between the default arm and the best arm. So
-the honest statement is neither "calibration is budget repair" nor "calibration is worth
-+0.74": **where a global default is wrong for your schema, calibration is repairing it and
-is worth a great deal; where the defaults already fit, it is worth between −0.3 and +1.8 and
-the sign varies.** Four measured, mean **+0.54**.
+**But it does not generalise.** rel-trial gains **+2.74** and rel-event +1.76 and +0.76,
+where the budget was never the issue — on those a wider budget widens the gap between the
+default arm and the best arm, and selection is what captures that. So the honest statement
+is neither "calibration is budget repair" nor a single average: **where a global default is
+wrong for your schema, calibration repairs it and is worth a great deal; where the defaults
+already fit, it ranges from −0.3 to +2.7 and the sign varies by schema.**
+
+**The clearest pattern is not the average — it is which datasets gain.** rel-trial and
+rel-event gain; both rel-avito tasks and both rel-f1 tasks do not. **Calibration pays where
+the optional feature blocks pay.** rel-trial's best block is `+rate` at +2.63 over base and
+rel-event's is `+struct` at +1.87; on rel-avito the best block is worth +0.24 and on rel-f1
+driver-dnf there are no optional blocks at all. Selection has something to choose between on
+the first two and nothing on the last two, which is a better predictor of whether tuning is
+worth your time than any average of the column.
+
+**One thing the table shows that the calibrated protocol missed.** On rel-avito/user-visits
+the best block is `+rate` at **65.85** — better than base 65.61 and better than the
+calibrated 65.50. The selection rule had that arm available and did not take it. That is the
+same selection bias documented throughout, and it is worth noting that `+rate` here is the
+User → Ad → User similarity feature, eligible on this task but excluded on user-clicks by
+the broken control fixed above.
 
 **The legacy figures, kept because they are what the earlier conclusions were drawn from.**
 At `max_columns=2`: driver-top3 73.50 → 81.98 (**+8.48**), rel-trial 69.56 → 72.26 (+2.70),
