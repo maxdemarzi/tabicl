@@ -1346,13 +1346,19 @@ def main() -> None:
                     # pure veto, which is what its help text promises.
                     #
                     # It did not start that way, and the difference was visible: with the
-                    # veto firing ZERO times, rel-trial still moved 72.30 -> 72.19 and
-                    # user-clicks 66.03 -> 66.18, because the arm was silently selecting on
-                    # the early 60% of validation rather than on all of it. That made the
-                    # A/B two variables instead of one. (Incidentally it priced the second:
-                    # selecting on 60% of validation costs about nothing, mean +0.01 over
-                    # three tasks -- validation *size* is not the binding constraint here
-                    # either.)
+                    # veto firing ZERO times, the arms still differed, because this branch
+                    # was silently replacing the pick with the winner on the early 60% of
+                    # validation rather than the argmax over all of it. That made the A/B
+                    # two variables instead of one.
+                    #
+                    # Incidentally it priced the second, and the price is NOT negligible --
+                    # selecting on 60% of validation instead of 100%, with the veto never
+                    # firing, cost +0.15 / 0.00 / -0.11 / **-0.70** on user-clicks,
+                    # user-visits, rel-trial and user-ignore: **mean -0.17, worst -0.70**.
+                    # An earlier note here called it "about nothing, mean +0.01" from the
+                    # first three; user-ignore changed that. Any future instrument that
+                    # spends part of validation on a meta-decision is paying this, and on
+                    # rel-event it exceeds the +-0.6 floor.
                     if abstained:
                         name, size, order = chosen_k
                         val_auc = next(c[0] for c in candidates
