@@ -4,6 +4,37 @@ Written on stopping, so this can be picked up cold. `STATUS.md` is the current s
 `DESIGN.md` the history log. Nothing here is blocking — the branch is committed, tested
 (176 passed, 1 skipped) and pushed.
 
+## DECISIONS WAITING ON THE MAINTAINER (2026-08-07)
+
+Four items where the measurement is done and the call is someone else's. Each says what the
+evidence is and what it does *not* settle.
+
+1. **Align the library's `Table.max_columns` to 4.** The runner default was changed on
+   validation across four tasks by worst-case regret: 4 is never more than 2.13 off the best
+   value for a task, against 19.13 for the old hardcoded 2 and 6.12 for the library's
+   `None`. **The library still ships `None`**, so `flatten_relational` called directly does
+   not match the runner. Three places defined a default and disagreed; two now agree.
+
+2. **Categories on by default: recommended, not flipped.** Validation is positive on all
+   three tasks where it applies and negative on none, so its worst-case regret is zero —
+   the same procedure that settled `max_columns`. **But calibrated test is +0.60, +0.93 and
+   −0.44**, and it emits no columns at all on the other four tasks. The procedure says yes;
+   one of three measurable tasks gets worse. Deliberately left to a human, because choosing
+   a user-facing default on the admissible-but-weaker signal is the letter of the discipline
+   against its point. The guard a default needs is already in (`--no-explicit-blocks`).
+
+3. **The TabICL `feature_mask` bug, documented and not fixed.** `predict_proba` builds
+   `feature_mask` over the input feature space and indexes it against a filter fitted in a
+   reduced one. Reachable only when a test column is entirely NaN. `allow_nan = True`
+   advertises support that path does not deliver.
+
+4. **`eval_backbone.py` needs a `TABPFN_TOKEN`.** The runner is written and tested; `tabpfn`
+   ≥ 6.0.0 will not download weights without a registered priorlabs.ai account with the
+   licence accepted. The 2.x line is ungated but is a generation below what every peer
+   method uses. Until then, the nearest evidence is RDBLearn's own three rows: a backbone
+   generation on fixed features is worth **+0.72 average, sd 3.16**, against our 2.60
+   deficit — and it is *negative* on the task where our peer gap is largest.
+
 ## 0. AMP contaminates every GPU number — re-measure before comparing
 
 `use_amp=True` is the default in all three inference configs and costs **7.3 AUC** on
