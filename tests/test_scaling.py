@@ -3009,3 +3009,45 @@ def test_two_hop_table_dedupes_a_non_unique_link():
     out = asof_statistics(tbl, np.array(["d"]),
                           pd.to_datetime(pd.Series([t + pd.Timedelta(days=10)])).to_numpy())
     assert out.filter(like="count").iloc[0, 0] == 2
+
+
+# --------------------------------------------------------------------------------------
+# paired.py -- stop computing paired deltas by hand over ssh.
+# --------------------------------------------------------------------------------------
+
+def test_paired_refuses_unequal_replicate_counts(tmp_path, capsys):
+    from tabicl.scaling import paired
+    # Truncating to the shorter run is the exact mistake this exists to prevent: a
+    # 10-of-12 pairing nearly reported +0.63 where the 12-seed answer was +0.39, because
+    # the two dropped seeds included the one bad draw.
+    with pytest.raises(SystemExit, match="not paired runs"):
+        paired.report([1.0, 2.0, 3.0], [1.0, 2.0])
+
+
+def test_paired_reads_perseed_blocks_in_order(tmp_path):
+    from tabicl.scaling import paired
+    p = tmp_path / "run.log"
+    p.write_text("noise\nPERSEED\t1.0\t2.0\nmore noise\nPERSEED\t3.0\t4.0\n", encoding="utf-8")
+    assert paired.read_perseed(str(p)) == [[1.0, 2.0], [3.0, 4.0]]
+
+
+def test_paired_reports_the_floor_verdict(capsys):
+    from tabicl.scaling import paired
+    paired.report([66.0] * 6, [66.3] * 6)          # +0.30, inside the floor
+    assert "INSIDE the +-0.6 floor" in capsys.readouterr().out
+    paired.report([66.0] * 6, [67.0] * 6)          # +1.00, outside it
+    assert "above the +-0.6 floor" in capsys.readouterr().out
+
+
+def test_paired_surfaces_a_variance_change_the_mean_hides():
+    from tabicl.scaling import paired
+    import io, contextlib
+    # driver-dnf's real shape: mean barely moves, spread collapses.
+    a = [70.02, 68.34, 65.60, 69.18, 71.34, 69.59, 71.17, 72.04]
+    b = [71.20, 70.16, 69.76, 70.77, 69.84, 70.78, 70.03, 69.65]
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        paired.report(a, b)
+    out = buf.getvalue()
+    assert "spread 2.05 -> 0.57" in out
+    assert "worst seed 65.60 -> 69.65" in out

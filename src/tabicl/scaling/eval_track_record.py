@@ -1647,6 +1647,13 @@ def main() -> None:
         print(f"\n{args.dataset}/{args.task}  CALIBRATED TEST ROC-AUC x100 = {aucs.mean():.2f} "
               f"+- {aucs.std(ddof=1) if len(aucs) > 1 else 0:.2f} over {len(aucs)} "
               f"replicates (range {aucs.min():.2f}-{aucs.max():.2f})", flush=True)
+        # PER-SEED, on one machine-readable line, because every A/B here is a PAIRED
+        # comparison and the summary sd above is the wrong denominator for it -- that
+        # mistake once turned a 4.7-SE result into an undecided 1.6. Until now the per-seed
+        # values had to be scraped back out of the log by hand over ssh, which is how a
+        # 10-of-12 pairing nearly got reported as the 12-seed answer. One line, and the step
+        # where the arithmetic goes wrong disappears.
+        print("PERSEED	" + "	".join(f"{v:.4f}" for v in aucs), flush=True)
         # Machine-readable line so a table can be assembled across tasks without re-running.
         print(f"TABLEROW\t{args.dataset}/{args.task}\t{len(train)}\t{len(val)}\t{len(test)}"
               f"\t{vals.mean():.2f}\t{vals.std(ddof=1) if len(vals) > 1 else 0:.2f}"
