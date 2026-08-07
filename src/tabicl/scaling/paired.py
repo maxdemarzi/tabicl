@@ -41,6 +41,51 @@ def read_perseed(path: str) -> list[list[float]]:
     return out
 
 
+def read_arms(path: str) -> dict:
+    """Per-seed scores for each FIXED-configuration arm: ``{arm: [[seed0, seed1, ...], ...]}``.
+
+    **Prefer these over `read_perseed`.** Two runs of a fixed configuration correlate at
+    ``r = 0.88-0.94`` across seeds on this benchmark, so pairing cuts the standard error by
+    **2.4-3.0x**. Two CALIBRATED runs correlate at ``r = 0.34`` and ``-0.03``: the selection
+    step chooses a different configuration per seed in each arm, so "seed i" is not the same
+    experiment and pairing recovers nothing. Measuring a feature through the selection step
+    throws away a factor of three, and is a large part of why so little here has resolved.
+    """
+    arms: dict = {}
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if line.startswith("PERSEED_ARM	"):
+                parts = line.strip().split("	")
+                arms.setdefault(parts[1], []).append([float(v) for v in parts[2:]])
+    return arms
+
+
+# Prior scale for the shrinkage below. Effects measured in this project sit almost entirely
+# within +-1 AUC point, and the +-0.6 floor says anything under that is unresolvable anyway,
+# so a prior standard deviation of 0.5 states what this benchmark actually produces rather
+# than being a tuned constant. Deliberately visible: change it here and every reported
+# correction changes at once.
+PRIOR_SD = 0.5
+
+
+def shrink(delta: float, se: float, prior_sd: float = PRIOR_SD) -> float:
+    """Pull an estimate toward zero by its own noise: posterior mean under a N(0, prior).
+
+    A first look is a **screen**, not an estimate. Following up only on what looked large
+    guarantees regression to the mean, and this project has measured its own rate: +0.66
+    became +0.39, +0.60 became +0.09, -0.44 became +0.15. That is the winner's curse. It is
+    not a flaw in any single measurement and no amount of care within one run removes it.
+
+    What removes it is not screening: fix the replicate budget in advance and run once.
+    Where a screen has already happened, this is what the number is worth after discounting
+    it by its own standard error.
+    """
+    if not np.isfinite(se) or se <= 0:
+        return float(delta)
+    return float(delta) * prior_sd ** 2 / (prior_sd ** 2 + se ** 2)
+
+
+
 def report(a: list[float], b: list[float], label: str = "") -> None:
     if len(a) != len(b):
         # Truncating to the shorter is exactly the mistake this tool exists to prevent: the
@@ -60,6 +105,16 @@ def report(a: list[float], b: list[float], label: str = "") -> None:
           f"{int((d > 0).sum())}/{len(d)} positive")
     print(f"  spread {x.std(ddof=1):.2f} -> {y.std(ddof=1):.2f}   "
           f"worst seed {x.min():.2f} -> {y.min():.2f}")
+    r = float(np.corrcoef(x, y)[0, 1]) if len(x) > 2 else float("nan")
+    unpaired = float(np.sqrt(x.var(ddof=1) + y.var(ddof=1)) / np.sqrt(len(d)))
+    print(f"  r(A,B) {r:+.2f}   pairing gains {unpaired / se:.1f}x over unpaired")
+    if np.isfinite(r) and r < 0.5:
+        print("  ** LOW CORRELATION: these arms are barely paired. If this is a CALIBRATED "
+              "comparison, re-run it on fixed-configuration arms -- selection varies per "
+              "seed and destroys the pairing, costing about 3x in SE. **")
+    sh = shrink(d.mean(), se)
+    print(f"  shrunk {sh:+.2f}   (a screened estimate regresses; observed here "
+          f"+0.66->+0.39, +0.60->+0.09)")
     verdict = ("above the +-0.6 floor" if abs(d.mean()) >= 0.6
                else "INSIDE the +-0.6 floor -- not resolvable, and not table-eligible")
     print(f"  {verdict}")

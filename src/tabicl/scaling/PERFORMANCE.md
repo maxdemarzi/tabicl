@@ -1221,6 +1221,49 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-07 — we have been measuring through the selection step, and it costs a factor of three
+
+Every effect measured this session shrank on re-measurement — +0.66→+0.39, +0.60→+0.09,
+−0.44→+0.15 — and almost nothing has been resolvable against the ±0.6 floor. Two causes, one
+of which is a straightforward mistake.
+
+**THE MISTAKE: A/B comparisons were run on the CALIBRATED arm, where pairing does not work.**
+Pairing only reduces variance when the two arms correlate across seeds. Measured:
+
+| comparison | r(A,B) | pairing gains |
+|---|---:|---:|
+| calibrated, siblings on driver-dnf | **−0.03** | 1.0× — *nothing* |
+| calibrated, depth-2 on user-clicks | +0.34 | 1.1× |
+| **fixed configuration**, `base` arm | **+0.88** | **2.7×** |
+| **fixed configuration**, `+struct` arm | **+0.90** | **2.4×** |
+| **fixed configuration**, `+counts` arm | **+0.94** | **3.0×** |
+
+**The calibrated protocol re-selects a configuration per seed, so "seed *i*" is not the same
+experiment in both arms** — different arm, different context size, sometimes a different
+feature block. The common random numbers that pairing depends on are destroyed by the very
+step being measured through. On fixed configurations the same seeds correlate at 0.88–0.94
+and pairing is worth **2.4–3.0× on the standard error**, which is 6–9× the replicates for
+free.
+
+**So: measure features on fixed-configuration arms; use the calibrated arm only for the
+headline number.** The runner now prints `PERSEED_ARM` per arm and `PERSEED` for the
+calibrated block, and `tabicl.scaling.paired` reports the correlation alongside the delta and
+**warns when r < 0.5** — the diagnostic that would have caught this months ago.
+
+**THE OTHER CAUSE IS NOT A MISTAKE AND CANNOT BE FIXED BY MEASURING BETTER.** Following up
+only on what looked large guarantees regression to the mean: that is the winner's curse, and
+this project has now measured its own rate at roughly 40–60%. The remedy is procedural —
+**fix the replicate budget in advance and run once**, rather than screening then confirming.
+Where a screen has already happened, `paired.shrink` discounts the estimate by its own
+standard error under an explicit N(0, 0.5) prior. On today's numbers it reads siblings on
+driver-dnf as **+0.19** rather than +0.61, which is the honest value of a t = 0.81 result.
+
+**What this implies for everything measured before today.** Every A/B in this file that was
+run on the calibrated arm carries roughly three times the standard error it needed to, so the
+nulls are weaker evidence than they look — "no effect" at SE 0.8 is not much of a claim.
+The seven real-on-test-but-unselectable effects, and several of the four ideas refuted today,
+deserve re-measurement on fixed arms before being treated as closed.
+
 ### 2026-08-07 — the traversal covers one of four shapes, and that is the real finding
 
 Depth-2 was found by asking what RDBLearn does that we do not. Asking the same question of

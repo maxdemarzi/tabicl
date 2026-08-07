@@ -1720,6 +1720,15 @@ def main() -> None:
         print(f"{hi} over {lo}: mean {g.mean():+.2f} sd "
               f"{g.std(ddof=1) if len(g) > 1 else 0:.2f} over {len(g)} seeds, "
               f"{(g > 0).sum()}/{len(g)} positive", flush=True)
+    # PER ARM, machine-readable, one line each. These are the numbers a cross-run A/B should
+    # be computed from -- NOT the calibrated block's. Measured on this benchmark: two runs of
+    # a FIXED configuration correlate at r = 0.88-0.94 across seeds, so pairing cuts the
+    # standard error by 2.4-3.0x; two CALIBRATED runs correlate at r = 0.34 and -0.03,
+    # because the selection step picks a different configuration per seed in each arm and
+    # "seed i" is no longer the same experiment. Pairing through the selection step buys
+    # nothing, which is why every effect in this project has been so hard to resolve.
+    for name, vals in results.items():
+        print(f"PERSEED_ARM	{name}	" + "	".join(f"{v:.4f}" for v in vals), flush=True)
     means = ", ".join(f"{k} {np.mean(v):.2f}" for k, v in results.items())
     print(f"means: {means}  ({REFERENCE.get((args.dataset, args.task), 'see PERFORMANCE.md')})",
           flush=True)
