@@ -1245,6 +1245,18 @@ def two_hop_table(
     if child_time_column:
         reserved[child_time_column] = "__link_time"
     link = child[list(reserved)].dropna(subset=[child_pk, child_fk]).rename(columns=reserved)
+    # ONE row per (entity, join value). When `child_pk` really is the child's primary key
+    # this is already true and the dedup is free. It is not true for the other traversal this
+    # supports: reaching a SIBLING table through a shared parent, where the link is something
+    # like results[[driverId, constructorId]] with a row per race. Without this, every
+    # grandchild row is duplicated once per race the driver drove for that constructor, which
+    # silently reweights every aggregate by how often the pair occurs.
+    #
+    # Earliest link wins, matching `key_target_history`: a membership exists from the first
+    # time it is recorded, so a later re-appearance must not delay what the entity can see.
+    if "__link_time" in link.columns:
+        link = link.sort_values("__link_time", kind="stable")
+    link = link.drop_duplicates(subset=["__link_pk", "__link_fk"], keep="first")
     merged = grandchild.merge(link, left_on=grandchild_fk, right_on="__link_pk", how="inner")
     if child_time_column:
         # Later of the two: the grandchild has resolved AND the membership exists.

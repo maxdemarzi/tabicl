@@ -2985,3 +2985,27 @@ def test_two_hop_table_survives_a_shared_column_name():
     out = asof_statistics(tbl, np.array(["a"]),
                           pd.to_datetime(pd.Series([t + pd.Timedelta(days=5)])).to_numpy())
     assert out.filter(like="count").iloc[0, 0] == 1
+
+
+def test_two_hop_table_dedupes_a_non_unique_link():
+    """Reaching a SIBLING table through a shared parent, where the link repeats.
+
+    rel-f1: drivers -> results -> constructorId -> constructor_results. The link
+    `results[[driverId, constructorId]]` has one row per race, so without dedup each
+    grandchild row is counted once per race the driver drove for that constructor -- every
+    aggregate silently reweighted by how often the pair occurs.
+    """
+    from tabicl.scaling import two_hop_table, asof_statistics
+    import pandas as pd
+    t = pd.Timestamp("2021-01-01")
+    # one driver, one constructor, THREE races -> the link repeats three times
+    link = pd.DataFrame({"parent": [7, 7, 7], "entity": ["d", "d", "d"],
+                         "ltime": [t, t + pd.Timedelta(days=1), t + pd.Timedelta(days=2)]})
+    sib = pd.DataFrame({"parent": [7, 7], "stime": [t, t + pd.Timedelta(days=1)],
+                        "pts": [10.0, 20.0]})
+    tbl = two_hop_table(sib, "parent", link, "parent", "entity", "s",
+                        time_column="stime", child_time_column="ltime")
+    assert len(tbl.df) == 2, "each sibling row must appear once, not once per race"
+    out = asof_statistics(tbl, np.array(["d"]),
+                          pd.to_datetime(pd.Series([t + pd.Timedelta(days=10)])).to_numpy())
+    assert out.filter(like="count").iloc[0, 0] == 2

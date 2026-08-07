@@ -424,6 +424,17 @@ def main() -> None:
                          "rel-trial, and rel-avito has no such columns. A column whose value "
                          "lies after the cutoff is dropped with a note, decided once on the "
                          "fitting frame so the feature space cannot differ across splits.")
+    ap.add_argument("--siblings", action="store_true",
+                    help="aggregate tables that hang off a PARENT referenced by one of the "
+                         "entity's children -- sibling tables through a shared parent. The "
+                         "traversal here only ever went entity->child->grandchild, so these "
+                         "were unreachable at any depth. On rel-f1 that is the constructor's "
+                         "entire record: we predict whether a driver fails to finish with "
+                         "nothing about the car. Gated on test before building: one "
+                         "constructor column scores 68.0 on driver-dnf against a 69.66 "
+                         "pipeline, and 74.0 on driver-top3 against 81.98, both at 100%% "
+                         "coverage. Reachability is not novelty, though -- a driver's own "
+                         "results already encode car quality, so the margin may be small.")
     ap.add_argument("--depth2", action="store_true",
                     help="aggregate grandchild tables reached through each child. Recorded "
                          "here as unavailable on the whole benchmark; that was true of "
@@ -647,6 +658,38 @@ def main() -> None:
                       include_mode=args.mode)
             blocks.append(asof_statistics(t, frame[key].to_numpy(),
                                           frame[tcol].to_numpy()).add_prefix(f"{n}__"))
+            if args.siblings:
+                # SIBLING tables, reached through a parent this child references. The
+                # traversal so far only ever went entity -> child -> grandchild, so a table
+                # hanging off a child's PARENT was unreachable at any depth. On rel-f1 that
+                # is the whole of the constructor's record: we predict whether a driver
+                # fails to finish with nothing at all about the car. Gated first -- one
+                # constructor column scores 68.0 on driver-dnf against a 69.66 pipeline.
+                ctab = db.table_dict[n]
+                for pcol, ptab_name in (ctab.fkey_col_to_pkey_table or {}).items():
+                    if ptab_name == entity:
+                        continue                      # that is the link to the entity itself
+                    for sname, stab in db.table_dict.items():
+                        sfks = stab.fkey_col_to_pkey_table or {}
+                        if sname == n or ptab_name not in sfks.values():
+                            continue
+                        if stab.time_col is None:
+                            continue                  # untimed: nothing bounds the cutoff
+                        sfk = next(k for k, v in sfks.items() if v == ptab_name)
+                        sib = two_hop_table(
+                            stab.df, sfk, ctab.df, pcol, fk, f"{n}_{ptab_name}_{sname}",
+                            time_column=stab.time_col, child_time_column=tc,
+                            windows=WINDOWS, max_columns=max_cols,
+                            top_k_categories=args.categories or None,
+                            min_category_share=args.category_share,
+                            numeric_booleans=args.numeric_booleans,
+                            budget_categoricals=args.budget_categoricals,
+                            time_deltas=args.time_deltas, include_mode=args.mode)
+                        sibling_built.setdefault(split, []).append(
+                            f"{n}->{ptab_name}->{sname} ({len(sib.df):,} rows)")
+                        blocks.append(asof_statistics(
+                            sib, frame[key].to_numpy(),
+                            frame[tcol].to_numpy()).add_prefix(f"{sname}_via_{ptab_name}__"))
             if args.depth2:
                 # Grandchildren reached THROUGH this child. `two_hop_table` relabels them by
                 # the entity and keeps their own clock, so this is an ordinary depth-1 as-of
@@ -707,6 +750,7 @@ def main() -> None:
         return out
 
     depth2_built: dict = {}
+    sibling_built: dict = {}
     reported = set()
 
     def _audit_requested_blocks(frame, split="train"):
@@ -733,6 +777,17 @@ def main() -> None:
         # defects each emitted +0.00 with sd 0.00 -- output indistinguishable from a careful
         # null. A list of the paths actually materialised is the cheapest defence against
         # repeating that.
+        if args.siblings and f"siblings {split}" not in reported:
+            reported.add(f"siblings {split}")
+            built = sibling_built.get(split, [])
+            if not built:
+                raise SystemExit(
+                    "--siblings was requested but no sibling table was built: no child of "
+                    "the entity references a parent that has another TIMESTAMPED child. An "
+                    "empty block scores +0.00 with sd 0.00 and reads like a careful null."
+                )
+            print(f"siblings [{split}]: {len(built)} path(s) -- {'; '.join(built)}",
+                  flush=True)
         if args.depth2 and f"depth2 {split}" not in reported:
             reported.add(f"depth2 {split}")
             built = depth2_built.get(split, [])
