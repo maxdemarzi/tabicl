@@ -2424,10 +2424,24 @@ arms came back identical (81.54 both) — a no-op rather than a contaminated gai
 guard working as designed, and it also means the 57.90 gate figure was never usable.
 
 **So the feature is live only on rel-f1 (`dob` → driver age) and rel-trial (`start_date`),
-both clean on all three splits.** One column each, gated at 54.23 and 49.11 — small, and
-today's label-history result forbids reading a weak standalone either way, since 85.35 became
-+0.08 and 65.20 became +0.79. It is a three-line change, so it is worth an A/B rather than an
-argument, but it is not where 2.60 points are.
+both clean on all three splits.** Measured, calibrated, paired by seed:
+
+| task | without | with | Δ | note |
+|---|---:|---:|---:|---|
+| rel-event / user-ignore | 81.54 | 81.54 | **0.00** | guard dropped `joinedAt` |
+| rel-event / user-repeat | 78.85 | 78.85 | **0.00** | guard dropped `joinedAt` |
+| rel-f1 / driver-top3 | 82.13 | 82.19 | +0.06 | `dob` kept; `base` arm +0.33 |
+| rel-trial / study-outcome | 73.39 | 73.40 | +0.01 | `start_date` kept |
+
+**Refuted.** Where the columns are admissible they are worth nothing, and where they might
+have been worth something the guard correctly refuses them. The two exact zeros are the guard
+doing its job — identical feature spaces produce identical numbers, which is also a decent
+check that the flag does nothing when it says it does nothing.
+
+**Kept, off by default.** Three lines, correct, with a guard that caught a 35%-future-dated
+column on its first real run. The next schema may have a `signup_date` that matters; this one
+does not. The RDBLearn difference is real and the information genuinely was being discarded —
+it simply is not worth anything on these four databases.
 
 **The two that matter are depth and label history, and we have run at both.** Label history
 was measured today and contributed +0.08 on the arm the protocol selects — but *our* version
