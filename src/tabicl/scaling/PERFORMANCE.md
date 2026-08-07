@@ -2304,13 +2304,40 @@ validation internally is refuted by this result, not just this one.** That is a 
 than `--abstain`: it covers held-out-validation splits, val-internal cross-validation, and
 ranking-stability checks generally.
 
-**What is not explained, and is now the open question.** The late half of validation scores
-66–67, the same range as test, so this is not simple temporal distance — a *later* validation
-slice at test-like difficulty still prefers the arm test rejects. Whatever separates rel-avito
-validation from rel-avito test is not the train→query gap. That leaves a distribution
-difference in which rows or entities appear, and it is measurable: compare the entity
-overlap and feature distributions of val against test directly, without any model. That is a
-cheaper question than another selection instrument, and it is the one worth asking next.
+**What is not explained.** The late half of validation scores 66–67, the same range as test,
+so this is not simple temporal distance — a *later* validation slice at test-like difficulty
+still prefers the arm test rejects.
+
+**I proposed entity novelty as the mechanism, measured it on all seven tasks, and it is
+refuted.** No model needed: how many query entities were seen in train, on val versus test.
+
+| task | tuning | val seen | test seen | **drop** | base-rate shift |
+|---|---:|---:|---:|---:|---:|
+| rel-trial / study-outcome | +2.74 | 0.0% | 0.0% | 0.0 | 0% |
+| rel-event / user-ignore | +1.76 | 69.8% | 68.1% | −1.8 | 18% |
+| **rel-f1 / driver-dnf** | **+1.48** | 69.6% | 35.2% | **−34.4** | 10% |
+| rel-event / user-repeat | +0.76 | 73.5% | 68.7% | −4.8 | 8% |
+| rel-f1 / driver-top3 | +0.63 | 67.2% | 35.3% | −31.9 | 13% |
+| rel-avito / user-visits | −0.11 | 81.2% | 58.6% | −22.6 | 6% |
+| **rel-avito / user-clicks** | **−1.29** | 73.5% | 39.4% | **−34.0** | **56%** |
+
+**`driver-dnf` loses 34.4 points of entity overlap between val and test — the same as
+user-clicks — and tuning gains +1.48 there.** One counterexample of that size on seven tasks
+kills it. The r = +0.63 is carried by rel-trial sitting at 0/0, not by the hypothesis.
+
+**The base-rate shift correlates better (r = −0.73) and I am not going to claim it.**
+user-clicks' positive rate more than halves from validation to test — **0.035 → 0.015, a 56%
+shift against a next-highest of 18%** — and it is the one task where tuning clearly loses.
+With n = 7 and a single point that far from the rest, removing it collapses the correlation.
+That is a description of one task, not a law.
+
+**And there is a reason not to chase it further: the predictive signal is unusable and the
+usable signal is unpredictive.** Computing a test base rate requires test labels, which is
+exactly what the protocol withholds — so even a perfect relationship there could explain the
+failure and never decide anything. Entity overlap *is* label-free and legitimately
+computable at inference time, and it is the one that does not predict. Any rule for when not
+to tune has to be built from quantities in the second column, and this says the obvious
+candidate there is not it.
 
 **Kept, off by default, with this entry attached.** `--abstain` is correct code with five
 tests and it costs nothing to run; it is simply blind to the failure it was aimed at. Its
