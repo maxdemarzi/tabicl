@@ -2190,6 +2190,49 @@ often — are graph models over a schema that includes the task table, so past l
 reach a node through message passing without anyone designing a feature. Our two worst
 placings are both rel-f1, and rel-f1 is where this signal is strongest.
 
+### 2026-08-06 — IDEA 1 REFUTED: a feature that beats the pipeline standalone adds nothing
+
+Label history was the largest gate result in this project: standalone **test** AUC 85.35 on
+rel-event/user-ignore against a full pipeline at 80.98, and it survived the horizon
+correction and the train-versus-test coverage check that killed its rel-f1 numbers. Paired
+A/B, same seeds, one flag apart:
+
+| task | arm | without | with | **paired Δ** | paired SE | t | positive |
+|---|---|---:|---:|---:|---:|---:|---:|
+| user-ignore | `base` | 80.22 | 81.12 | **+0.90** | 0.44 | +2.03 | 5/6 |
+| user-ignore | `+struct` | 82.09 | 82.17 | +0.08 | 0.35 | +0.24 | 3/6 |
+| user-ignore | `+counts` | 81.15 | 81.36 | +0.21 | 0.30 | +0.70 | 4/6 |
+| user-repeat | `base` | 77.13 | 76.51 | **−0.62** | 0.14 | **−4.40** | 1/8 |
+| user-repeat | `+struct` | 77.33 | 76.61 | **−0.71** | 0.18 | **−4.03** | 1/8 |
+| user-repeat | `+counts` | 77.21 | 76.57 | **−0.64** | 0.18 | **−3.56** | 0/8 |
+
+Calibrated: user-ignore 81.98 → 82.28 (**+0.30**), user-repeat 77.89 → 77.07 (**−0.82**).
+
+**On user-repeat it hurts, and that verdict is not close** — three arms agree, all at t ≈ −4,
+positive on 1 of 8, 1 of 8 and 0 of 8. On user-ignore it helps only on `base` and does
+nothing on `+struct`, which is the arm the calibrated protocol actually selects.
+
+**The mechanism is redundancy, and it is legible.** `+struct` is the `key_target_history`
+block — other entities' outcomes reached through a shared key, plus structural counts. Where
+that block is present, label history adds +0.08; where it is absent (`base`), it adds +0.90.
+It is recovering information the pipeline already had in another form, not contributing new
+information.
+
+**THE LESSON, and it qualifies the rule this whole project runs on.** "Gate before you
+build" has been the standing discipline here and it is still right, but a gate measures
+**whether a feature carries signal**, not **whether that signal is new**. Those are
+different quantities and this is the cleanest possible demonstration: 85.35 standalone —
+better than our entire pipeline, better than eight of the ten published methods on that task
+— converting to **+0.08** on the arm that gets selected. Marginal contribution is the
+quantity that matters and only a paired A/B against the real feature set measures it.
+Nothing about the earlier gates was wrong; they simply cannot answer this.
+
+**Kept, not reverted.** `entity_label_history` and `--label-history` stay in the tree, off
+by default, with this entry attached. The construction is correct, the tests pin the
+self-exclusion guarantee, and it is the natural feature for a schema *without* a shared-key
+track record — which is what `base` at +0.90 measures. On rel-trial it remains structurally
+unavailable. It does not enter the headline table on any task.
+
 ### 2026-08-06 — best-cfg for rel-avito/user-clicks, and two tasks I threw away
 
 A 21-configuration sweep per task — defaults, context 1000, all children, categories,
@@ -2261,6 +2304,21 @@ it uses for label history, so three of the seven come free.
 disappears, and the seven-task mean lands at or below zero. If instead it survives at 4,
 then per-task selection is doing something the regret analysis missed, and the central
 finding needs revisiting rather than restating.
+
+**THE PREDICTION IS WRONG so far, on both tasks measured at the new default.** At
+`max_columns=4`, calibration is worth **+1.76** on rel-event/user-ignore (untuned `base`
+80.22 against calibrated 81.98) and **+0.76** on user-repeat (77.13 against 77.89). At
+`max_columns=2` the same comparison on user-ignore was +0.18. Selection got *more* valuable
+when the default improved, not less.
+
+The reason is visible in the arms: the untuned `base` number barely moved (80.80 → 80.22)
+while the calibrated number rose a full point (80.98 → 81.98). A wider column budget did not
+make the default configuration better — it enlarged the gap between the default arm and the
+best arm, and selection is what captures that. So "fix the defaults and stop selecting" is
+**not** supported by these two tasks, and the recorded prediction should be read as refuted
+rather than quietly dropped. rel-avito and rel-f1 at the new default are still outstanding
+and could move the average back; that is the remaining test, not a reason to restate the
+conclusion now.
 
 ### 2026-08-06 — label history on TEST: the gate ranked the tasks backwards
 

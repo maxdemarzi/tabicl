@@ -310,6 +310,15 @@ def main() -> None:
                          "has exactly one outcome and coverage is 0.0%%. The pool is the "
                          "fitting split only, and a row cannot read its own label because "
                          "that label resolves one horizon after its own cutoff.")
+    ap.add_argument("--label-history-control", action="store_true",
+                    help="negative control for --label-history: keep the label-FREE columns "
+                         "(n_prior, days_since) and drop the label-derived ones "
+                         "(positive_rate, last). A gain that survives this is recurrence and "
+                         "recency of activity, not track record. This distinction has "
+                         "already caught one result here -- most of an apparent "
+                         "label-history gain on rel-event turned out to be "
+                         "key_target_history's structural n_linked column. Requires "
+                         "--label-history.")
     ap.add_argument("--calendar-trend", action="store_true",
                     help="also emit days since the training minimum. Separate from "
                          "--calendar on purpose: this one is monotone, so every test row "
@@ -340,6 +349,11 @@ def main() -> None:
                          "test once. A paired A/B is not eligible for the headline table; "
                          "this is.")
     args = ap.parse_args()
+    if args.label_history_control and not args.label_history:
+        raise SystemExit(
+            "--label-history-control without --label-history builds no block at all, so it "
+            "would report a clean null for a control that never ran. Pass both."
+        )
 
     db = get_dataset(args.dataset, download=True).get_db()
     task = get_task(args.dataset, args.task, download=True)
@@ -471,10 +485,20 @@ def main() -> None:
             # in a table that compares against methods which did not. Self-exclusion is
             # structural inside `entity_label_history` -- a row's own outcome resolves one
             # horizon after its own cutoff -- so nothing about `frame` needs checking here.
-            blocks.append(entity_label_history(
+            hist = entity_label_history(
                 train[key].to_numpy(), train[target].to_numpy(),
                 train[tcol].to_numpy(), frame[key].to_numpy(),
-                frame[tcol].to_numpy(), label_horizon=task.timedelta))
+                frame[tcol].to_numpy(), label_horizon=task.timedelta)
+            if args.label_history_control:
+                # NEGATIVE CONTROL. `n_prior` and `days_since` say how often and how
+                # recently this entity appeared; they consult no outcome. `positive_rate`
+                # and `last` are the only label-derived columns, and dropping them leaves a
+                # block that is pure activity. If the control reproduces the gain, the gain
+                # is recurrence, not track record -- which is exactly what happened to
+                # `key_target_history` on rel-event, where most of an apparent label-history
+                # effect turned out to be its structural `n_linked` column.
+                hist = hist.drop(columns=["self__positive_rate", "self__last"])
+            blocks.append(hist)
         out = pd.concat(blocks, axis=1)
         _audit_requested_blocks(out, split)
         return out
