@@ -2370,11 +2370,34 @@ computable at inference time, and it is the one that does not predict. Any rule 
 to tune has to be built from quantities in the second column, and this says the obvious
 candidate there is not it.
 
-**Kept, off by default, with this entry attached.** `--abstain` is correct code with five
-tests and it costs nothing to run; it is simply blind to the failure it was aimed at. Its
-value now is as a recorded negative: the remaining runs on rel-trial and rel-event will say
-whether it *also* fires spuriously where tuning genuinely helps, which would make it harmful
-rather than merely useless.
+**The full sweep, all seven tasks, both arms paired:**
+
+| task | ordinary | `--abstain` | Δ | vetoes fired |
+|---|---:|---:|---:|---:|
+| rel-avito / user-clicks | 66.03 | 66.18 | +0.15 | **0** |
+| rel-avito / user-visits | 65.50 | 65.50 | +0.00 | **0** |
+| rel-trial / study-outcome | 72.30 | 72.19 | −0.11 | **0** |
+| rel-event / user-ignore | 81.98 | 81.28 | −0.70 | **0** |
+| rel-event / user-repeat | 77.89 | 77.83 | −0.06 | **2** |
+| rel-f1 / driver-top3 | 82.13 | 82.02 | −0.11 | **0** |
+| rel-f1 / driver-dnf | 68.90 | 69.22 | +0.32 | **0** |
+
+**Two vetoes across roughly forty selection decisions, and both landed on the wrong task.**
+They fired on rel-event/user-repeat — where tuning is worth **+0.76** and there is nothing to
+abstain from — and never once on either rel-avito task, where tuning loses 1.29 and 0.11.
+That is the falsification condition failing in both directions at once: silent where it was
+needed, active where it was not.
+
+**The deltas are not the veto's doing.** With the veto firing zero times on five of seven
+tasks, those arms still differ, because the implementation was also replacing the pick with
+the early-half winner instead of the full-validation argmax — two variables, not one. That is
+fixed (the flag is now a pure veto), and it incidentally priced the confound: spending 40% of
+validation on a meta-decision costs **mean −0.17, worst −0.70** on rel-event, which is above
+the ±0.6 floor. **Any future instrument that carves up validation to decide something pays
+that toll before it delivers anything**, which raises the bar for the whole category.
+
+**Kept, off by default, as a recorded negative.** Correct code, five tests, free to run, and
+blind to the failure it was aimed at.
 
 ### 2026-08-06 — categories across all seven tasks: positive wherever it exists, absent on four
 
