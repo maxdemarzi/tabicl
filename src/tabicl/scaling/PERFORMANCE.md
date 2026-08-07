@@ -2266,6 +2266,43 @@ often — are graph models over a schema that includes the task table, so past l
 reach a node through message passing without anyone designing a feature. Our two worst
 placings are both rel-f1, and rel-f1 is where this signal is strongest.
 
+### 2026-08-06 — categories across all seven tasks: positive wherever it exists, absent on four
+
+Categories was written off here once on a `--children 3` measurement, then cleared at ten
+children on rel-trial (+0.90), then reached +0.96 paired on rel-event/user-repeat with
+validation agreeing in sign. Run across every task, test-side, uncalibrated arms:
+
+| task | without | with `--categories 8` | Δ on `base` | other arms |
+|---|---:|---:|---:|---|
+| rel-event / user-repeat | 77.13 | 78.49 | **+1.36** | +struct +1.29, +counts +1.45 |
+| rel-event / user-ignore | 80.22 | 81.24 | **+1.02** | +struct +0.75, +counts +0.40 |
+| rel-trial / study-outcome | 69.95 | 70.37 | +0.42 | +counts +0.21, +rate +0.50 |
+| rel-avito / user-visits | 65.61 | — | — | **no categorical columns** |
+| rel-avito / user-clicks | 67.32 | — | — | **no categorical columns** |
+| rel-f1 / driver-top3 | 82.19 | — | — | **no categorical columns** |
+| rel-f1 / driver-dnf | 69.19 | — | — | **no categorical columns** |
+
+**Positive on every arm of every task where it applies — nine of nine — and structurally
+absent on four of seven.** On those four the `--category-share 0.5` gate rejects every
+categorical column as free text and the empty-block guard refuses the run rather than
+reporting the +0.00 that an empty block would otherwise produce. That refusal is a result
+about the schema, not a failure.
+
+**Which looks like a clean case for switching it on by default, and is not yet one.** All of
+the above is **test-side**, and choosing a default from test is the trap this file exists to
+avoid. `max_columns=4` was settled on validation across four tasks by worst-case regret;
+categories has to be settled the same way or it is not settled. The one task with both
+numbers is user-repeat: validation **+0.20** (t 1.34) against test +0.96 (t 4.05) — the same
+sign, but far weaker on the side that is allowed to decide. Validation runs for user-ignore
+and rel-trial are in flight.
+
+**A design consequence that holds regardless of how that lands.** The empty-block guard
+currently **aborts** the run, which is right for an explicitly requested block — an empty one
+silently scoring +0.00 is how depth-2 was "measured at no effect" for a week. It is wrong for
+a *default*: a user on a rel-avito-shaped schema would get a crash instead of a model. If
+categories becomes a default, the guard has to distinguish "you asked for this and it is
+empty" (abort) from "this is on by default and does not apply here" (skip, and say so).
+
 ### 2026-08-06 — a leakage control that fired on nothing, and cost rel-avito its only user-similarity feature
 
 **rel-avito does build the User → Ad → User similarity feature, and then throws it away.**
