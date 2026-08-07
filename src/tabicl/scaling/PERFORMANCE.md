@@ -2266,6 +2266,37 @@ often — are graph models over a schema that includes the task table, so past l
 reach a node through message passing without anyone designing a feature. Our two worst
 placings are both rel-f1, and rel-f1 is where this signal is strongest.
 
+### 2026-08-06 — DEFAULT CHANGED: `--children` 3 → 0, because 3 was not reproducible
+
+`--children 3` was a hardcoded slice that "was never chosen". Counting what it actually does
+across the benchmark settles it in one line:
+
+| dataset | timestamped child tables | what `--children 3` did |
+|---|---:|---|
+| rel-avito | **3** | nothing — took all of them |
+| rel-event | **3** | nothing — took all of them |
+| rel-f1 | **3** | nothing — took all of them |
+| rel-trial | **10** | discarded seven, and chose *which* seven non-deterministically |
+
+**So the default only ever bit on one dataset, and there it was a reproducibility defect
+rather than a tuning choice.** Two hosts running the identical command selected different
+tables — `['designs','eligibilities','drop_withdrawals']` on one and
+`['facilities_studies','sponsors_studies','designs']` on the other — because the slice
+follows dictionary insertion order. The same command produced different features, which
+makes every rel-trial comparison across machines untrustworthy unless both happened to agree.
+
+**Changed to 0 (all tables).** On three of four datasets this is provably a no-op. On
+rel-trial it removes the nondeterminism outright and is worth **+0.53** (72.79 against a
+standing 72.26). The cost is compute on wide schemas, not accuracy, and `max_columns` already
+bounds the per-child width. `STANDING_FLAGS` records `--children 3` for **rel-trial only** —
+listing it for the other three would imply a difference that does not exist and send someone
+looking for it.
+
+**This is the second hardcoded default found to be arbitrary rather than chosen**, after
+`max_columns=2`. Both were discovered by asking what the value actually does on each schema
+rather than what it was supposed to do, and in both cases the answer was "nothing on most of
+them, and something unintended on one".
+
 ### 2026-08-06 — ABSTENTION REFUTED, and it corrects my diagnosis of rel-avito
 
 Tuning loses 1.29 on rel-avito/user-clicks (untuned `base` 67.32 against a calibrated 66.03),

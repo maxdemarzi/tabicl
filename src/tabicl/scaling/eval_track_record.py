@@ -87,7 +87,11 @@ REFERENCE = {
 # worst-case regret -- so an empty list here would quietly mean "4" and a run that believed
 # it matched would not reproduce the number it was compared against.
 STANDING_FLAGS = {
-    "rel-trial": ["--max-columns 2"],
+    # `--children 3` is listed only for rel-trial ON PURPOSE. The other three datasets have
+    # exactly three timestamped child tables, so the old default took all of them and the
+    # flag changed nothing; naming it there would imply a difference that does not exist and
+    # send someone hunting for it.
+    "rel-trial": ["--max-columns 2", "--children 3"],
     "rel-event": ["--timed-links-only", "--max-columns 2"],
     "rel-avito": ["--max-columns 2"],
     "rel-f1": ["--max-columns none"],
@@ -234,10 +238,19 @@ def main() -> None:
                          "these tasks: rel-event's replicates span 10.8 points on the "
                          "context draw alone. Distinct from --n-estimators, which varies "
                          "the model seed at a fixed context and measured at nothing.")
-    ap.add_argument("--children", type=int, default=3,
-                    help="how many timestamped child tables to aggregate. The default of 3 "
-                         "was never chosen -- it is a hardcoded slice, and the tables it "
-                         "keeps are whichever come first in dictionary order, out of ten on "
+    ap.add_argument("--children", type=int, default=0,
+                    help="how many timestamped child tables to aggregate; 0 means all, which "
+                         "is now the default. The old default of 3 was never chosen -- it "
+                         "was a hardcoded slice, and it only ever BIT on rel-trial: the "
+                         "other three datasets have exactly three child tables, so it was a "
+                         "no-op there. On rel-trial it discarded seven of ten tables and "
+                         "picked which three NON-DETERMINISTICALLY -- two hosts selected "
+                         "different sets, so the same command produced different features. "
+                         "Using all of them removes that reproducibility defect outright and "
+                         "is worth +0.53 on rel-trial. The cost is compute on wide schemas, "
+                         "not accuracy. Old behaviour: --children 3 --children-order name. "
+                         "The tables it keeps are whichever come first in dictionary order, "
+                         "out of ten on "
                          "rel-trial. The base sweep says breadth matters: one child costs 30 "
                          "points on rel-event and 8 on rel-avito. 0 means all.")
     ap.add_argument("--text", action="store_true",
