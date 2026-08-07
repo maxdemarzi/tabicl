@@ -1341,9 +1341,22 @@ def main() -> None:
                     else:
                         print(f"  ranking holds across the val gap ({win_k[0]}: {we:.2f} "
                               f"early, {wl:.2f} late) -- tuning kept", flush=True)
-                    name, size, order = chosen_k
-                    val_auc = next(c[0] for c in candidates
-                                   if (c[1], c[2], c[3]) == chosen_k)
+                    # ONLY the abstention changes the pick. When the ranking holds, the
+                    # ordinary full-validation argmax stands untouched -- so this flag is a
+                    # pure veto, which is what its help text promises.
+                    #
+                    # It did not start that way, and the difference was visible: with the
+                    # veto firing ZERO times, rel-trial still moved 72.30 -> 72.19 and
+                    # user-clicks 66.03 -> 66.18, because the arm was silently selecting on
+                    # the early 60% of validation rather than on all of it. That made the
+                    # A/B two variables instead of one. (Incidentally it priced the second:
+                    # selecting on 60% of validation costs about nothing, mean +0.01 over
+                    # three tasks -- validation *size* is not the binding constraint here
+                    # either.)
+                    if abstained:
+                        name, size, order = chosen_k
+                        val_auc = next(c[0] for c in candidates
+                                       if (c[1], c[2], c[3]) == chosen_k)
 
             if args.ensemble_configs > 1:
                 # Hedge instead of committing. The validation ranking is real but noisy --
