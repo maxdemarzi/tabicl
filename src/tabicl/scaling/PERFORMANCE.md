@@ -1221,6 +1221,48 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-07 — the selection is a coin flip among the leaders, and that is measurable for free
+
+If a feature worth +1.0 on a fixed configuration arrives as +0.39 after selection, the
+question is what selection is doing with it. Reading the candidate lists out of every
+calibrated run already logged — no GPU, the numbers were already there:
+
+| task | grid | **top1 − top2** | top1 − top5 |
+|---|---:|---:|---:|
+| rel-event / user-repeat | 9 | **0.12** | 0.93 |
+| rel-event / user-ignore | 9 | **0.14** | 1.39 |
+| rel-f1 / driver-top3 | 6 | **0.17** | 1.00 |
+| rel-avito / user-visits | 15 | 0.27 | 1.44 |
+| rel-avito / user-clicks | 9 | 0.35 | 1.19 |
+| rel-f1 / driver-dnf | 3 | 0.54 | 0.87 |
+| rel-trial / study-outcome | 9 | 0.61 | 2.50 |
+
+**The best and second-best configurations differ by 0.12–0.35 on five of seven tasks.** The
+test-side floor is ±0.6, and validation is a *smaller* sample than test on every task here,
+so validation's own noise is at least that. The argmax is separating candidates by a fifth
+of its own resolution — it is close to a coin flip among the leaders.
+
+**And the coin is worth about a point.** The top-five spread is 0.87 to 2.50, so landing
+anywhere in that group instead of on its best member costs roughly what the features were
+gaining. Two independent quantities, arrived at from opposite directions, agreeing on the
+same number.
+
+**This is also the first account of the selection problem that does not require validation to
+be biased.** Everything earlier in this file explained the failures by validation pointing
+the *wrong way* — near train, far from test, systematically misordered. It may well do that
+too. But it does not have to: a ranking with no resolving power produces exactly these
+symptoms, and this is measurable directly rather than inferred from failures.
+
+**It predicts a specific fix that already exists and was already refuted.**
+`--ensemble-configs N` averages predictions over the top N candidates instead of committing
+to the argmax — precisely the right move when the ranking cannot tell them apart. It was
+measured at **mean −0.045 over four tasks** and shelved as a null. But it runs inside the
+calibrated loop, so that was a calibrated-versus-calibrated comparison at roughly three times
+the standard error it needed. **A null measured that way is weak evidence**, and the theory
+now puts the effect near +1.0. Re-measuring it is the best available test of this whole
+account, and the reading is fixed in advance: ≥ +0.6 confirms it, ≤ +0.2 leaves the original
+null standing and this explanation needing another mechanism.
+
 ### 2026-08-07 — RE-MEASURED on fixed arms: the features work, the selection step eats most of it
 
 Every A/B here was re-paired from per-seed tables that were already in the logs — no GPU, the
