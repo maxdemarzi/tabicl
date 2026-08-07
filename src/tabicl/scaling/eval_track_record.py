@@ -671,7 +671,13 @@ def main() -> None:
                         numeric_booleans=args.numeric_booleans,
                         budget_categoricals=args.budget_categoricals,
                         time_deltas=args.time_deltas, include_mode=args.mode)
-                    depth2_built.append(f"{n}->{gname} ({len(two.df):,} rows)")
+                    # Per-split, not cumulative. Appending to one shared list made the
+                    # count grow with every frame built -- the log read "2 path(s)" on train,
+                    # "4" on test and "6" on val for the same two paths. The names were
+                    # deduped for display so it looked almost right, which is the worst way
+                    # for a count to be wrong.
+                    built = depth2_built.setdefault(split, [])
+                    built.append(f"{n}->{gname} ({len(two.df):,} rows)")
                     blocks.append(asof_statistics(
                         two, frame[key].to_numpy(),
                         frame[tcol].to_numpy()).add_prefix(f"{n}_{gname}__"))
@@ -700,7 +706,7 @@ def main() -> None:
         _audit_requested_blocks(out, split)
         return out
 
-    depth2_built: list = []
+    depth2_built: dict = {}
     reported = set()
 
     def _audit_requested_blocks(frame, split="train"):
@@ -729,7 +735,8 @@ def main() -> None:
         # repeating that.
         if args.depth2 and f"depth2 {split}" not in reported:
             reported.add(f"depth2 {split}")
-            if not depth2_built:
+            built = depth2_built.get(split, [])
+            if not built:
                 raise SystemExit(
                     "--depth2 was requested but no grandchild table was built. Either no "
                     "child has a timestamped child of its own, or the child tables lack "
@@ -737,8 +744,8 @@ def main() -> None:
                     "it means the traversal found nothing and any gap measured would be an "
                     "artefact of an empty block."
                 )
-            print(f"depth-2 [{split}]: {len(depth2_built)} path(s) -- "
-                  f"{'; '.join(dict.fromkeys(depth2_built))}", flush=True)
+            print(f"depth-2 [{split}]: {len(built)} path(s) -- "
+                  f"{'; '.join(built)}", flush=True)
         if args.label_history and f"label history {split}" not in reported:
             reported.add(f"label history {split}")
             n_prior = frame["self__n_prior"]

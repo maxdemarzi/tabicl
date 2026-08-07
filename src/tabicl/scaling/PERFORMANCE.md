@@ -1221,6 +1221,45 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-07 — depth-2 measured: it moves our worst task, and needs confirming
+
+First run of `--depth2`, paired by seed, one flag apart. rel-avito/user-clicks is our
+joint-worst placing at 8 of 10:
+
+| task | arm | depth 1 | **+ depth 2** | Δ |
+|---|---|---:|---:|---:|
+| **user-clicks** | **calibrated** | 66.03 | **66.69** | **+0.66** |
+| user-clicks | `+struct` | 66.17 | 67.20 | **+1.03** |
+| user-clicks | `+counts` | 66.83 | 67.81 | **+0.98** |
+| user-clicks | `base` | 67.32 | 67.55 | +0.23 |
+| user-visits | calibrated | 65.50 | 65.44 | −0.06 |
+| user-visits | `base` | 65.61 | 66.00 | +0.39 |
+| user-visits | `+rate` | 65.85 | 66.10 | +0.25 |
+
+**This is the first calibrated number to clear the ±0.6 floor in this entire session**, and
+it lands on the task that most needed it. Three of four user-clicks arms move together, two
+of them by about a point, which is the pattern a real feature makes rather than a lucky draw.
+
+**It is four replicates and I am not going to call it settled.** sd 0.54 and 0.60, so the
+standard error on each arm is around 0.28 and on an unpaired difference around 0.4 — a +0.66
+at that precision is suggestive, not decisive. Every large-looking result in this session
+that got more replicates moved: categories' −0.44 became +0.15, its +0.60 became +0.09. The
+confirmation run at higher replicate count is the number that counts.
+
+**user-visits does not move**, which matters: it is the same database and the same depth-2
+path. Whatever the grandchild table carries is useful for predicting *clicks* and not for
+predicting *visits* — consistent with `SearchStream` being the record of what was shown and
+clicked, and an argument that this is signal rather than added capacity.
+
+**What it would be worth if it holds.** At 66.69, user-clicks moves from 8th to 7th of ten,
+above GraphSAGE (65.90) and RDBLearn+v2.5 (65.72) and below TabPFN-REL (67.09). One place.
+The field's best there is 69.06, so this closes about a fifth of that gap.
+
+**A reporting bug found in the same log**, fixed rather than lived with: the built-paths list
+was shared across splits, so the count grew with every frame — "2 path(s)" on train, "4" on
+test, "6" on val for the same two paths. The names were deduped for display, so it read
+*almost* right, which is the worst way for a count to be wrong.
+
 ### 2026-08-07 — CORRECTION: depth-2 is available on half the benchmark, and our own guard is what blocks it
 
 The entry below concludes depth-2 is "not available, on all four tasks, for three different
