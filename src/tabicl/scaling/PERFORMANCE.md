@@ -1250,6 +1250,15 @@ case and two guard-hits as though they were the same finding.
 * **rel-trial** — genuinely unavailable, the whole subtree postdates the cutoff. Unchanged.
 * **rel-event and rel-avito** — **available, roughly a quarter of pairs usable, and unbuilt.**
 
+**The two "unchanged" rows were re-verified independently rather than carried over**, because
+an entry that was wrong about two of its three claims has not earned the benefit of the doubt
+on the rest. Re-enumerating every foreign-key path from the entity: rel-f1's `drivers` has
+**no grandchild tables at all** — not untimed ones, none — and rel-trial's
+`outcomes → outcome_analyses` gives **158,246 pairs at 0.0% preceding the cutoff**,
+reproducing the original count exactly. Both hold. The correction is to the other two rows
+only, and it is now the whole entry that has been checked rather than the part that looked
+wrong.
+
 **This covers four of our seven tasks, including both rel-avito tasks — our two worst
 placings at 8 of 10.** And the specific unused table there is `SearchStream`, the stream of
 items shown in searches, on a task about whether the user *clicks*. rel-event's is
