@@ -2826,3 +2826,62 @@ def test_temporal_shift_grid_without_a_horizon_still_moves():
     from tabicl.scaling.eval_track_record import temporal_shift_grid
     # --no-horizon passes 0.0; a one-day floor still beats a zero shift.
     assert temporal_shift_grid(8.0, 0.0) == (1,)
+
+
+# --------------------------------------------------------------------------------------
+# abstention_choice -- keep the tuned pick only if its ranking survives a time gap.
+#
+# Motivated by rel-avito, where tuning loses on BOTH tasks and user-clicks drops 1.29 --
+# four places in the published field -- because the arms are near-identical and selection
+# is fitting noise on a small validation split.
+# --------------------------------------------------------------------------------------
+
+def test_abstention_falls_back_when_the_winner_loses_the_late_half():
+    from tabicl.scaling.eval_track_record import abstention_choice
+    split = {("+struct", 10000, "random"): (72.0, 68.0),    # wins early, loses late
+             ("base", 10000, "random"):    (71.0, 70.0)}
+    chosen, winner, abstained = abstention_choice(split)
+    assert abstained is True
+    assert winner[0] == "+struct"
+    assert chosen[0] == "base"
+
+
+def test_abstention_keeps_tuning_when_the_ranking_holds():
+    from tabicl.scaling.eval_track_record import abstention_choice
+    split = {("+struct", 10000, "random"): (72.0, 71.0),    # wins both halves
+             ("base", 10000, "random"):    (71.0, 70.0)}
+    chosen, winner, abstained = abstention_choice(split)
+    assert abstained is False
+    assert chosen == winner == ("+struct", 10000, "random")
+
+
+def test_abstention_never_overrides_a_base_winner():
+    from tabicl.scaling.eval_track_record import abstention_choice
+    # base already won the early half; there is nothing to abstain from.
+    split = {("+struct", 10000, "random"): (69.0, 60.0),
+             ("base", 10000, "random"):    (71.0, 62.0)}
+    chosen, winner, abstained = abstention_choice(split)
+    assert abstained is False
+    assert chosen[0] == "base" and winner[0] == "base"
+
+
+def test_abstention_picks_the_best_base_configuration_not_just_any():
+    from tabicl.scaling.eval_track_record import abstention_choice
+    split = {("+struct", 10000, "random"): (75.0, 60.0),
+             ("base", 1000, "random"):     (70.0, 65.0),
+             ("base", 10000, "random"):    (74.0, 61.0)}
+    chosen, _, abstained = abstention_choice(split)
+    assert abstained is True
+    # chosen on the EARLY half, like every other selection here -- not on the late one,
+    # which is the judge and must not also be the chooser.
+    assert chosen == ("base", 10000, "random")
+
+
+def test_abstention_degrades_to_no_opinion_without_usable_entries():
+    from tabicl.scaling.eval_track_record import abstention_choice
+    nan = float("nan")
+    assert abstention_choice({}) == (None, None, False)
+    # all NaN (a validation half with one class) -> caller keeps its own argmax
+    assert abstention_choice({("base", 10, "random"): (nan, nan)}) == (None, None, False)
+    # no base arm at all -> nothing to fall back to
+    assert abstention_choice({("+rate", 10, "random"): (70.0, 60.0)}) == (None, None, False)

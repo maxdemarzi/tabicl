@@ -30,6 +30,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import math
 import time
 import warnings
 
@@ -124,6 +125,42 @@ def _numeric(df: pd.DataFrame, fit: bool = False, tag: str = "") -> np.ndarray:
         else:
             out[col] = out[col].map(_CATEGORY_MAPS[keyed]).fillna(-1)
     return np.nan_to_num(out.to_numpy(dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def abstention_choice(split_val: dict) -> tuple[tuple | None, tuple | None, bool]:
+    """Keep the tuned pick only if its validation ranking survives a time gap.
+
+    `split_val` maps a configuration key ``(arm, size, order)`` to its ``(early, late)``
+    validation AUCs, both measured from the same fit on two time-ordered halves of the
+    validation set.
+
+    The winner is chosen on the **early** half and then judged on the **late** half against
+    the best `base` configuration. If it cannot beat the untuned arm out of sample, the
+    ranking that produced it did not generalise across a gap, and `base` is returned.
+
+    **This is deliberately not the question every failed instrument here asked.** Those
+    tried to extract a better *ranking* from a validation split that is biased by sitting
+    close to train; anything derived from a biased signal inherits the bias. This asks only
+    whether the ranking *holds up* across a gap — a property of the signal, not a value read
+    off it — and it acts by declining to tune rather than by tuning differently.
+
+    Motivated by rel-avito, where tuning loses on both tasks: `user-clicks` untuned scores
+    67.32 against 66.03 tuned, a **1.29** loss worth four places in the published field,
+    because the arms there are near-identical and selection is fitting noise.
+
+    Returns ``(chosen_key, winner_key, abstained)``. ``chosen_key`` is None when the input
+    has no usable entry, in which case the caller keeps its own argmax.
+    """
+    usable = [(k, v) for k, v in split_val.items()
+              if not (math.isnan(v[0]) or math.isnan(v[1]))]
+    bases = [(k, v) for k, v in usable if k[0] == "base"]
+    if not usable or not bases:
+        return None, None, False
+    win_k, win_v = max(usable, key=lambda kv: kv[1][0])
+    base_k, base_v = max(bases, key=lambda kv: kv[1][0])
+    if win_k[0] != "base" and win_v[1] <= base_v[1]:
+        return base_k, win_k, True
+    return win_k, win_k, False
 
 
 def temporal_shift_grid(span_days: float, horizon_days: float) -> tuple[int, ...]:
@@ -341,6 +378,18 @@ def main() -> None:
                          "has exactly one outcome and coverage is 0.0%%. The pool is the "
                          "fitting split only, and a row cannot read its own label because "
                          "that label resolves one horizon after its own cutoff.")
+    ap.add_argument("--abstain", action="store_true",
+                    help="don't tune when the validation ranking cannot be trusted. Splits "
+                         "validation by time, picks the winner on the EARLY half, and keeps "
+                         "it only if it still beats the untuned `base` arm on the LATE half; "
+                         "otherwise falls back to base. This does NOT ask which "
+                         "configuration is best -- that question is where every instrument "
+                         "built from this split has failed -- it asks whether the ranking "
+                         "holds up out of sample at all. Motivated by rel-avito, where "
+                         "tuning loses on both tasks and user-clicks drops 1.29 (four places "
+                         "in the field) because the arms are near-identical and selection is "
+                         "fitting noise. Costs nothing: the same fit is scored on both "
+                         "halves.")
     ap.add_argument("--label-history-control", action="store_true",
                     help="negative control for --label-history: keep the label-FREE columns "
                          "(n_prior, days_since) and drop the label-derived ones "
@@ -1149,10 +1198,21 @@ def main() -> None:
                 return rng.choice(half, size=min(size, len(half)), replace=False)
             return rng.choice(pool, size=size, replace=False)
 
+        # Validation split by TIME, not at random: the whole point is to test whether a
+        # ranking survives a gap, and a random half sits at the same temporal distance from
+        # train as the half it is judging. The 60/40 cut matches --decide-fit-pool's.
+        v_order = np.argsort(val[tcol].to_numpy(), kind="stable")
+        va_cut = max(1, int(0.6 * len(v_order)))
+        va_early, va_late = v_order[:va_cut], v_order[va_cut:]
+        if args.abstain:
+            print(f"\nabstention: validation split by time into {len(va_early)} early / "
+                  f"{len(va_late)} late rows", flush=True)
+
         results = []
         for seed in range(args.seeds):
             best = None
             candidates: list = []
+            split_val: dict = {}
             criterion = f"{args.cv_folds}-fold CV over train" if args.cv_folds \
                 else "validation only"
             print(f"\n-- seed {seed}: selection ({criterion}) --", flush=True)
@@ -1199,7 +1259,40 @@ def main() -> None:
                         candidates.append((v, name, size, order))
                         if best is None or v > best[0]:
                             best = (v, name, size, order)
+                        if args.abstain and not args.cv_folds and not args.gap_validation:
+                            # Same fit, scored on each half of validation separately, so
+                            # this costs one extra AUC rather than another model.
+                            p_va = score(arms[name][0], val_arms[name], rows, seed,
+                                         truth=y_va, return_probs=True)
+                            halves = []
+                            for idx in (va_early, va_late):
+                                halves.append(roc_auc_score(y_va[idx], p_va[idx]) * 100
+                                              if len(np.unique(y_va[idx])) > 1
+                                              else float("nan"))
+                            split_val[(name, size, order)] = tuple(halves)
             val_auc, name, size, order = best
+
+            if args.abstain and split_val:
+                # Pick on the EARLY half, then ask whether that pick survives on the LATE
+                # half against the untuned arm. A winner that cannot beat `base` out of
+                # sample is a winner the ranking invented, and taking it is how user-clicks
+                # loses 1.29. Note what is NOT being asked: not "which arm is best" -- every
+                # instrument built on that question has failed here -- but "does this
+                # ranking generalise across a time gap at all".
+                chosen_k, win_k, abstained = abstention_choice(split_val)
+                if chosen_k is not None:
+                    we, wl = split_val[win_k]
+                    ce, cl = split_val[chosen_k]
+                    if abstained:
+                        print(f"  ABSTAIN: {win_k[0]} won the early half ({we:.2f} vs base "
+                              f"{ce:.2f}) but lost the late half ({wl:.2f} vs {cl:.2f}) -- "
+                              f"falling back to base", flush=True)
+                    else:
+                        print(f"  ranking holds across the val gap ({win_k[0]}: {we:.2f} "
+                              f"early, {wl:.2f} late) -- tuning kept", flush=True)
+                    name, size, order = chosen_k
+                    val_auc = next(c[0] for c in candidates
+                                   if (c[1], c[2], c[3]) == chosen_k)
 
             if args.ensemble_configs > 1:
                 # Hedge instead of committing. The validation ranking is real but noisy --
