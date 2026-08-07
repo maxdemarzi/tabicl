@@ -1221,6 +1221,50 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-07 — the traversal covers one of four shapes, and that is the real finding
+
+Depth-2 was found by asking what RDBLearn does that we do not. Asking the same question of
+the *schema* — which tables does this pipeline touch at all — turns out to be the more
+productive version, and it generalises past any one competitor.
+
+**A flattener can reach a table four ways. We implement one.**
+
+| # | shape | example | status |
+|---|---|---|---|
+| 0 | entity → child | `users → event_attendees` | **built** — the whole pipeline |
+| 1 | entity → child → grandchild | `UserInfo → SearchInfo → SearchStream` | **built 2026-08-07**, +0.66 on user-clicks |
+| 2 | entity → child → parent → sibling | `drivers → results → constructors → constructor_results` | **built 2026-08-07**, measuring |
+| 3 | fact → dimension (star join) | `VisitStream × AdsInfo` | **not built** |
+
+**Shape 3, and a correction: I dismissed it an hour ago and was wrong.** I wrote that the
+untimed tables were out of reach because "nothing bounds an untimed table to a cutoff". That
+is true of aggregating a dimension table on its own and false of the thing you actually do
+with one. A dimension row carries *static attributes*; if a timestamped fact row before the
+cutoff references it, the entity saw it then. The attributes inherit the fact row's
+timestamp, the join is an ordinary star join, and the as-of filter is the fact table's. No
+new temporal machinery is needed.
+
+Gated on test, joining `AdsInfo` onto the fact tables and aggregating as-of, 100% coverage:
+
+| task | join | columns | best column | pipeline |
+|---|---|---:|---:|---:|
+| rel-avito / user-visits | `VisitStream × AdsInfo` | 76 | **68.5** (`CategoryID`) | 65.54 |
+| rel-avito / user-clicks | `VisitStream × AdsInfo` | 76 | 64.6 (`Title__nunique`) | 65.89 |
+| rel-avito / user-clicks | `PhoneRequestsStream × AdsInfo` | 76 | 60.5 | 65.89 |
+
+**The caveat that decides whether shape 3 is admissible at all**, and it is not the one I
+raised before: a dimension row is safe to *join*, but only if its attributes are not
+**updated over time**. `LocationID` and `CategoryID` are structural and cannot change without
+being a different ad; `Price` and `Title` could in principle be edited, and if the table
+holds a final snapshot then a pre-cutoff fact row would inherit a post-cutoff value. The
+temporal control is the right instrument for that and it is exactly what the control is for.
+The conservative build is the structural columns only.
+
+**What this reframes.** The gap to RDBLearn was never "depth 2 versus depth 1" — it is that
+DFS walks foreign keys in *both directions* and we walk them in one. Depth-2 and siblings
+were two instances of the same omission, found by reading a competitor; shape 3 was found by
+reading our own schema, which was cheaper and should have come first.
+
 ### 2026-08-07 — depth-2 measured: it moves our worst task, and needs confirming
 
 First run of `--depth2`, paired by seed, one flag apart. rel-avito/user-clicks is our
