@@ -2346,12 +2346,31 @@ the three: we throw the information away and they keep it.** Standalone test AUC
 | rel-trial / study-outcome | `start_date` | 49.11 | 100% | 0.0% |
 | rel-avito / user-clicks | *none exist* | — | — | — |
 
-**Weak, and clean.** No column has any value after its cutoff, so there is no leak here —
-this is genuinely discarded signal, not avoided risk. But one column per task on three of
-four datasets, topping out at 57.90, is a small lever. Today's label-history result forbids
-reading that either way: 85.35 standalone became +0.08, and 65.20 became +0.79, so standalone
-AUC does not bound marginal contribution in *either* direction. It is a three-line change, so
-it is worth an A/B rather than an argument — but it is not where 2.60 points are.
+**"Weak, and clean" — the second half of that was wrong, and the guard caught it.** I
+measured "after cutoff" on **test rows only** and reported 0.0% for every column. Per split:
+
+| column | **train** after cutoff | val | test |
+|---|---:|---:|---:|
+| rel-event `joinedAt` | **35.0%** | 2.6% | 0.0% |
+| rel-f1 `dob` | 0.0% | 0.0% | 0.0% |
+| rel-trial `start_date` | 0.0% | 0.0% | 0.0% |
+
+**A third of rel-event's training rows are for users who had not joined yet at their own
+prediction time.** The gradient is the giveaway: train is the earliest period, so many users
+join after those cutoffs; test is the latest, so almost everyone has. Checking the split
+where the problem is smallest is what made it invisible, and that is a general lesson about
+where to look for future-dating — **the earliest split, not the one being scored.**
+
+The `--entity-time-deltas` guard decides the admissible set on the fitting frame and dropped
+`joinedAt` outright on its first real run, printing `keeping nothing of ['joinedAt']`, so the
+arms came back identical (81.54 both) — a no-op rather than a contaminated gain. That is the
+guard working as designed, and it also means the 57.90 gate figure was never usable.
+
+**So the feature is live only on rel-f1 (`dob` → driver age) and rel-trial (`start_date`),
+both clean on all three splits.** One column each, gated at 54.23 and 49.11 — small, and
+today's label-history result forbids reading a weak standalone either way, since 85.35 became
++0.08 and 65.20 became +0.79. It is a three-line change, so it is worth an A/B rather than an
+argument, but it is not where 2.60 points are.
 
 **The two that matter are depth and label history, and we have run at both.** Label history
 was measured today and contributed +0.08 on the arm the protocol selects — but *our* version
