@@ -1235,19 +1235,35 @@ def two_hop_table(
             f"column of the grandchild table. Without it nothing bounds what this entity "
             f"could see at its cutoff."
         )
-    link_cols = [child_pk, child_fk] + ([child_time_column] if child_time_column else [])
-    link = child[link_cols].dropna(subset=[child_pk, child_fk])
-    merged = grandchild.merge(link, left_on=grandchild_fk, right_on=child_pk,
-                              how="inner", suffixes=("", "__child"))
+    # The link's columns are renamed to reserved names BEFORE the merge. Suffixing collides
+    # the moment the child and grandchild share a column name, and they do in practice:
+    # rel-event's `events` and `event_attendees` both call their timestamp `start_time`, so
+    # `merged[child_time_column]` resolved to the GRANDCHILD's column and dropping it
+    # destroyed the very clock this table is built on. The unit fixture used distinct names
+    # and missed it entirely; the schema found it on the first real call.
+    reserved = {child_pk: "__link_pk", child_fk: "__link_fk"}
+    if child_time_column:
+        reserved[child_time_column] = "__link_time"
+    link = child[list(reserved)].dropna(subset=[child_pk, child_fk]).rename(columns=reserved)
+    merged = grandchild.merge(link, left_on=grandchild_fk, right_on="__link_pk", how="inner")
     if child_time_column:
         # Later of the two: the grandchild has resolved AND the membership exists.
         merged[time_column] = np.maximum(
-            merged[time_column].to_numpy(), merged[child_time_column].to_numpy())
-        merged = merged.drop(columns=[child_time_column])
-    merged = merged.dropna(subset=[child_fk, time_column])
+            merged[time_column].to_numpy(), merged["__link_time"].to_numpy())
+        merged = merged.drop(columns=["__link_time"])
+    merged = merged.dropna(subset=["__link_fk", time_column])
+    # Restore the entity key under its own name, now that no collision is possible.
+    merged = merged.drop(columns=[c for c in (child_fk, "__link_pk") if c in merged.columns])
+    merged = merged.rename(columns={"__link_fk": child_fk})
     # The join keys are structure, not signal, and leaving them in lets the model key on an
     # identifier -- the same reason the entity's own primary key is dropped at depth 1.
     merged = merged.drop(columns=[c for c in (child_pk, grandchild_fk)
                                   if c in merged.columns and c != child_fk])
+    if merged.empty:
+        raise ValueError(
+            f"two_hop_table({name!r}) produced no rows: the grandchild's {grandchild_fk!r} "
+            f"matched no {child_pk!r} in the child table. An empty block scores +0.00 with "
+            f"sd 0.00 and reads exactly like a careful null."
+        )
     return Table(merged, foreign_key=child_fk, name=name, time_column=time_column,
                  **table_kwargs)

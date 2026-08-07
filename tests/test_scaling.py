@@ -2960,3 +2960,28 @@ def test_two_hop_table_drops_unlinked_and_null_rows():
     tbl = two_hop_table(orphan, "cid", child, "cid", "entity", "g", time_column="gtime")
     assert len(tbl.df) == len(grand)          # the orphan reaches no entity
     assert tbl.df["gtime"].notna().all()
+
+
+def test_two_hop_table_survives_a_shared_column_name():
+    """The child and grandchild both calling their timestamp the same thing.
+
+    Not hypothetical: rel-event's `events` and `event_attendees` both use `start_time`.
+    Merge suffixing then aliased the child's column onto the grandchild's, and dropping it
+    destroyed the clock the table is built on -- a KeyError on the first real call, missed
+    entirely by a fixture that used distinct names.
+    """
+    from tabicl.scaling import two_hop_table, asof_statistics
+    import pandas as pd
+    t = pd.Timestamp("2021-01-01")
+    child = pd.DataFrame({"cid": [1, 2], "entity": ["a", "a"],
+                          "ts": [t, t + pd.Timedelta(days=10)]})
+    grand = pd.DataFrame({"cid": [1, 2], "ts": [t, t + pd.Timedelta(days=1)],
+                          "value": [1.0, 2.0]})          # same name as the child's clock
+    tbl = two_hop_table(grand, "cid", child, "cid", "entity", "g",
+                        time_column="ts", child_time_column="ts")
+    assert "ts" in tbl.df.columns and tbl.df["ts"].notna().all()
+    assert "__link_time" not in tbl.df.columns and "__link_pk" not in tbl.df.columns
+    # child 2 forms on day 10, so its grandchild is not visible at day 5; child 1's is.
+    out = asof_statistics(tbl, np.array(["a"]),
+                          pd.to_datetime(pd.Series([t + pd.Timedelta(days=5)])).to_numpy())
+    assert out.filter(like="count").iloc[0, 0] == 1

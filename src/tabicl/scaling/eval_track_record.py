@@ -47,7 +47,7 @@ from relbench.tasks import get_task
 
 from tabicl import TabICLClassifier
 from tabicl.scaling import (Table, asof_statistics, entity_label_history,
-                            key_target_history)
+                            key_target_history, two_hop_table)
 from tabicl.scaling._guards import assert_no_perfect_feature
 from tabicl.scaling._calendar import calendar_features
 from tabicl.scaling._leakage import permutation_test, temporal_control
@@ -413,6 +413,17 @@ def main() -> None:
                          "default must not crash on a schema it does not fit.")
     ap.add_argument("--no-explicit-blocks", dest="explicit_blocks", action="store_false",
                     help="see --explicit-blocks.")
+    ap.add_argument("--depth2", action="store_true",
+                    help="aggregate grandchild tables reached through each child. Recorded "
+                         "here as unavailable on the whole benchmark; that was true of "
+                         "rel-f1 (no timestamped depth-2 in the schema) and rel-trial (0 of "
+                         "158,246 grandchild rows precede the cutoff -- the subtree IS the "
+                         "label), and FALSE of the other two, where the blocker was this "
+                         "package refusing depth-2 whenever entity keys repeat. Measured "
+                         "before building: 25.8%% of (grandchild, cutoff) pairs are usable "
+                         "on rel-event via users->events->event_attendees and 23.8%% on "
+                         "rel-avito via UserInfo->SearchInfo->SearchStream. RDBLearn, which "
+                         "beats our average, defaults to depth 2.")
     ap.add_argument("--abstain", action="store_true",
                     help="don't tune when the validation ranking cannot be trusted. Splits "
                          "validation by time, picks the winner on the EARLY half, and keeps "
@@ -593,6 +604,34 @@ def main() -> None:
                       include_mode=args.mode)
             blocks.append(asof_statistics(t, frame[key].to_numpy(),
                                           frame[tcol].to_numpy()).add_prefix(f"{n}__"))
+            if args.depth2:
+                # Grandchildren reached THROUGH this child. `two_hop_table` relabels them by
+                # the entity and keeps their own clock, so this is an ordinary depth-1 as-of
+                # aggregation and needs no per-child cutoff arithmetic -- which is what made
+                # the old depth-2 path refuse whenever entity keys repeated.
+                ctab = db.table_dict[n]
+                for gname, gtab in db.table_dict.items():
+                    gfks = gtab.fkey_col_to_pkey_table or {}
+                    if n not in gfks.values() or gtab.time_col is None or not ctab.pkey_col:
+                        continue
+                    gfk = next(k for k, v in gfks.items() if v == n)
+                    two = two_hop_table(
+                        gtab.df, gfk, ctab.df, ctab.pkey_col, fk, f"{n}_{gname}",
+                        time_column=gtab.time_col,
+                        # The link's own timestamp, so a membership formed after the cutoff
+                        # cannot admit its grandchildren. Omitting it is the permissive
+                        # reading and this benchmark has already paid for that once.
+                        child_time_column=tc,
+                        windows=WINDOWS, max_columns=max_cols,
+                        top_k_categories=args.categories or None,
+                        min_category_share=args.category_share,
+                        numeric_booleans=args.numeric_booleans,
+                        budget_categoricals=args.budget_categoricals,
+                        time_deltas=args.time_deltas, include_mode=args.mode)
+                    depth2_built.append(f"{n}->{gname} ({len(two.df):,} rows)")
+                    blocks.append(asof_statistics(
+                        two, frame[key].to_numpy(),
+                        frame[tcol].to_numpy()).add_prefix(f"{n}_{gname}__"))
         if args.label_history:
             # The label pool is the FITTING pool and nothing else. Every other choice here
             # is a protocol question wearing a feature costume: letting test rows read
@@ -618,6 +657,7 @@ def main() -> None:
         _audit_requested_blocks(out, split)
         return out
 
+    depth2_built: list = []
     reported = set()
 
     def _audit_requested_blocks(frame, split="train"):
@@ -639,6 +679,23 @@ def main() -> None:
         # test reads 35%, because drivers race in seasons and the pool freezes at the end
         # of train. Ranking this feature on its training-row behaviour got the tasks
         # backwards once already.
+        # Depth-2 reports what it BUILT, per split, and refuses to be silently empty. The
+        # old depth-2 work spent a week "measured at no effect" because three separate
+        # defects each emitted +0.00 with sd 0.00 -- output indistinguishable from a careful
+        # null. A list of the paths actually materialised is the cheapest defence against
+        # repeating that.
+        if args.depth2 and f"depth2 {split}" not in reported:
+            reported.add(f"depth2 {split}")
+            if not depth2_built:
+                raise SystemExit(
+                    "--depth2 was requested but no grandchild table was built. Either no "
+                    "child has a timestamped child of its own, or the child tables lack "
+                    "primary keys. On rel-f1 this is correct and structural; anywhere else "
+                    "it means the traversal found nothing and any gap measured would be an "
+                    "artefact of an empty block."
+                )
+            print(f"depth-2 [{split}]: {len(depth2_built)} path(s) -- "
+                  f"{'; '.join(dict.fromkeys(depth2_built))}", flush=True)
         if args.label_history and f"label history {split}" not in reported:
             reported.add(f"label history {split}")
             n_prior = frame["self__n_prior"]
