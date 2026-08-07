@@ -2266,6 +2266,58 @@ often — are graph models over a schema that includes the task table, so past l
 reach a node through message passing without anyone designing a feature. Our two worst
 placings are both rel-f1, and rel-f1 is where this signal is strongest.
 
+### 2026-08-06 — ABSTENTION REFUTED, and it corrects my diagnosis of rel-avito
+
+Tuning loses 1.29 on rel-avito/user-clicks (untuned `base` 67.32 against a calibrated 66.03),
+which is four places in the published field. `--abstain` was built to detect that case
+without consulting test: split validation by time, pick the winner on the early half, keep it
+only if it still beats the untuned arm on the late half. The falsification condition was
+recorded before the run — it had to fire on rel-avito and stay silent on rel-trial and
+rel-event.
+
+**It fired zero times in four seeds on user-clicks.** `+struct` won the early half *and* the
+late half in every replicate:
+
+```
+ranking holds across the val gap (+struct: 64.12 early, 66.08 late) -- tuning kept
+ranking holds across the val gap (+struct: 63.91 early, 66.80 late) -- tuning kept
+ranking holds across the val gap (+struct: 63.94 early, 67.16 late) -- tuning kept
+ranking holds across the val gap (+struct: 64.69 early, 67.30 late) -- tuning kept
+```
+
+Result 66.18 ± 0.61 against the ordinary 66.03 ± 0.54 — a no-op, and the 0.15 is protocol
+noise, not an effect.
+
+**THIS CORRECTS THE DIAGNOSIS I GAVE TWO ENTRIES ABOVE.** I wrote that rel-avito loses
+because "the arms are near-identical and selection is fitting noise on a small validation
+split". That is wrong on both counts. Validation is **21,183 rows** — not small — and its
+preference is **not noisy**: it picks `+struct` over `base` consistently, in every seed, on
+both halves of its own time range. Test then prefers `base` by 1.15. So validation is stable
+and systematically pointing the wrong way. **Bias, not noise** — the same finding that closed
+the selection thread, showing up on a task where I had misattributed it.
+
+**And that is why abstention cannot work.** The instrument checks validation against
+*itself*. Both halves of validation share whatever makes validation disagree with test, so a
+consistent bias is exactly the thing this design is blind to — it can only catch an
+*unstable* ranking, and the ranking here is perfectly stable. **Any instrument that validates
+validation internally is refuted by this result, not just this one.** That is a larger class
+than `--abstain`: it covers held-out-validation splits, val-internal cross-validation, and
+ranking-stability checks generally.
+
+**What is not explained, and is now the open question.** The late half of validation scores
+66–67, the same range as test, so this is not simple temporal distance — a *later* validation
+slice at test-like difficulty still prefers the arm test rejects. Whatever separates rel-avito
+validation from rel-avito test is not the train→query gap. That leaves a distribution
+difference in which rows or entities appear, and it is measurable: compare the entity
+overlap and feature distributions of val against test directly, without any model. That is a
+cheaper question than another selection instrument, and it is the one worth asking next.
+
+**Kept, off by default, with this entry attached.** `--abstain` is correct code with five
+tests and it costs nothing to run; it is simply blind to the failure it was aimed at. Its
+value now is as a recorded negative: the remaining runs on rel-trial and rel-event will say
+whether it *also* fires spuriously where tuning genuinely helps, which would make it harmful
+rather than merely useless.
+
 ### 2026-08-06 — categories across all seven tasks: positive wherever it exists, absent on four
 
 Categories was written off here once on a `--children 3` measurement, then cleared at ten

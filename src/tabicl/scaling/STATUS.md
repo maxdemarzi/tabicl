@@ -275,11 +275,16 @@ and what to expect *before* calibrating.
 Mean **+0.85**, negative on two of seven. **The number to give a customer is not the mean —
 it is the rule that predicts their case: tuning pays where the optional feature blocks pay.**
 rel-trial's best block is worth +2.63 over the default one and rel-event's +1.87; on
-rel-avito the best is +0.24 on one task and *nothing* on the other. Where there is nothing
-worth choosing between, selection picks among near-identical options on a small validation
-split and fits noise. `user-clicks` loses **1.29** that way — four places in the published
-field — and it reproduced across two independent rounds at two different defaults, so it is
-a property of the task rather than a bad draw.
+rel-avito the best is +0.24 on one task and *nothing* on the other. `user-clicks` loses
+**1.29** — four places in the published field — reproduced across two independent rounds at
+two different defaults, so it is a property of the task rather than a bad draw.
+
+**Not because selection is noisy there.** Validation on that task is 21,183 rows and picks
+`+struct` over `base` consistently, in every seed, on both halves of its own time range;
+test then prefers `base`. Validation is stable and systematically wrong, which is the same
+bias-not-noise finding that closed the selection thread. `--abstain` was built to catch this
+and is **refuted**: it fired 0 times in 4 seeds, because it checks validation against itself
+and both halves share the bias.
 
 So: **if your schema gives the pipeline options, tune; if it does not, the shipped defaults
 are already what tuning would find, and tuning can cost you.** `--abstain` is the in-progress
