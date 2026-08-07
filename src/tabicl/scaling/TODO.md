@@ -15,13 +15,15 @@ evidence is and what it does *not* settle.
    `None`. **The library still ships `None`**, so `flatten_relational` called directly does
    not match the runner. Three places defined a default and disagreed; two now agree.
 
-2. **Categories on by default: recommended, not flipped.** Validation is positive on all
-   three tasks where it applies and negative on none, so its worst-case regret is zero —
-   the same procedure that settled `max_columns`. **But calibrated test is +0.60, +0.93 and
-   −0.44**, and it emits no columns at all on the other four tasks. The procedure says yes;
-   one of three measurable tasks gets worse. Deliberately left to a human, because choosing
-   a user-facing default on the admissible-but-weaker signal is the letter of the discipline
-   against its point. The guard a default needs is already in (`--no-explicit-blocks`).
+2. **DONE — categories is now on by default (`--categories 8`).** It was held back because
+   calibrated test showed **−0.44** on rel-event/user-ignore against validation's +0.26. That
+   number came from six replicates at sd 1.43, so its standard error was about the size of
+   the effect. Re-run at **twelve**, with the reading fixed beforehand: **+0.15**, and
+   rel-trial +0.09, user-repeat +0.93. All positive, none negative — though only user-repeat
+   clears the ±0.6 floor, so the other two are best read as *no effect* rather than as small
+   gains. The baseline itself moved 81.98 → 81.54 between replicate counts, which is the
+   honest measure of that task's noise. **Reversible with `--categories 0`**, and every
+   standing number predates it.
 
 3. **The TabICL `feature_mask` bug, documented and not fixed.** `predict_proba` builds
    `feature_mask` over the input feature space and indexes it against a filter fitted in a
