@@ -104,6 +104,7 @@ STANDING_FLAGS = {
 
 
 _CATEGORY_MAPS: dict = {}
+_TIME_DELTA_COLS: dict = {}
 
 
 def _numeric(df: pd.DataFrame, fit: bool = False, tag: str = "") -> np.ndarray:
@@ -413,6 +414,16 @@ def main() -> None:
                          "default must not crash on a schema it does not fit.")
     ap.add_argument("--no-explicit-blocks", dest="explicit_blocks", action="store_false",
                     help="see --explicit-blocks.")
+    ap.add_argument("--entity-time-deltas", action="store_true",
+                    help="keep the entity table's own datetime columns as days before the "
+                         "cutoff instead of dropping them. We delete them outright today; "
+                         "RDBLearn converts them by default. Turns `dob` into age at "
+                         "prediction time and `joinedAt` into account tenure -- quantities "
+                         "nothing else here expresses. Gated standalone on test: joinedAt "
+                         "57.90 on rel-event, dob 54.23 on rel-f1, start_date 49.11 on "
+                         "rel-trial, and rel-avito has no such columns. A column whose value "
+                         "lies after the cutoff is dropped with a note, decided once on the "
+                         "fitting frame so the feature space cannot differ across splits.")
     ap.add_argument("--depth2", action="store_true",
                     help="aggregate grandchild tables reached through each child. Recorded "
                          "here as unavailable on the whole benchmark; that was true of "
@@ -587,6 +598,38 @@ def main() -> None:
         cols = [c for c in base.columns
                 if c not in drop and not pd.api.types.is_datetime64_any_dtype(base[c])]
         blocks = [base[cols].reset_index(drop=True)]
+        if args.entity_time_deltas:
+            # The entity table's own datetime columns, kept as days BEFORE the cutoff rather
+            # than dropped. RDBLearn does this by default; we deleted the information
+            # outright. `dob` becomes age at prediction time, `joinedAt` becomes tenure --
+            # quantities nothing else in the pipeline expresses.
+            #
+            # A datetime that lies AFTER the cutoff is a fact about the future, and no amount
+            # of differencing fixes that. The admissible set is decided ONCE, on the fitting
+            # frame, and reused -- deciding per split would let a column live in train and
+            # vanish in test, which is a different feature space, not a safer one.
+            dts = [c for c in base.columns
+                   if c not in drop and pd.api.types.is_datetime64_any_dtype(base[c])]
+            cut = frame[tcol].to_numpy()
+            if split == "train" and "entity_time" not in _TIME_DELTA_COLS:
+                keep = []
+                for c in dts:
+                    d = (cut - base[c].to_numpy()) / np.timedelta64(1, "D")
+                    ahead = float(np.nanmean(d < 0)) if np.isfinite(d).any() else 1.0
+                    if ahead > 0.005:
+                        print(f"entity time delta: DROPPING {c!r} -- {ahead:.1%} of training "
+                              f"rows have it after the cutoff, so it describes the future",
+                              flush=True)
+                    else:
+                        keep.append(c)
+                _TIME_DELTA_COLS["entity_time"] = keep
+                print(f"entity time deltas: keeping {keep or 'nothing'} of {dts or 'none'}",
+                      flush=True)
+            kept = _TIME_DELTA_COLS.get("entity_time", [])
+            if kept:
+                blocks.append(pd.DataFrame(
+                    {f"dt__{c}": (cut - base[c].to_numpy()) / np.timedelta64(1, "D")
+                     for c in kept}).reset_index(drop=True))
         if args.calendar or args.calendar_trend:
             # Origin is the training minimum, so train and test share a scale. Taking each
             # frame's own minimum would silently reset it at test time.
