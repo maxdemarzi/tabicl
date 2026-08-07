@@ -1246,10 +1246,28 @@ at that precision is suggestive, not decisive. Every large-looking result in thi
 that got more replicates moved: categories' −0.44 became +0.15, its +0.60 became +0.09. The
 confirmation run at higher replicate count is the number that counts.
 
-**user-visits does not move**, which matters: it is the same database and the same depth-2
-path. Whatever the grandchild table carries is useful for predicting *clicks* and not for
-predicting *visits* — consistent with `SearchStream` being the record of what was shown and
-clicked, and an argument that this is signal rather than added capacity.
+**Neither control moved, and both were predicted in advance.** user-visits is the same
+database and the *same* depth-2 path, and it is flat (−0.06). rel-event/user-ignore gives
++0.18 calibrated with all three plain arms slightly **down** (base 81.24→80.76, `+struct`
+82.84→82.51, `+counts` 81.55→81.08).
+
+| task | gate said | measured (calibrated) |
+|---|---:|---:|
+| rel-avito / user-clicks | best column **69.1** | **+0.66** |
+| rel-avito / user-visits | same path | −0.06 |
+| rel-event / user-ignore | best column 52.2 | +0.18, arms down |
+
+**The gate was informative here, which it was not for label history.** It said rel-event had
+nothing and rel-event had nothing. The difference from the label-history case is worth
+naming: there, the feature duplicated information the pipeline already held through
+`key_target_history`, so a high standalone score meant nothing. Here the grandchild table is
+one the pipeline never touches at any depth, so there is no incumbent for it to be redundant
+with — and that, not the size of the gate number, is what made the gate worth believing.
+
+**And user-visits not moving is the useful control.** Same database, same path, different
+label. `SearchStream` is the record of what was shown and clicked, so it helping *clicks* and
+not *visits* is an argument that this is signal rather than the model simply getting more
+columns to work with.
 
 **What it would be worth if it holds.** At 66.69, user-clicks moves from 8th to 7th of ten,
 above GraphSAGE (65.90) and RDBLearn+v2.5 (65.72) and below TabPFN-REL (67.09). One place.
