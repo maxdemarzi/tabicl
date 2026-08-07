@@ -2236,6 +2236,69 @@ often — are graph models over a schema that includes the task table, so past l
 reach a node through message passing without anyone designing a feature. Our two worst
 placings are both rel-f1, and rel-f1 is where this signal is strongest.
 
+### 2026-08-06 — a leakage control that fired on nothing, and cost rel-avito its only user-similarity feature
+
+**rel-avito does build the User → Ad → User similarity feature, and then throws it away.**
+The candidate keys there are `PhoneRequestsStream_AdID`, `VisitStream_AdID`,
+`SearchInfo_LocationID`, `SearchInfo_CategoryID`, and `key_target_history` turns each into
+`n_prior`, `n_positive`, `positive_rate`, `n_linked` as of the row's cutoff. So
+`VisitStream_AdID__positive_rate` is exactly "the outcome rate among other users who visited
+the same ad" — a target-encoded historical statistic over similar users, membership-weighted
+by how many keys two users share. It is computed on every run. And on rel-avito:
+
+```
+arm eligibility: {'base': True, '+struct': True, '+counts': True,
+                  '+rate': False, '+history': False, '+text+rate': False}
+  +rate is EXCLUDED from selection: its own controls failed
+```
+
+**The control that excluded it was testing nothing.** The temporal control rewinds every
+cutoff and checks the score does not improve, with shifts scaled to the task's span:
+`round(0.05 * span)` and `round(0.15 * span)`. rel-avito's train span is **8 days**, so
+those are **0 and 1**.
+
+* The first "control" was **shift 0 — the unshifted setting itself.** That is why the report
+  printed `control=0.5645`: it is the mean of the observed 0.5618 and the single real
+  measurement 0.5671, not a second control.
+* The only real shift was **1 day against a 4-day label horizon.** An outcome only becomes
+  readable one horizon after it is recorded, so a 1-day rewind cannot withhold one. The
+  printed coverage says so plainly: **0.572 → 0.571.**
+* On that basis a **0.0053** difference was reported as *"the features are reaching past the
+  cutoff"* and the whole `+rate` family was barred from selection on this dataset.
+
+**rel-trial had the same defect more quietly**: a 150-day first shift under a 365-day
+horizon. rel-event (7, 22 against a 7-day horizon) and rel-f1 were always fine, which is why
+this survived — the two tasks with long spans looked healthy.
+
+**Fixed by flooring every shift at one horizon, dropping zeros, and deduplicating** — two
+fractions that round to the same number are one control, not two. Extracted as
+`temporal_shift_grid` with five tests, two of which pin rel-event at `(7, 22)` and rel-f1 at
+`(1000, 3000)` **unchanged**, so a fix to the broken tasks cannot silently re-open verdicts
+reached on the healthy ones. Added the mirror of the existing vacuity guard: a shift moving
+coverage by under 1% now says outright that a LEAK verdict from it is an artefact of the
+fill value rather than evidence.
+
+**Thirteenth defect, and the worst-shaped one yet.** The earlier twelve produced numbers
+that looked like results. This one produced a *refusal* that looked like rigour — a control
+failing is exactly what a careful pipeline is supposed to do, so it reads as the system
+working. A false negative from a safety check is harder to see than a false positive from a
+measurement, because nobody audits the thing that said no.
+
+**What is NOT yet known, and must not be assumed:** whether `+rate` passes under a real
+4-day shift, and whether it is worth anything if it does. Eligibility is permission to be
+selected, not evidence of value — `+rate` scored **0.5618** standalone against a 65.54
+pipeline, so promoting it into the selection pool could make the calibrated number *worse*.
+Both are measured in the next round. Meanwhile the two arms that *are* eligible on rel-avito
+carry the label-free half of the same idea: `n_linked`, the co-visitation degree, at 61.43
+standalone, and the resolved-label counts at 61.83.
+
+**Still absent from this pipeline on rel-avito**, for the record: no K-NN or top-K cut over
+neighbours, no clustering or distance to cluster centres, no embedding — similarity is exact
+shared-key co-occurrence. And no message passing: the 2-hop path exists as a join, but the
+aggregation is an unweighted mean, with no attention weighting neighbours dynamically.
+`neighbour_label_features` and `select_graph_context` exist but were built against
+rel-event's explicit friendship edges; rel-avito has no user–user table.
+
 ### 2026-08-06 — categories on user-repeat: the first effect validation agrees with
 
 Seven effects here are real-on-test and unselectable, because validation sits near train and
