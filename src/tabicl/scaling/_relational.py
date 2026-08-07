@@ -1159,3 +1159,95 @@ def _extremes(out, label, columns, df, order, hi_idx, lo_idx) -> None:
                 maxs[i] = np.nanmax(window_values)
         out[f"{label}__{col}__min"] = mins
         out[f"{label}__{col}__max"] = maxs
+
+
+def two_hop_table(
+    grandchild: pd.DataFrame,
+    grandchild_fk: str,
+    child: pd.DataFrame,
+    child_pk: str,
+    child_fk: str,
+    name: str,
+    time_column: str,
+    child_time_column: Optional[str] = None,
+    **table_kwargs,
+) -> "Table":
+    """Reach a grandchild table from the entity, for **repeated** entity keys.
+
+    `Table.children` already does depth-2, but only where entity keys are unique: it folds
+    the deeper level in first and propagates a cutoff down, which is ambiguous when the same
+    entity appears at several prediction times. `asof_statistics` is the path that handles
+    repeated keys, via per-row cutoffs, and it has no depth-2 — so on RelBench the two
+    datasets whose entities recur, **rel-event and rel-avito, had no depth-2 at all**. That
+    was recorded as depth-2 being unavailable on the benchmark. It was this guard.
+
+    **The general problem is harder than the one that actually arises.** A single cutoff *t*
+    governs the whole query: the entity's. There is no per-child cutoff to reconcile, so
+    "which grandchild rows may this entity see at *t*" is answered by one condition, and the
+    two-hop case collapses to an ordinary depth-1 as-of aggregation over a **relabelled**
+    grandchild table. That is what this builds — the returned `Table` is keyed by the entity
+    and carries the grandchild's own timestamp, so `asof_statistics` handles it unchanged.
+
+    Measured before it was built (2026-08-07), fraction of (grandchild, entity-cutoff) pairs
+    that precede the cutoff — i.e. how much of the subtree is legitimately visible:
+
+    ==========  ==========================================  ========
+    dataset     path                                        usable
+    ==========  ==========================================  ========
+    rel-event   users -> events -> event_attendees          25.8%
+    rel-event   users -> events -> event_interest           33.8%
+    rel-avito   UserInfo -> SearchInfo -> SearchStream      23.8%
+    rel-trial   studies -> outcomes -> outcome_analyses     **0.0%**
+    ==========  ==========================================  ========
+
+    rel-trial is the reason the guard felt justified: there the subtree *is* the label, and a
+    correct cutoff empties it. That finding is real and does not generalise — on the other
+    two roughly a quarter of the data is available and was being discarded.
+
+    Parameters
+    ----------
+    grandchild, grandchild_fk
+        The deeper table and the column linking it to the child's primary key.
+
+    child, child_pk, child_fk
+        The intermediate table, its primary key, and the column linking it to the entity.
+
+    time_column
+        The grandchild's own timestamp. Required: an untimed grandchild cannot be filtered
+        to a cutoff, and admitting it would import the future wholesale.
+
+    child_time_column
+        When the link itself is timestamped, a grandchild becomes visible only once **both**
+        it and the membership connecting it to the entity exist, so the effective time is the
+        later of the two. Omitting it treats every link as having always existed, which is
+        the permissive reading — the same caveat `key_target_history` carries for untimed
+        link tables.
+
+    Returns
+    -------
+    Table
+        Keyed by the entity, ready for `asof_statistics`. Rows whose entity or timestamp is
+        null are dropped rather than imputed.
+    """
+    if time_column not in grandchild.columns:
+        raise ValueError(
+            f"two_hop_table needs the grandchild's own timestamp; {time_column!r} is not a "
+            f"column of the grandchild table. Without it nothing bounds what this entity "
+            f"could see at its cutoff."
+        )
+    link_cols = [child_pk, child_fk] + ([child_time_column] if child_time_column else [])
+    link = child[link_cols].dropna(subset=[child_pk, child_fk])
+    merged = grandchild.merge(link, left_on=grandchild_fk, right_on=child_pk,
+                              how="inner", suffixes=("", "__child"))
+    if child_time_column:
+        # Later of the two: the grandchild has resolved AND the membership exists.
+        merged[time_column] = np.maximum(
+            merged[time_column].to_numpy(), merged[child_time_column].to_numpy())
+        merged = merged.drop(columns=[child_time_column])
+    merged = merged.dropna(subset=[child_fk, time_column])
+    # The join keys are structure, not signal, and leaving them in lets the model key on an
+    # identifier -- the same reason the entity's own primary key is dropped at depth 1.
+    merged = merged.drop(columns=[c for c in (child_pk, grandchild_fk)
+                                  if c in merged.columns and c != child_fk])
+    return Table(merged, foreign_key=child_fk, name=name, time_column=time_column,
+                 **table_kwargs)

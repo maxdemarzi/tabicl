@@ -5,7 +5,8 @@ attention) that cannot be fully realised without pretraining.
 """
 
 from ._mqa import collapse_kv_heads, expand_kv_heads, kv_cache_bytes
-from ._relational import Table, asof_statistics, flatten_relational, hop_product
+from ._relational import (Table, asof_statistics, flatten_relational, hop_product,
+                          two_hop_table)
 from ._calibrate import Calibration, calibrate_context_size, sweep_configurations
 from ._leakage import LeakageReport, permutation_control, temporal_control
 from ._graph_context import label_homophily, select_graph_context
@@ -53,6 +54,7 @@ __all__ = [
     "Table",
     "flatten_relational",
     "hop_product",
+    "two_hop_table",
     "asof_statistics",
     "Semiring",
     "SUM_PRODUCT",

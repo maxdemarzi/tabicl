@@ -2885,3 +2885,78 @@ def test_abstention_degrades_to_no_opinion_without_usable_entries():
     assert abstention_choice({("base", 10, "random"): (nan, nan)}) == (None, None, False)
     # no base arm at all -> nothing to fall back to
     assert abstention_choice({("+rate", 10, "random"): (70.0, 60.0)}) == (None, None, False)
+
+
+# --------------------------------------------------------------------------------------
+# two_hop_table -- depth-2 for repeated entity keys.
+#
+# rel-event and rel-avito were recorded as having no depth-2 available. They do: 25.8% and
+# 23.8% of (grandchild, cutoff) pairs precede the cutoff. What blocked them was this
+# package requiring unique entity keys for depth-2, not the data.
+# --------------------------------------------------------------------------------------
+
+def _two_hop_fixture():
+    import pandas as pd
+    t = pd.Timestamp("2021-01-01")
+    child = pd.DataFrame({"cid": [1, 2, 3], "entity": ["a", "a", "b"],
+                          "ctime": [t, t + pd.Timedelta(days=10), t]})
+    grand = pd.DataFrame({
+        "cid":  [1, 1, 2, 3],
+        "gtime": [t, t + pd.Timedelta(days=5), t + pd.Timedelta(days=20), t],
+        "value": [1.0, 2.0, 3.0, 4.0],
+    })
+    return child, grand
+
+
+def test_two_hop_table_keys_by_entity_and_keeps_the_grandchild_clock():
+    from tabicl.scaling import two_hop_table, asof_statistics
+    import pandas as pd
+    child, grand = _two_hop_fixture()
+    tbl = two_hop_table(grand, "cid", child, "cid", "entity", "g", time_column="gtime")
+    assert tbl.foreign_key == "entity"
+    assert tbl.time_column == "gtime"
+    # join keys are structure, not signal, and must not reach the model
+    assert "cid" not in tbl.df.columns
+    # as-of at a cutoff between the rows sees only what precedes it
+    out = asof_statistics(tbl, np.array(["a"]),
+                          pd.to_datetime(pd.Series([pd.Timestamp("2021-01-08")])).to_numpy())
+    assert out.filter(like="count").iloc[0, 0] == 2      # the two 'a' rows before day 8
+
+
+def test_two_hop_table_respects_the_link_time_when_given():
+    from tabicl.scaling import two_hop_table, asof_statistics
+    import pandas as pd
+    child, grand = _two_hop_fixture()
+    # child 2 forms on day 10, so its grandchild (day 20) is unaffected; but a grandchild
+    # that PRE-dates its own link must not become visible before the link exists.
+    grand2 = grand.copy()
+    grand2.loc[grand2["cid"] == 2, "gtime"] = pd.Timestamp("2021-01-02")
+    without = two_hop_table(grand2, "cid", child, "cid", "entity", "g", time_column="gtime")
+    with_link = two_hop_table(grand2, "cid", child, "cid", "entity", "g",
+                              time_column="gtime", child_time_column="ctime")
+    cut = pd.to_datetime(pd.Series([pd.Timestamp("2021-01-05")])).to_numpy()
+    n_without = asof_statistics(without, np.array(["a"]), cut).filter(like="count").iloc[0, 0]
+    n_with = asof_statistics(with_link, np.array(["a"]), cut).filter(like="count").iloc[0, 0]
+    # as-of is STRICTLY before the cutoff, so the day-5 row is excluded from both.
+    # Entity 'a' reaches grandchildren at days 0, 5 (via child 1) and 2 (via child 2).
+    assert n_without == 2          # permissive: days 0 and 2; the link is assumed eternal
+    assert n_with == 1             # correct: child 2 forms on day 10, so its day-2
+                                   # grandchild is not visible at day 5 -- only day 0 remains
+
+
+def test_two_hop_table_requires_a_grandchild_timestamp():
+    from tabicl.scaling import two_hop_table
+    child, grand = _two_hop_fixture()
+    with pytest.raises(ValueError, match="grandchild's own timestamp"):
+        two_hop_table(grand, "cid", child, "cid", "entity", "g", time_column="missing")
+
+
+def test_two_hop_table_drops_unlinked_and_null_rows():
+    from tabicl.scaling import two_hop_table
+    import pandas as pd
+    child, grand = _two_hop_fixture()
+    orphan = pd.concat([grand, pd.DataFrame({"cid": [99], "gtime": [pd.NaT], "value": [9.0]})],
+                       ignore_index=True)
+    tbl = two_hop_table(orphan, "cid", child, "cid", "entity", "g", time_column="gtime")
+    assert len(tbl.df) == len(grand)          # the orphan reaches no entity
+    assert tbl.df["gtime"].notna().all()
