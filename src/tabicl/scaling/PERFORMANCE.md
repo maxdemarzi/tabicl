@@ -141,24 +141,31 @@ of the column is to set an expectation a user can hold us to. Rows are therefore
 re-measured at the current default, and every row says which default it was measured at
 rather than blending the two.
 
-| task | out of the box | best block | calibrated | calibration is worth | `max_columns` |
-|---|---:|---:|---:|---:|:--:|
-| rel-trial / study-outcome | 69.56 | **72.19** `+rate` | 72.30 | **+2.74** | **4** (shipped) |
-| rel-event / user-ignore | 80.22 | **82.09** `+struct` | 81.98 | **+1.76** | **4** (shipped) |
-| rel-event / user-repeat | 77.13 | 77.32 `+struct` | 77.89 | +0.76 | **4** (shipped) |
-| rel-f1 / driver-top3 | 82.19 | **82.66** `+struct` | 82.13 | −0.06 | `none` ✦ |
-| rel-avito / user-visits | 65.61 | **65.85** `+rate` | 65.50 | −0.11 | **4** (shipped) |
-| rel-f1 / driver-dnf | **69.19** | 69.19 (base only) | 68.90 | −0.29 | `none` ✦ |
-| rel-avito / user-clicks | *running* | *running* | *running* | *running* | **4** |
+**All seven, every row at the shipped defaults, so the "out of the box" column means what it
+says:**
 
-**Six of seven: mean +0.80, negative on three, and inside the ±0.6 floor on three.**
+| task | out of the box | best block | calibrated | calibration is worth |
+|---|---:|---:|---:|---:|
+| rel-trial / study-outcome | 69.56 | **72.19** `+rate` | 72.30 | **+2.74** |
+| rel-event / user-ignore | 80.22 | **82.09** `+struct` | 81.98 | **+1.76** |
+| rel-f1 / driver-dnf | 66.62 | 66.62 (base only) | 68.10 | **+1.48** |
+| rel-event / user-repeat | 77.13 | 77.32 `+struct` | 77.89 | +0.76 |
+| rel-f1 / driver-top3 | 79.27 | **79.54** `+struct` | 79.90 | +0.63 |
+| rel-avito / user-visits | 65.61 | **65.85** `+rate` | 65.50 | −0.11 |
+| rel-avito / user-clicks | **67.32** | 66.83 `+counts` | 66.03 | **−1.29** |
 
-✦ **These two rows are NOT "out of the box" and the column header would mislead without
-this.** Both rel-f1 runs passed `--max-columns none`, the schema-level standing flag for that
-dataset, so they answer *"is calibration worth anything once the budget is already right?"*
-rather than *"what does a user get from shipped settings?"* The answer to the first is
-**no — −0.06 and −0.29**. Runs at the shipped 4 are in flight. I labelled both rows `4` when
-first writing this table; that was wrong and is corrected here.
+**Mean +0.85, negative on two, inside the ±0.6 floor on one.**
+
+**A separate measurement, and do not confuse it with the table.** Both rel-f1 rows were also
+run with `--max-columns none`, that dataset's schema-level standing flag, which answers a
+different question: *is calibration worth anything once the budget is already right?* Answer:
+**no — −0.06 on driver-top3 and −0.29 on driver-dnf.** The gap between the two runs prices
+the shipped default on that schema: **untuned, `none` beats the shipped 4 by 2.92 on
+driver-top3 and 2.57 on driver-dnf.** So on rel-f1 the shipped budget costs more than
+calibration recovers, and calibration's +0.63 and +1.48 above are mostly it clawing back
+ground the default gave away. I first wrote these two rows into the table labelled
+`max_columns=4` when they had been run with `none`; that was wrong, and both figures now
+appear where they belong.
 
 **THE DECISIVE RESULT, and it splits the prediction rather than settling it.** driver-top3
 carried the +8.48 that dominated the old table, and I predicted that fixing the budget would
@@ -173,13 +180,20 @@ is neither "calibration is budget repair" nor a single average: **where a global
 wrong for your schema, calibration repairs it and is worth a great deal; where the defaults
 already fit, it ranges from −0.3 to +2.7 and the sign varies by schema.**
 
-**The clearest pattern is not the average — it is which datasets gain.** rel-trial and
-rel-event gain; both rel-avito tasks and both rel-f1 tasks do not. **Calibration pays where
-the optional feature blocks pay.** rel-trial's best block is `+rate` at +2.63 over base and
-rel-event's is `+struct` at +1.87; on rel-avito the best block is worth +0.24 and on rel-f1
-driver-dnf there are no optional blocks at all. Selection has something to choose between on
-the first two and nothing on the last two, which is a better predictor of whether tuning is
-worth your time than any average of the column.
+**The clearest pattern is not the average — it is which datasets gain.** rel-trial, rel-event
+and rel-f1 gain; **both rel-avito tasks lose.** That split is not about the amount of tuning
+available, it is about whether this schema gives the pipeline anything to tune. rel-trial's
+best block is `+rate` at +2.63 over base and rel-event's is `+struct` at +1.87; on rel-avito
+the best block is worth +0.24 on one task and *nothing* on the other, where the untuned
+`base` at **67.32** beats every block and beats the calibrated 66.03.
+
+**rel-avito is the case worth telling a user about**, because it is the one where tuning
+actively hurts, twice, and the mechanism is visible: with no block worth choosing, selection
+is choosing between near-identical options on a small validation split, so it is fitting
+noise. `user-clicks` loses **1.29** that way — four places in the published field — and the
+figure reproduced almost exactly across two independent rounds (67.18 → 65.89 at the old
+default, 67.32 → 66.03 at the new one), so it is a property of the task rather than a bad
+draw.
 
 **One thing the table shows that the calibrated protocol missed.** On rel-avito/user-visits
 the best block is `+rate` at **65.85** — better than base 65.61 and better than the
@@ -2300,8 +2314,27 @@ failing is exactly what a careful pipeline is supposed to do, so it reads as the
 working. A false negative from a safety check is harder to see than a false positive from a
 measurement, because nobody audits the thing that said no.
 
-**What is NOT yet known, and must not be assumed:** whether `+rate` passes under a real
-4-day shift, and whether it is worth anything if it does. Eligibility is permission to be
+**RESOLVED, and not in the direction I expected: `+rate` still fails, and now legitimately.**
+Re-run with the repaired grid — `shifts (4,)d` against the 4-day horizon —
+rel-avito/user-clicks reports the same verdict, and the new indeterminacy note **did not
+fire**, meaning the shift moved at least 5% of feature values. So the control was
+informative and it failed. The exclusion of the User → Ad → User target encoding on that task
+stands on evidence.
+
+**Both things are true and the distinction matters.** The old grid *was* broken — it rewound
+1 day against a 4-day horizon and its verdict meant nothing — so fixing it was necessary.
+But I wrote that the verdict was "an artefact", and a properly-powered control reached the
+same conclusion. The right reading of the original entry is *"this verdict was unfounded"*,
+not *"this feature is fine"*. A broken instrument that happens to agree with a working one
+was still broken, and a working one that agrees with it was still worth building.
+
+**And on rel-avito/user-visits every arm now passes**, `+rate` and `+history` included — so
+the repaired control is not simply stricter, it discriminates between the two tasks. On that
+task `+rate` at **65.85** is the best block available, above base 65.61 and above the
+calibrated 65.50, which the selection rule declined to take.
+
+**What is still not known:** whether `+rate` is worth anything on user-clicks, since it
+remains excluded there and cannot be scored inside the protocol. Eligibility is permission to be
 selected, not evidence of value — `+rate` scored **0.5618** standalone against a 65.54
 pipeline, so promoting it into the selection pool could make the calibrated number *worse*.
 Both are measured in the next round. Meanwhile the two arms that *are* eligible on rel-avito
