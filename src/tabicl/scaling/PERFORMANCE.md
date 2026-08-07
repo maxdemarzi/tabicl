@@ -1304,11 +1304,23 @@ Where a screen has already happened, `paired.shrink` discounts the estimate by i
 standard error under an explicit N(0, 0.5) prior. On today's numbers it reads siblings on
 driver-dnf as **+0.19** rather than +0.61, which is the honest value of a t = 0.81 result.
 
-**What this implies for everything measured before today.** Every A/B in this file that was
-run on the calibrated arm carries roughly three times the standard error it needed to, so the
-nulls are weaker evidence than they look — "no effect" at SE 0.8 is not much of a claim.
-The seven real-on-test-but-unselectable effects, and several of the four ideas refuted today,
-deserve re-measurement on fixed arms before being treated as closed.
+**How far back does this reach? Checked, rather than left as a worry — and the answer is
+narrow.** Re-running the corrected pairing over every log in the scratchpad:
+
+* **`eval_feature_gate` was always right.** It computes both arms in the *same* run at the
+  same seed and prints the per-seed `gap` column directly, reporting mean, sd and the
+  **paired SE** — e.g. `GATEROW rel-avito/user-visits recent +0.90 0.76 SE 0.34 4/5`. Every
+  gate sweep in this file, including the seven real-on-test-but-unselectable effects, is
+  sound and needs no revisiting.
+* **The damage is confined to cross-run A/Bs read off `eval_track_record`'s calibrated
+  block** — which is what this session did, repeatedly, and nothing older. Those carry about
+  three times the standard error they needed.
+* Within today's work, the comparisons I computed from **plain-arm** per-seed tables
+  (label history's +0.90 / +0.08 / +0.21) were already on fixed configurations and stand.
+
+So the earlier version of this paragraph — "several closed questions deserve re-measurement"
+— was an overstatement made before checking. The gate machinery had the right design all
+along; the calibrated block was the outlier, and it is the one I reached for all day.
 
 ### 2026-08-07 — the traversal covers one of four shapes, and that is the real finding
 
