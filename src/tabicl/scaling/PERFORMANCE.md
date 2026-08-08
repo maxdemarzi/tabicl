@@ -1253,15 +1253,41 @@ the *wrong way* — near train, far from test, systematically misordered. It may
 too. But it does not have to: a ranking with no resolving power produces exactly these
 symptoms, and this is measurable directly rather than inferred from failures.
 
-**It predicts a specific fix that already exists and was already refuted.**
+**It predicted a specific fix, the fix was tested, and THE ACCOUNT IS WRONG.**
 `--ensemble-configs N` averages predictions over the top N candidates instead of committing
-to the argmax — precisely the right move when the ranking cannot tell them apart. It was
-measured at **mean −0.045 over four tasks** and shelved as a null. But it runs inside the
-calibrated loop, so that was a calibrated-versus-calibrated comparison at roughly three times
-the standard error it needed. **A null measured that way is weak evidence**, and the theory
-now puts the effect near +1.0. Re-measuring it is the best available test of this whole
-account, and the reading is fixed in advance: ≥ +0.6 confirms it, ≤ +0.2 leaves the original
-null standing and this explanation needing another mechanism.
+to the argmax — precisely the right move if the ranking cannot tell them apart. It had been
+measured at −0.045 and shelved, but only through the underpowered calibrated comparison, so
+the theory earned it a proper re-run. Twelve replicates, paired:
+
+| task | argmax | ensemble top-5 | paired Δ | SE | t | positive |
+|---|---:|---:|---:|---:|---:|---:|
+| rel-trial / study-outcome | 73.08 | 72.50 | **−0.58** | 0.24 | −2.39 | 2/12 |
+| rel-event / user-ignore | 81.69 | 81.61 | −0.08 | 0.38 | −0.22 | 4/12 |
+
+The reading was fixed beforehand at ≤ +0.2 meaning "the null stands and this needs another
+mechanism". It landed at **−0.33 mean**, and on rel-trial the ensemble is *worse* than the
+argmax at t = −2.39.
+
+**And the direction refutes the account rather than merely failing to support it.** If
+selection were a coin flip among the top five, the argmax would score like a random member of
+that group, and an ensemble of five would beat a random member — that is what ensembles do.
+**The argmax beats the ensemble.** So validation's top-1 is genuinely better than a random
+top-5 member: the ranking carries real information, and considerably more than the 0.12–0.35
+gaps suggested.
+
+**Where the inference went wrong.** I read "gap small relative to noise" as "no resolving
+power". That does not follow when the two measurements share structure: validation and test
+scores for the same configuration are driven by the same context draw and the same feature
+set, so their errors are correlated, and a validation edge far below the noise floor can
+still predict a test edge. The gap table is a real measurement; the conclusion drawn from it
+was not.
+
+**What survives.** The gaps are still small, selection still delivers only ~40% of a fixed-arm
+gain, and user-visits still shows +0.61 on `base` becoming −0.06 after selection. Those are
+measurements. What does not survive is the *explanation* — selection is not failing because
+it cannot distinguish candidates, since it distinguishes them well enough to beat hedging.
+Something else is wrong with it, and the bias account this file has carried all along is back
+to being the better one.
 
 ### 2026-08-07 — RE-MEASURED on fixed arms: the features work, the selection step eats most of it
 
