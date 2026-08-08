@@ -36,7 +36,7 @@ from tabicl.scaling import (
     # 2. KV cache
     kv_cache_bytes, collapse_kv_heads, expand_kv_heads,
     # 3. relational
-    Table, flatten_relational, asof_statistics, hop_product,
+    Table, flatten_relational, asof_statistics, hop_product, two_hop_table,
     # semirings / FAQ
     Semiring, SUM_PRODUCT, MIN_PLUS, MAX_PLUS, BOOLEAN, BUILTIN_SEMIRINGS,
     check_semiring_laws,
@@ -150,6 +150,33 @@ fixed codebook plus an `other` bucket — exact, no sketches, and valid over win
 because counts are invertible. `min_category_share` skips columns whose codebook would
 capture too little mass; without that gate the block emits near-constant columns for
 free text and hurts badly. `include_mode` adds the modal value, all-history only.
+
+## How far the traversal reaches
+
+A flattener can reach a table four ways. Until 2026-08-07 this package implemented one.
+
+| shape | example | built | worth on a FIXED arm | after selection |
+|---|---|---|---:|---:|
+| entity → child | `users → event_attendees` | always | — (this is the pipeline) | — |
+| entity → child → grandchild | `UserInfo → SearchInfo → SearchStream` | `--depth2` | +0.47 to +0.76 | +0.39 |
+| entity → child → parent → sibling | `drivers → results → constructors → constructor_results` | `--siblings` | +1.81 on driver-dnf | +0.61 |
+| fact × dimension (star join) | `VisitStream × AdsInfo` | `--dimensions` | +0.50 to +0.64 | −0.03 |
+
+`two_hop_table` expresses the middle two: it relabels the far table by the entity and keeps
+that table's own clock, so an ordinary depth-1 as-of aggregation handles it and no per-child
+cutoff arithmetic is needed. That is why the old depth-2 path refused whenever entity keys
+repeated, and why depth-2 was recorded as unavailable on this benchmark when it was available
+on half of it.
+
+**All three are real on a fixed configuration and worth roughly nothing after selection.**
+Two of them produce the *same signature* on the same task — depth-2 gives `base` +0.61 and
+`+struct` −0.10, dimension joins give +0.57 and −0.07 — helping every arm except the one
+validation picks. **The features were never the constraint**, which is the single most useful
+thing measured in this stretch of work.
+
+Two of the four shapes are also structurally unavailable in places, and that is worth knowing
+before reaching for them: rel-f1 has no grandchild tables at all, rel-trial's grandchild
+subtree postdates every cutoff (0 of 158,246 rows), and no database here has a hop 3.
 
 ## Relation to Deep Feature Synthesis
 
