@@ -1221,6 +1221,58 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-08 — CLOSED: the pathology exists on two databases, and nothing available can validate the fix
+
+The corrected probe, eight native RelBench tasks across four datasets never touched here:
+
+| task | val cov | test cov | ratio | |
+|---|---:|---:|---:|---|
+| rel-ratebeer / brewer-dormant | 100.0% | 100.0% | 1.00 | |
+| rel-ratebeer / user-churn | 11.5% | 16.7% | **1.45** | coverage *rises* |
+| rel-ratebeer / beer-churn | 12.7% | 22.6% | **1.78** | coverage *rises* |
+| rel-arxiv / author-category | 69.3% | 68.2% | 0.98 | |
+| rel-arxiv / author-publication | 69.3% | 68.2% | 0.98 | |
+| rel-salt / sales-office | 95.9% | **0.0%** | 0.00 | flagged — see below |
+| rel-salt / item-plant | — | — | — | no shared-key link table |
+| rel-mimic / patient-iculengthofstay | — | — | — | needs credentialed MIMIC-IV access |
+
+**The one flag does not survive inspection, and the reasons are decisive:**
+
+```
+task_type: MULTICLASS_CLASSIFICATION   (30 classes in train, 8 in val, 6 in test)
+340,491 rows / 340,491 entities        every entity appears exactly once
+val and test entities seen in train:   0.0%
+link table spans   2018-01-02 -> 2020-06-30
+test period spans  2020-07-01 -> 2020-12-31
+```
+
+**The link table ends before the test period starts.** Test coverage is 0.0% because the
+source table stops, not because coverage degraded — a truncation, not a collapse. It is also
+multiclass, and has zero entity recurrence, so it is the rel-trial situation rather than the
+rel-avito one. The probe was right to flag `ratio < 0.8`; the label I attached to the flag —
+*"testable ground: same pathology"* — was wrong, and a threshold cannot tell 0.00-because-
+truncated from 0.48-because-degraded.
+
+**So the line closes, and here is the whole of it.**
+
+* **The pathology is real and confined to two databases.** Ratios across everything
+  measurable: 0.48 / 0.57 / 0.69 (rel-avito), 0.72 / 0.74 (rel-f1), and **0.96–1.78 on all
+  eleven other tasks measured**, spanning rel-event, rel-trial, rel-stack, rel-hm,
+  rel-amazon, rel-ratebeer and rel-arxiv. Two of those actually run the other way —
+  rel-ratebeer's coverage *rises* from validation to test.
+* **`--drop-stale-arms` cannot be validated on available data.** It never engages outside the
+  two databases it was designed on. dbinfer-\* needs a `dgl` force-reinstall that would break
+  the torch every measurement here depends on; rel-mimic needs credentialed access.
+* **What it is worth, stated plainly:** +0.65 and +0.49 on rel-avito, confirmed at twelve
+  replicates and the only estimates in this session that did not shrink; +0.97 when stacked
+  with `--depth2 --dimensions`, which would be an 8th → 5th move on user-visits. Inert
+  everywhere else by construction. **And its threshold was chosen knowing which tasks it
+  fixes, so none of it is claimable and none of it enters the headline table.**
+
+**A narrow, safe, unvalidatable fix for two databases is the honest description**, and it is
+worth more than an ambiguous one. The boundary is now measured rather than assumed: eleven
+tasks say where the pathology is not.
+
 ### 2026-08-08 — a probe that reported a conclusion it had not measured
 
 Searching the wider RelBench family for the coverage-collapse pathology, the probe printed:
