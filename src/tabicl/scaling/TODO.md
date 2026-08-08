@@ -4,6 +4,33 @@ Written on stopping, so this can be picked up cold. `STATUS.md` is the current s
 `DESIGN.md` the history log. Nothing here is blocking — the branch is committed, tested
 (176 passed, 1 skipped) and pushed.
 
+## THE ONE THING TO DO NEXT (2026-08-08)
+
+**Run `--drop-stale-arms` on the five RelBenchV1 classification tasks this project does not
+already use.** Everything else below is context; this is the experiment.
+
+Why it is the whole game right now: the rule is worth **+0.65** on rel-avito/user-clicks and
+**+0.49** on user-visits, both confirmed at twelve replicates and both the only estimates in
+that session that did not shrink. Combined with `--depth2 --dimensions` it is worth **+0.97**
+on user-visits — enough to move that task from 8th to **5th of ten**, with the worst seed
+above the current best seed.
+
+And none of it is claimable, because **all seven tasks were used to design the rule**. I
+picked *coverage ratio* as the quantity after seeing which tasks lose from tuning, and set the
+threshold at 0.8 knowing 0.57/0.69/0.72/0.72 are the losers. That is selection on test one
+level up. The features it delivers (`--depth2`, `--dimensions`) are clean and were measured
+with pre-registered readings, but with ordinary selection they are worth −0.06 and −0.03 —
+**the entire gain routes through the contaminated component.**
+
+Five held-out tasks settle it either way, and both outcomes are worth having:
+
+* **It holds** → a three-place rank move on user-visits and one place on user-clicks, from
+  code already written and tested. Then the default question opens.
+* **It does not** → the features stay worth ~0 after selection, and the honest summary of
+  this entire line of work is a negative result. Say so.
+
+Set the reading before the run, as with everything else that survived here.
+
 ## STATE AS OF 2026-08-08
 
 **The features are not the constraint; the selection rule is, and it now has a partial fix.**
