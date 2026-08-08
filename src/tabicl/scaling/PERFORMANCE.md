@@ -1221,6 +1221,56 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-08 — the pieces stack to +0.97 on user-visits, and the gain routes through the contaminated part
+
+Everything built this session, run together on rel-avito/user-visits: `--depth2
+--dimensions --drop-stale-arms`, 8 replicates.
+
+```
+A  ordinary pipeline    65.51 (sd 0.25, range 65.15-65.92)
+B  all three            66.48 (sd 0.30, range 66.12-67.06)     +0.97
+```
+
+**The worst seed under B (66.12) is above the best seed under A (65.92)** — the distributions
+do not overlap. And the variance does *not* blow up the way `--drop-stale-arms` alone does
+(0.23 → 0.65); here it is 0.25 → 0.30, because giving `base` better features makes the arm
+the rule falls back to reliably good rather than merely different.
+
+**The two features overlap heavily rather than adding**, which the pre-registration called
+the likely outcome:
+
+| `base` arm | score | Δ |
+|---|---:|---:|
+| no features | 65.70 | — |
+| + depth-2 | 66.30 | +0.61 |
+| + dimension joins | 66.27 | +0.57 |
+| **+ both** | 66.39 | **+0.69** |
+
++0.69 of a possible +1.18. Two features reaching different tables by different traversals
+supply largely the same missing information — which is what their identical signatures
+(+0.61/−0.10 and +0.57/−0.07) were already saying.
+
+**At 66.48, user-visits would rank 5th of ten** — above RDBLearn+v2.5 (66.47), GraphSAGE
+(66.20), RelGNN (66.18) and RDBLearn (65.49); below KumoRFMv2, RelGT, RDBLearn+v3 and
+TabPFN-REL. That is a three-place move from 8th, and it is the largest single improvement
+this project has produced.
+
+**And it does not go in the table either, for one specific reason.** The features are clean —
+depth-2 and dimension joins were built from schema structure and measured with pre-registered
+readings. But **with ordinary selection they deliver −0.06 and −0.03.** The entire +0.97
+routes through `--drop-stale-arms`, whose threshold I chose knowing which tasks lose from
+tuning. So the clean components are worth nothing without the contaminated one, and the
+contaminated one is what needs held-out tasks before any of this is claimable.
+
+**What this makes concrete for the next session.** There is now a specific, sized prize
+rather than a direction: if `--drop-stale-arms` survives on the five RelBenchV1 tasks it was
+not designed from, then a three-place rank move on rel-avito/user-visits and a one-place move
+on user-clicks are available immediately, from code that is already written and tested.
+If it does not survive, the features stay worth ~0 after selection and the honest summary of
+this whole line of work is a negative one.
+
+*(user-clicks' stacked arm did not finish inside its timeout and is unmeasured.)*
+
 ### 2026-08-08 — the stale-arm rule is NOT table-eligible, and the reason is my own threshold
 
 Both tasks confirmed at twelve replicates, and both held — the only estimates in this session
