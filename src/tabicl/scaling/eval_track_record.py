@@ -424,6 +424,19 @@ def main() -> None:
                          "rel-trial, and rel-avito has no such columns. A column whose value "
                          "lies after the cutoff is dropped with a note, decided once on the "
                          "fitting frame so the feature space cannot differ across splits.")
+    ap.add_argument("--match-novelty", action="store_true",
+                    help="subsample validation so its share of entities ALREADY SEEN in "
+                         "train matches test's. Uses no labels -- which test entities are "
+                         "new is known at inference time -- so this corrects validation's "
+                         "POPULATION rather than deriving a signal from its ranking, which "
+                         "is where every previous instrument failed. Motivated by an "
+                         "inversion measured on rel-avito/user-visits: validation ranks "
+                         "+struct best (77.16) and base worst (69.22) while test ranks them "
+                         "the other way, and the val-test gap grows monotonically with how "
+                         "much an arm leans on entity history (base 2.92, +rate 8.03, "
+                         "+counts 8.36, +history 10.76, +struct 11.73). Validation entities "
+                         "are 81.2%% seen against test's 58.6%%, so track-record features "
+                         "look far better there than they will perform.")
     ap.add_argument("--siblings", action="store_true",
                     help="aggregate tables that hang off a PARENT referenced by one of the "
                          "entity's children -- sibling tables through a shared parent. The "
@@ -1419,6 +1432,27 @@ def main() -> None:
         # Validation split by TIME, not at random: the whole point is to test whether a
         # ranking survives a gap, and a random half sits at the same temporal distance from
         # train as the half it is judging. The 60/40 cut matches --decide-fit-pool's.
+        if args.match_novelty:
+            # Label-free: membership in the training entity set, nothing about outcomes.
+            seen_tr = set(train[key].unique())
+            v_seen = val[key].isin(seen_tr).to_numpy()
+            t_rate = float(test[key].isin(seen_tr).mean())
+            n_unseen = int((~v_seen).sum())
+            # Hold the unseen rows and drop seen ones until the ratio matches test's. Keeping
+            # every unseen row loses the least data; the alternative direction would discard
+            # the scarce half.
+            keep_seen = int(round(n_unseen * t_rate / max(1e-9, 1 - t_rate)))
+            idx_seen = np.flatnonzero(v_seen)
+            rng_nov = np.random.default_rng(0)
+            if keep_seen < len(idx_seen):
+                idx_seen = rng_nov.choice(idx_seen, size=keep_seen, replace=False)
+            keep = np.sort(np.concatenate([idx_seen, np.flatnonzero(~v_seen)]))
+            print(f"match-novelty: validation {v_seen.mean():.1%} seen -> "
+                  f"{v_seen[keep].mean():.1%}, matching test's {t_rate:.1%}; "
+                  f"{len(keep):,} of {len(val):,} rows kept", flush=True)
+            val = val.iloc[keep].reset_index(drop=True)
+            y_va = y_va[keep]
+            val_arms = {k: v[keep] for k, v in val_arms.items()}
         v_order = np.argsort(val[tcol].to_numpy(), kind="stable")
         va_cut = max(1, int(0.6 * len(v_order)))
         va_early, va_late = v_order[:va_cut], v_order[va_cut:]

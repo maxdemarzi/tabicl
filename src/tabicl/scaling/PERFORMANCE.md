@@ -1221,6 +1221,63 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-07 — WHY validation is wrong: it scores history features on a population that has history
+
+The coin-flip account died because the argmax beats an ensemble of the top five. So the
+ranking has resolving power and is *pointing the wrong way* — the bias story, which this file
+has carried since the selection thread opened without ever saying **why**. Putting
+validation's and test's rankings side by side on rel-avito/user-visits answers it:
+
+| arm | VAL | TEST | **val − test** |
+|---|---:|---:|---:|
+| `base` | 69.22 *(val's worst)* | **66.30** *(test's best)* | **2.92** |
+| `+rate` | 74.09 | 66.06 | 8.03 |
+| `+counts` | 74.45 | 66.09 | 8.36 |
+| `+history` | 76.11 | 65.35 | 10.76 |
+| `+struct` | **77.16** *(val's best)* | 65.43 *(test's 4th)* | **11.73** |
+
+**Validation says `+struct` beats `base` by 8.1 points. Test says `base` wins by 0.87.** Not
+a near-tie mis-broken — a systematic inversion, and the val−test gap grows **monotonically
+with how much an arm leans on entity history**: `base` uses none and has the smallest gap,
+`+struct` is the track-record block and has the largest.
+
+**The mechanism is the split, not the model. Validation's entities are 81.2% already seen in
+train; test's are 58.6%.** Track-record features are scored on a population where the history
+exists and applied to one where it often does not. A feature that says "this user ignored 4
+of their last 5 invitations" is powerful on a known user and empty on a new one — so
+validation systematically overrates exactly the arms that depend on it, and selection duly
+takes them.
+
+**Across tasks it is consistent, including the case that made me discard this once:**
+
+| task | val→test overlap drop | history arms eligible? | tuning is worth |
+|---|---:|---|---:|
+| rel-trial / study-outcome | 0.0 | yes | **+2.74** |
+| rel-event / user-ignore | −1.8 | yes | **+1.76** |
+| rel-f1 / driver-dnf | **−34.4** | **no — every one fails its controls** | **+1.48** |
+| rel-avito / user-visits | −22.6 | yes | −0.11 |
+| rel-avito / user-clicks | −34.0 | yes | **−1.29** |
+
+**Tuning fails where the overlap drops AND there are history-dependent arms to inflate.**
+driver-dnf has the largest drop of all and gains +1.48, because only `base` survives its
+controls — there is nothing there to mis-select. I tested "does overlap drop predict tuning
+loss" across seven tasks, found driver-dnf breaking it, and called entity novelty refuted.
+The hypothesis was right; **the test omitted the second condition**, and a single
+counterexample retired an idea that needed one more column.
+
+**The fix uses no labels, and that is what makes it different from everything that failed
+here.** Which test entities are new is known at inference time, so validation can be
+subsampled to match test's seen/unseen mix — user-visits 29,979 rows at 81.2% seen becomes
+13,616 at 58.6%; user-clicks 21,183 at 73.5% becomes 9,264 at 39.4%. `--match-novelty`
+corrects validation's **population**. `--gap-validation`, `--decide-fit-pool`, `--abstain`
+and `--ensemble-configs` all tried to extract a better answer from the same biased scores,
+and all failed for the same reason. This changes what is being scored.
+
+**Reading fixed before the run**: the two rel-avito tasks should gain, **user-ignore must not
+move** (its drop is 1.8 — it is the control), and any task getting worse refutes it. Half the
+validation set is discarded to do this, so a loss is a live possibility rather than a
+formality.
+
 ### 2026-08-07 — the selection is a coin flip among the leaders, and that is measurable for free
 
 If a feature worth +1.0 on a fixed configuration arrives as +0.39 after selection, the
