@@ -437,6 +437,17 @@ def main() -> None:
                          "+counts 8.36, +history 10.76, +struct 11.73). Validation entities "
                          "are 81.2%% seen against test's 58.6%%, so track-record features "
                          "look far better there than they will perform.")
+    ap.add_argument("--dimensions", action="store_true",
+                    help="carry a dimension table's attributes on the timestamped FACT rows "
+                         "that reference it -- a star join. The fact row's clock governs, so "
+                         "the dimension needs none of its own; \"nothing bounds an untimed "
+                         "table to a cutoff\" was the wrong reason to skip these. Gated on "
+                         "test at 100%% coverage: VisitStream x AdsInfo scores 68.5 on "
+                         "rel-avito/user-visits against a 65.54 pipeline and 64.6 on "
+                         "user-clicks against 65.89. The risk is an attribute that is "
+                         "UPDATED rather than fixed -- a final-state snapshot would hand a "
+                         "pre-cutoff row a post-cutoff value -- which is what the temporal "
+                         "control is for.")
     ap.add_argument("--siblings", action="store_true",
                     help="aggregate tables that hang off a PARENT referenced by one of the "
                          "entity's children -- sibling tables through a shared parent. The "
@@ -671,6 +682,46 @@ def main() -> None:
                       include_mode=args.mode)
             blocks.append(asof_statistics(t, frame[key].to_numpy(),
                                           frame[tcol].to_numpy()).add_prefix(f"{n}__"))
+            if args.dimensions:
+                # STAR JOIN: a dimension table's attributes carried on the FACT row that
+                # references it. The fact row is timestamped, so the as-of filter is
+                # unchanged and the dimension needs no clock of its own -- which is why
+                # "nothing bounds an untimed table to a cutoff" was the wrong reason to
+                # skip these. If a pre-cutoff fact row references an ad, the entity saw
+                # that ad, and its category and location were what they were.
+                #
+                # The risk is an attribute that is UPDATED rather than fixed: a final-state
+                # snapshot would hand a pre-cutoff row a post-cutoff value. Structural keys
+                # (category, location) cannot change without being a different thing; a
+                # price or title could. That is what the temporal control is for.
+                ctab = db.table_dict[n]
+                for pcol, pname in (ctab.fkey_col_to_pkey_table or {}).items():
+                    if pname == entity or pname not in db.table_dict:
+                        continue
+                    ptab = db.table_dict[pname]
+                    if not ptab.pkey_col:
+                        continue
+                    dim = ptab.df.drop(columns=[c for c in ptab.df.columns
+                                                if pd.api.types.is_datetime64_any_dtype(ptab.df[c])],
+                                       errors="ignore")
+                    fact = ctab.df[[fk, tc, pcol]].dropna(subset=[fk, tc, pcol])
+                    star = fact.merge(dim, left_on=pcol, right_on=ptab.pkey_col, how="inner")
+                    star = star.drop(columns=[c for c in (pcol, ptab.pkey_col)
+                                              if c in star.columns and c != fk])
+                    if star.empty:
+                        continue
+                    t_dim = Table(star, fk, f"{n}_{pname}", time_column=tc, windows=WINDOWS,
+                                  max_columns=max_cols,
+                                  top_k_categories=args.categories or None,
+                                  min_category_share=args.category_share,
+                                  numeric_booleans=args.numeric_booleans,
+                                  budget_categoricals=args.budget_categoricals,
+                                  time_deltas=args.time_deltas, include_mode=args.mode)
+                    dim_built.setdefault(split, []).append(
+                        f"{n}x{pname} ({len(star):,} rows)")
+                    blocks.append(asof_statistics(
+                        t_dim, frame[key].to_numpy(),
+                        frame[tcol].to_numpy()).add_prefix(f"{n}x{pname}__"))
             if args.siblings:
                 # SIBLING tables, reached through a parent this child references. The
                 # traversal so far only ever went entity -> child -> grandchild, so a table
@@ -764,6 +815,7 @@ def main() -> None:
 
     depth2_built: dict = {}
     sibling_built: dict = {}
+    dim_built: dict = {}
     reported = set()
 
     def _audit_requested_blocks(frame, split="train"):
@@ -790,6 +842,17 @@ def main() -> None:
         # defects each emitted +0.00 with sd 0.00 -- output indistinguishable from a careful
         # null. A list of the paths actually materialised is the cheapest defence against
         # repeating that.
+        if args.dimensions and f"dimensions {split}" not in reported:
+            reported.add(f"dimensions {split}")
+            built = dim_built.get(split, [])
+            if not built:
+                raise SystemExit(
+                    "--dimensions was requested but no star join was built: no child of the "
+                    "entity references a parent table with a primary key. An empty block "
+                    "scores +0.00 with sd 0.00 and reads like a careful null."
+                )
+            print(f"dimensions [{split}]: {len(built)} join(s) -- {'; '.join(built)}",
+                  flush=True)
         if args.siblings and f"siblings {split}" not in reported:
             reported.add(f"siblings {split}")
             built = sibling_built.get(split, [])
