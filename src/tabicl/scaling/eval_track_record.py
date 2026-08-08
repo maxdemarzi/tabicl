@@ -1302,8 +1302,19 @@ def main() -> None:
     if args.drop_stale_arms:
         _val = task.get_table("val", mask_input_cols=False).df
         t_va = track(_val[key].to_numpy(), _val[tcol].to_numpy(), y)
-        v_cov = float(t_va.notna().any(axis=1).mean()) if len(t_va) else 0.0
-        t_cov = float(t_te.notna().any(axis=1).mean()) if len(t_te) else 0.0
+        # Coverage means "this row HAS a neighbour", and only the rate columns say that.
+        # `n_prior` and `n_linked` are integer counts filled with 0, never NaN, so
+        # `.notna().any(axis=1)` over the whole block is True for every row and reported
+        # 100% -> 100% on a task measured at 37.0% -> 17.8%. The rule could never fire.
+        rate_cols = [c for c in t_te.columns if c.endswith("positive_rate")]
+        if not rate_cols:
+            raise SystemExit(
+                "--drop-stale-arms needs the shared-key rate columns to measure coverage, "
+                "and this task's track-record block has none. Without them every row looks "
+                "covered and the rule silently never fires."
+            )
+        v_cov = float(t_va[rate_cols].notna().any(axis=1).mean()) if len(t_va) else 0.0
+        t_cov = float(t_te[rate_cols].notna().any(axis=1).mean()) if len(t_te) else 0.0
         ratio = t_cov / v_cov if v_cov > 0 else 1.0
         stale = ratio < args.stale_threshold
         print(f"shared-key coverage: val {v_cov:.1%} -> test {t_cov:.1%} ({ratio:.2f}x)"
