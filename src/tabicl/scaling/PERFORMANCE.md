@@ -1221,6 +1221,33 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-08 — every pod log this session lagged the run, and it was `grep` buffering
+
+Watching the held-out run produce no output for an hour while its GPU sat at 47% and 41.9 GB,
+I started to suspect a stall. It was not stalled. **`grep` block-buffers when its stdout is a
+file rather than a terminal**, so the `filter` helper every round pipes through was holding
+output in 4 KB blocks. `PYTHONUNBUFFERED=1` makes Python flush; nothing was making grep flush.
+
+Demonstrated rather than assumed:
+
+```
+5 lines, 0.2s apart, piped through grep -v  ->  after 0.5s: 0 lines visible
+same, through grep --line-buffered -v       ->  after 0.5s: 3 lines visible
+```
+
+**This has been distorting judgement all session, not just this run.** Progress polls read a
+log that could be arbitrarily far behind, which is why several rounds looked stalled, why a
+poll trail appeared to move *backwards* once, and why I twice reached for ssh and `ps` to
+find out whether a run was alive. Every one of those was a buffer, not a problem.
+
+Fixed by `grep --line-buffered` in the `filter` helper. It does not affect the run already in
+flight — that payload is shipped — so that log will keep lagging and its GPU counters remain
+the honest progress signal.
+
+Worth noting what it did *not* corrupt: no measurement. Buffering delays output, it does not
+alter it, and every result in this file was read from a completed log. What it cost was
+attention and two unnecessary diagnostic detours.
+
 ### 2026-08-08 — a shell mistake that let a broken step launch anyway, and a claim I made without checking
 
 The held-out run was launched with a helper script that never shipped, and I reported the run
