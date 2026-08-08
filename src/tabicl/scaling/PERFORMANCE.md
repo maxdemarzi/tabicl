@@ -1221,6 +1221,55 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-08 — `--drop-stale-arms` WORKS: the first intervention in this project to survive its own controls
+
+Refuse an arm whose feature block's coverage collapses between validation and test. Reads
+links and timestamps only — no labels, no test outcomes — so it is computable at inference
+time, and it says whether a feature *exists* on test rows rather than judging its score.
+Seven tasks, both arms, paired by seed:
+
+| task | coverage ratio | fires? | ordinary | `--drop-stale-arms` | Δ | SE | t | positive |
+|---|---:|---|---:|---:|---:|---:|---:|---:|
+| rel-avito / user-clicks | **0.57** | **yes** | 66.07 | **66.76** | **+0.69** | 0.30 | +2.32 | 7/8 |
+| rel-avito / user-visits | **0.69** | **yes** | 65.51 | **66.05** | **+0.53** | 0.28 | +1.92 | 7/8 |
+| rel-f1 / driver-top3 | 0.72 | yes | 82.13 | 82.13 | **0.00** | | | *identical* |
+| rel-f1 / driver-dnf | 0.72 | yes | 69.66 | 69.66 | **0.00** | | | *identical* |
+| rel-event / user-ignore | 1.03 | no | 81.50 | 81.50 | **0.00** | | | *identical* |
+| rel-trial / study-outcome | 0.99 | no | 73.39 | 73.39 | **0.00** | | | *identical* |
+| rel-event / user-repeat | 0.99 | no | 78.85 | 78.85 | **0.00** | | | *identical* |
+
+**Two gains, five bit-identical results, no losses.** The falsification condition was that
+the four control tasks must not move; **all four are identical to the digit**, as are the two
+tasks where the rule fires but finds nothing eligible to remove. Nothing here is a
+coin-flip-sized wobble that could be read either way — the rule either changes the answer or
+provably does not touch it.
+
+**These are the two worst placings in the field**, and the direction is the one the account
+predicted rather than the opposite, which is what the previous two interventions delivered.
+`user-clicks` 65.89 → **66.76** would move it from 8th to 7th of ten; `user-visits`
+65.54 → **66.05** stays 8th, behind RDBLearn+v3's 66.76 by 0.71.
+
+**Honest limits, and they matter.**
+
+* **t = 2.32 and 1.92 on 8 seeds.** Both clear the ±0.6 floor on the mean and neither is
+  decisive. Five estimates in this session shrank on more replicates, and there is no reason
+  to think these are exempt — a 12-replicate confirmation is the number that counts.
+* **Variance rises when it fires**: user-visits sd 0.25 → 0.75, user-clicks 0.54 → 0.86, and
+  user-visits' worst seed falls from 65.15 to 64.33. Removing arms narrows what selection can
+  fall back on, so it makes the outcome more dependent on the remaining draw.
+* **The pairing is weak** (r = +0.34 and +0.04), because this is a calibrated comparison —
+  the same limitation documented earlier today. The gains are real but the standard errors
+  are the unpaired ones.
+* **The rule can only ever recover the gap to `base`.** On user-clicks `base` is 67.32 and
+  the rule reaches 66.76, so it captures most of that gap and cannot exceed it.
+
+**What it does NOT establish.** It does not confirm the mechanism. The rule was derived from
+the neighbour-signal account, but "exclude arms whose features are sparse at test time" would
+help for several reasons — the account remains the third of three, and the first two also had
+supporting evidence before they were tested. What is established is narrower and still worth
+having: **on the two tasks where tuning was actively harmful, a label-free rule recovers most
+of the damage without touching any task where tuning works.**
+
 ### 2026-08-08 — dimension joins: the fourth traversal shape, and the same signature again
 
 Shape 3 of four, built after the enumeration showed it was the only one missing. Paired on
