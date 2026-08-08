@@ -1221,6 +1221,49 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-08 — VERDICT: `--drop-stale-arms` is UNVALIDATED, and RelBench cannot validate it
+
+The coverage probe on all five held-out RelBenchV1 classification tasks. Label-free, no
+model, **fourteen minutes** for all five:
+
+| held-out task | val cov | test cov | ratio | fires? |
+|---|---:|---:|---:|---|
+| rel-stack / user-engagement | 91.9% | 90.7% | 0.99 | no |
+| rel-stack / user-badge | 32.5% | 31.9% | 0.98 | no |
+| rel-hm / user-churn | 100.0% | 100.0% | 1.00 | no |
+| rel-amazon / user-churn | 100.0% | 99.9% | 1.00 | no |
+| rel-amazon / item-churn | 100.0% | 99.9% | 1.00 | no |
+
+**Not one fires.** The pre-registered reading for this outcome: *"the rule is untestable on
+held-out RelBench data. Not a refutation and not a vindication: the seven tasks it was built
+from are the only ones where the question can be posed, and the verdict on this line stays
+unvalidated."* That is the verdict.
+
+**The coverage collapse is a property of two databases, not of RelBench.** Ratios across all
+twelve tasks: 0.48, 0.57/0.69 (rel-avito), 0.72, 0.74 (rel-f1) against 0.96–1.03 on
+rel-event and rel-trial and **0.98–1.00 on every held-out task**. Nine of the twelve sit
+between 0.96 and 1.00; the three that collapse are all on rel-avito and rel-f1. Whatever
+produces it is specific to how those two databases split, not a general fact about temporal
+relational data.
+
+**What that settles about the rule's value.** It is *safe* — inert on nine of twelve tasks by
+construction, and bit-identical on the five where it fired but had nothing eligible to remove.
+It is also *narrow*: a fix for a specific pathology on rel-avito, worth +0.65 and +0.49 there
+and nothing anywhere else. **A narrow, safe fix whose threshold was chosen with knowledge of
+the tasks it fixes is not a result, and it does not enter the headline table.**
+
+**And RelBench cannot settle it.** There is no held-out task where the rule even engages, so
+no amount of further running on this benchmark produces evidence either way. Validation needs
+data with the same pathology and no role in the design — the RelBench family carries other
+datasets (rel-mimic, rel-arxiv, rel-salt, rel-ratebeer, the dbinfer-* set) whose coverage
+ratios are unmeasured, and the probe that answers it costs minutes.
+
+**The sequencing lesson, now with a number on it.** This answer cost **14 minutes**. I spent
+**four hours** on a model run against the largest database in the benchmark before asking it —
+and that run also produced no score. The probe existed before either. The rule is: when a
+cheap label-free quantity decides whether an expensive run is worth doing, run the cheap thing
+first, every time.
+
 ### 2026-08-08 — the held-out test did not answer the question, for two separate reasons
 
 `--drop-stale-arms` on rel-stack/user-engagement — a database this pipeline had never run,
