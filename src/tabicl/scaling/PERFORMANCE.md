@@ -1221,6 +1221,48 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-08 — the stale-arm rule is NOT table-eligible, and the reason is my own threshold
+
+Both tasks confirmed at twelve replicates, and both held — the only estimates in this session
+that did:
+
+| task | 8 seeds | **12 seeds** | paired SE | t | positive | floor |
+|---|---:|---:|---:|---:|---:|---|
+| rel-avito / user-clicks | +0.69 | **+0.65** | 0.25 | +2.67 | 10/12 | above |
+| rel-avito / user-visits | +0.53 | **+0.49** | 0.20 | +2.50 | 10/12 | **inside** |
+
+user-visits lands in the middle band the pre-registration assigned to "report, do not put in
+the headline table". user-clicks clears the bar. **And it still should not go in the table,
+for a reason that has nothing to do with its replicate count.**
+
+**The rule is label-free at inference time. Its DESIGN is not.** I chose to threshold
+*coverage ratio* after looking at which tasks lose from tuning, and I set the threshold at
+0.8 knowing that 0.57/0.69/0.72/0.72 are the losers and 0.96/0.99/1.03 are not. That is
+selection on test, one level up — the same error as picking a configuration by its test score,
+committed against the *choice of rule* rather than the choice of arm.
+
+Two things soften it and neither rescues it:
+
+* **The threshold is not finely tuned.** The gap between 0.72 and 0.96 is wide, so anything
+  in (0.75, 0.95) produces the same partition. The rule is not balanced on a knife edge.
+* **The quantity is principled**, not fished: "do not trust a score measured on rows that
+  will not exist" is a statement I would defend before seeing any outcome.
+
+But both are arguments that it *might* generalise, and this file's standard is measurement,
+not plausibility. **All seven tasks were used to design it, so there is no held-out evidence
+that it works on a task it was not built from.** RelBenchV1 has twelve classification tasks
+and we run seven; the five unused ones are exactly the test this needs.
+
+**So: `user-clicks` stays at 65.89 in the headline table**, and the +0.65 is recorded here
+with its provenance. That is the same standard applied to `best-cfg`, to categories, and to
+every real-on-test-but-unselectable effect in this file — and applying it to the one result
+that finally went my way is the only way the standard means anything.
+
+**The cost side is unchanged and also argues for caution.** Spread rises on both tasks
+(0.50 → 0.93 and 0.23 → 0.65) and the worst seed falls below the ordinary arm's worst on both
+(65.34 → 65.06, 65.15 → **64.33**). One user-visits seed loses 1.24. A rule that improves the
+centre and lengthens the left tail is not obviously what a user wants by default.
+
 ### 2026-08-08 — CONFIRMED at 12 replicates, and it is the first estimate here that did not shrink
 
 `--drop-stale-arms` on rel-avito/user-clicks, twelve replicates, paired by seed:
