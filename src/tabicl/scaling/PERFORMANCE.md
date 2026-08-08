@@ -1221,6 +1221,49 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-08 — CONFIRMED at 12 replicates, and it is the first estimate here that did not shrink
+
+`--drop-stale-arms` on rel-avito/user-clicks, twelve replicates, paired by seed:
+
+```
+A ordinary        66.15 (sd 0.50, worst 65.34)
+B drop-stale      66.80 (sd 0.93, worst 65.06)
+delta +0.65   paired SE 0.25   t +2.67   10 of 12 positive
+per-seed: -0.95  2.16  0.78  0.63  0.95  0.75  0.47  0.75  1.67  0.83  0.51  -0.70
+```
+
+**+0.69 at eight seeds became +0.65 at twelve.** Every other estimate in this session lost
+40–85% under the same treatment — categories −0.44 → +0.15 and +0.60 → +0.09, depth-2
++0.66 → +0.39 and +1.03 → +0.47. This one moved 0.04. That is the difference between a
+screened maximum regressing to its mean and an effect that was simply there.
+
+The pre-registered reading was **≥ +0.6 → real, clears the floor, table-eligible**, and
++0.65 meets it. The shrinkage-corrected value is **+0.53**, which is the number to quote if
+one number is wanted, since this quantity was chosen for re-measurement *because* it looked
+good.
+
+**Standing rel-avito/user-clicks would move 65.89 → 66.80: eighth to seventh of ten**, above
+GraphSAGE (65.90) and RDBLearn+v2.5 (65.72), below TabPFN-REL (67.09). The first rank change
+this project has earned rather than corrected.
+
+**The costs are real and are not in the mean.** Spread nearly doubles (0.50 → 0.93) and the
+worst seed drops from 65.34 to **65.06**, below the ordinary arm's worst. Two of twelve seeds
+lose (−0.95, −0.70). Removing arms narrows what selection can retreat to, so the outcome
+leans harder on the remaining draw — a better centre bought with a worse tail, which is the
+same trade depth-2 offered and which counts against making this a silent default.
+
+**And the pairing is weak (r = 0.43), because this is still a calibrated comparison.** The
+tool says so itself. A fixed-arm version cannot be run here — the intervention *is* a change
+to which arm gets chosen, so there is no fixed configuration to compare. That is a real limit
+on the precision, not something to be tidied away: the SE above is closer to unpaired than
+paired.
+
+**What is confirmed and what is not.** Confirmed: on the task where tuning was most harmful,
+a label-free rule recovers +0.65 and it survives more replicates. Not confirmed: the
+mechanism. The rule came from the neighbour-signal account, which is the third of three and
+the first two also fit before they were tested. "Exclude arms whose features are sparse at
+test time" could be right for reasons that have nothing to do with neighbour signal.
+
 ### 2026-08-08 — `--drop-stale-arms` WORKS: the first intervention in this project to survive its own controls
 
 Refuse an arm whose feature block's coverage collapses between validation and test. Reads
