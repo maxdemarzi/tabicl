@@ -1221,6 +1221,45 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-08 — the held-out test did not answer the question, for two separate reasons
+
+`--drop-stale-arms` on rel-stack/user-engagement — a database this pipeline had never run,
+1,360,850 training rows against rel-avito's 59,454.
+
+**Reason one, and it is the pre-registered answer: the rule does not fire.**
+
+```
+shared-key coverage: val 98.1% -> test 97.5% (0.99x)
+arm eligibility: identical in both arms, all seven True
+```
+
+The committed reading for this outcome was *"undecided. Do NOT read the silence as support —
+it means the coverage ratio here is high, which is a fact about rel-stack and says nothing
+about whether the rule works."* That is where it lands.
+
+**Reason two: neither arm produced a score.** The log ends mid-seed-0 of arm B; arm A never
+reached a seed. `WORK_DONE` printed after 97 minutes against a 3-hour-per-arm budget — a
+killed process, not an expired one, almost certainly memory at 342–358 columns over 1.36M
+rows. **A missing measurement, not a null**, and it is recorded as one.
+
+**What the pipeline did prove**: it runs on an unfamiliar schema. Features built (342 columns
+on `base`), five child tables and four candidate keys discovered, every leakage control
+executed, all seven arms eligible. That was the first open question about these databases and
+it is answered.
+
+**The sequencing error is mine and worth stating.** The coverage ratio needs links and
+timestamps only — no model, no GPU, minutes rather than hours. I committed four hours to a
+model run on the largest database in the benchmark before spending twenty minutes finding out
+whether the rule would fire on it at all. The probe existed; I wrote it; I ran it second.
+
+**What the probe now decides, on all five held-out tasks:**
+
+* **some fire** — those are the tasks worth a model run, and the design is testable
+* **none fire** — the rule is *untestable* on held-out RelBench data. Not a refutation and
+  not a vindication: it would mean the seven tasks it was built from are the only ones where
+  the question can be posed, and the verdict on this line stays **unvalidated**
+* **all fire** — the threshold separates nothing and was fitted
+
 ### 2026-08-08 — every pod log this session lagged the run, and it was `grep` buffering
 
 Watching the held-out run produce no output for an hour while its GPU sat at 47% and 41.9 GB,
