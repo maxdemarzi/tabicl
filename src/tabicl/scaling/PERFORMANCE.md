@@ -1221,6 +1221,61 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-07 — the GNN literature supplies the right axis, and it fits 6 of 7
+
+Three papers, read because RelGNN and RelGT beat us on most tasks and it was worth knowing
+why. Their combined claim is narrow and useful:
+
+* **"Beyond Homophily in GNNs"** (arXiv 2006.11468) — under heterophily, standard GNNs are
+  *"even outperformed by models that ignore the graph structure"*.
+* **"Is Homophily a Necessity?"** (arXiv 2106.06134) — no. The condition is not that
+  neighbours are *similar* but that **neighbourhood label distributions are distinguishable
+  across classes**. Contrast between classes, not similarity within them.
+* **"Exact Generalisation Error Exposes Benchmarks Skew GNN Success"** (arXiv 2509.10337) —
+  benchmark datasets have unusually high alignment between features and graph structure,
+  which *inherently favours architectures that use it*. Published GNN wins are partly a
+  property of which datasets became benchmarks.
+
+**The middle one is measurable on our data with no model.** Neighbours here are entities
+reached through a shared foreign key — exactly what the `+struct` and `+rate` arms aggregate.
+Separation is the standardised difference in neighbour positive-rate between the two classes;
+multiplied by coverage it is how much neighbour signal is actually available:
+
+| task | val signal | test signal | **drop** | tuning is worth |
+|---|---:|---:|---:|---:|
+| rel-trial / study-outcome | 0.403 | 0.314 | 1.28× | **+2.74** |
+| rel-event / user-ignore | 0.735 | 0.714 | 1.03× | **+1.76** |
+| rel-f1 / driver-dnf | 0.249 | 0.286 | 0.87× | **+1.48** |
+| rel-event / user-repeat | 0.314 | 0.340 | 0.92× | +0.76 |
+| rel-f1 / driver-top3 | 0.242 | **0.014** | **16.9×** | −0.06 |
+| rel-avito / user-visits | 0.142 | 0.078 | 1.83× | −0.11 |
+| rel-avito / user-clicks | 0.175 | **0.071** | **2.47×** | **−1.29** |
+
+**Tuning is negative on exactly the three tasks whose neighbour signal collapses between
+validation and test, and positive on the four where it holds.** Six of seven order correctly;
+r = −0.50 against the log drop, with rel-trial the only misfit and it has the mildest drop of
+the affected group. On driver-top3 the signal all but vanishes — separation 0.251 → **0.020**,
+a 17× collapse — which is why validation loves a `+struct` arm that test does not.
+
+**This is a better account than either of the two that died today.** It is not about whether
+an entity is *new* (novelty matching made the gap wider) and not about the ranking being
+*unresolvable* (the argmax beats an ensemble). It is that the shared-key neighbour signal is
+genuinely present on validation and genuinely weaker on test, so validation is right about
+its own rows and wrong about test's.
+
+**Stated as a caution rather than a conclusion: this is the third explanation for this
+inversion, and the previous two also fit the data before they were tested.** The coin-flip
+account fit until an ensemble was run; the novelty account fit until the population was
+matched. Six of seven is a fit, not a test. The test is an intervention that follows from it
+and could fail — and both previous interventions failed *backwards*, which is worth expecting
+again.
+
+**And paper 3 is worth keeping for positioning rather than comfort.** RelBench was built by
+the relational-deep-learning group, and its tasks are ones where structure and features
+align. That does not make our 7-of-10 median rank wrong; it does mean the benchmark is not a
+neutral referee between graph and tabular methods, and our own file should say so where it
+compares the two.
+
 ### 2026-08-07 — WHY validation is wrong: it scores history features on a population that has history
 
 The coin-flip account died because the argmax beats an ensemble of the top five. So the
