@@ -1274,9 +1274,40 @@ and `--ensemble-configs` all tried to extract a better answer from the same bias
 and all failed for the same reason. This changes what is being scored.
 
 **Reading fixed before the run**: the two rel-avito tasks should gain, **user-ignore must not
-move** (its drop is 1.8 — it is the control), and any task getting worse refutes it. Half the
-validation set is discarded to do this, so a loss is a live possibility rather than a
-formality.
+move** (its drop is 1.8 — it is the control), and any task getting worse refutes it.
+
+**REFUTED, and backwards.** The subsample did exactly what it was built to do — user-clicks
+validation 73.5% seen → 39.4%, user-visits 81.2% → 58.6%, matching test to the decimal — and
+the calibrated result did not move at all: **66.07 → 66.06** and **65.51 → 65.51**, the
+second bit-identical.
+
+The diagnostic says why, and it is the opposite of the prediction. Matching the novelty rate
+made the history-dependent arm look **better** relative to `base`, not worse:
+
+| task | validation | `base` | `+struct` | gap |
+|---|---|---:|---:|---:|
+| user-visits | ordinary | 68.94 | 77.12 | 8.18 |
+| user-visits | **matched** | 66.16 | **79.03** | **12.87** |
+| user-clicks | ordinary | 63.24 | 64.30 | 1.06 |
+| user-clicks | **matched** | 58.56 | 60.95 | **2.39** |
+
+**So entity novelty is not the cause of the inversion.** The plausible reason it went the
+other way: for an entity with no history the track-record columns are empty, and *"this one is
+new"* is itself discriminative — so a novelty-rich population makes the block **more** useful,
+not less. The block is partly a new-entity detector, which is a real feature rather than an
+artefact.
+
+**That is the second explanation for this inversion to be built, tested and killed** — the
+coin-flip account died because the argmax beats an ensemble, and now the novelty account dies
+because correcting the population widens the very gap it was supposed to close. What survives
+is unchanged and still unexplained: the inversion is real, it is large (8 points on
+validation against 0.87 the other way on test), and the val−test gap grows monotonically with
+how much an arm leans on entity history. Something produces that monotonicity. It is not
+which entities are new.
+
+Half the validation set was discarded to run this, and the outcome was identical to two
+decimals — which also says the margin is far too large for a population correction of this
+size to touch.
 
 ### 2026-08-07 — the selection is a coin flip among the leaders, and that is measurable for free
 
