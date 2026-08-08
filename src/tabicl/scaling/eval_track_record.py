@@ -437,6 +437,22 @@ def main() -> None:
                          "+counts 8.36, +history 10.76, +struct 11.73). Validation entities "
                          "are 81.2%% seen against test's 58.6%%, so track-record features "
                          "look far better there than they will perform.")
+    ap.add_argument("--drop-stale-arms", action="store_true",
+                    help="exclude history-dependent arms when the shared-key block's "
+                         "COVERAGE collapses between validation and test. Label-free: reads "
+                         "links and timestamps only, so it is computable at inference time, "
+                         "and it says whether a feature EXISTS on test rows rather than "
+                         "judging its score -- unlike gap-validation, decide-fit-pool, "
+                         "abstain and ensemble-configs, which all tried to read a better "
+                         "answer out of the same validation scores and all failed. Coverage "
+                         "falls 37.0%%->17.8%% on user-clicks, 43.1%%->30.8%% on user-visits "
+                         "and 96.4%%->71.8%% on driver-top3, the three tasks where tuning "
+                         "loses, and holds within a few points on the four where it gains.")
+    ap.add_argument("--stale-threshold", type=float, default=0.8,
+                    help="coverage ratio below which the block counts as stale. 0.8 sits in "
+                         "the gap between the four tasks that hold (0.96-1.03) and the three "
+                         "that collapse (0.48-0.74). Deliberately NOT tuned: there is no room "
+                         "to fit a threshold on seven points without fitting the seven.")
     ap.add_argument("--dimensions", action="store_true",
                     help="carry a dimension table's attributes on the timestamped FACT rows "
                          "that reference it -- a star join. The fact row's clock governs, so "
@@ -1268,13 +1284,37 @@ def main() -> None:
               f"feature values, so it is INDETERMINATE and is not excluding anything. Any "
               f"arm below carrying `+rate` is untested on this axis, not cleared by it.",
               flush=True)
+    # COVERAGE COLLAPSE. An arm scored on validation rows that have neighbours and then
+    # applied to test rows that do not is being judged on a population that will not exist.
+    # This reads links and timestamps ONLY -- never a label, never a test outcome -- so it is
+    # computable at inference time, and it is a statement about whether the feature EXISTS on
+    # test rows rather than about its score. That is what makes it unlike gap-validation,
+    # decide-fit-pool, abstain and ensemble-configs, all of which tried to read a better
+    # answer out of the same validation scores.
+    #
+    # Measured across the seven tasks: coverage falls 37.0% -> 17.8% on user-clicks,
+    # 43.1% -> 30.8% on user-visits and 96.4% -> 71.8% on driver-top3 -- exactly the three
+    # where tuning LOSES -- and holds within a few points on the four where it gains.
+    # driver-dnf drops as far as driver-top3 and still gains, because every one of its
+    # history arms already fails its controls and there is nothing left to mis-select. Both
+    # conditions are needed and both are label-free.
+    stale = False
+    if args.drop_stale_arms:
+        _val = task.get_table("val", mask_input_cols=False).df
+        t_va = track(_val[key].to_numpy(), _val[tcol].to_numpy(), y)
+        v_cov = float(t_va.notna().any(axis=1).mean()) if len(t_va) else 0.0
+        t_cov = float(t_te.notna().any(axis=1).mean()) if len(t_te) else 0.0
+        ratio = t_cov / v_cov if v_cov > 0 else 1.0
+        stale = ratio < args.stale_threshold
+        print(f"shared-key coverage: val {v_cov:.1%} -> test {t_cov:.1%} ({ratio:.2f}x)"
+              f"{'   ** STALE -- history arms excluded **' if stale else ''}", flush=True)
     ok = {"base": True, "+text": True,
-          "+text+rate": perm.passed and temporal_ok and temporal_counts.passed,
-          "+struct": temporal_struct.passed,
-          "+counts": temporal_counts.passed,
-          "+rate": perm.passed and temporal_ok and temporal_counts.passed,
+          "+text+rate": perm.passed and temporal_ok and temporal_counts.passed and not stale,
+          "+struct": temporal_struct.passed and not stale,
+          "+counts": temporal_counts.passed and not stale,
+          "+rate": perm.passed and temporal_ok and temporal_counts.passed and not stale,
           "+history": perm.passed and temporal_ok and temporal_counts.passed
-                      and temporal_struct.passed}
+                      and temporal_struct.passed and not stale}
     print(f"\narm eligibility: {ok}", flush=True)
     if not any(v for k, v in ok.items() if k != "base"):
         print("CONTROLS FAILED for every feature arm -- nothing to measure", flush=True)
