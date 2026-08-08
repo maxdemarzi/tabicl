@@ -4,6 +4,28 @@ Written on stopping, so this can be picked up cold. `STATUS.md` is the current s
 `DESIGN.md` the history log. Nothing here is blocking — the branch is committed, tested
 (176 passed, 1 skipped) and pushed.
 
+## STATE AS OF 2026-08-08
+
+**The features are not the constraint; the selection rule is, and it now has a partial fix.**
+
+* All four traversal shapes are built (`--depth2`, `--siblings`, `--dimensions`). Each is
+  real on a fixed configuration — t of 2.8 to 4.8 — and worth roughly nothing after
+  selection. Two produce the identical signature on the same task, helping every arm except
+  the one validation picks.
+* **`--drop-stale-arms` is the first intervention here to survive its own controls**: it
+  refuses arms whose feature block's coverage collapses between validation and test, using
+  links and timestamps only. Two gains (+0.69, +0.53 on our two worst tasks), five
+  bit-identical results including all four control tasks, no losses. **Awaiting a
+  12-replicate confirmation** — five estimates in that session shrank on more replicates and
+  this one is not exempt.
+* **Measure features on FIXED-configuration arms, not the calibrated block.** Fixed arms
+  correlate at r = 0.88–0.94 across seeds and pairing is worth 2.4–3.0× on the standard
+  error; calibrated arms correlate at −0.03 to +0.34 and pairing buys nothing, because
+  selection varies per seed. `tabicl.scaling.paired` reports `r` and warns below 0.5.
+* Refuted with measurements, do not rebuild: label history (per-entity), abstention,
+  entity novelty, novelty matching, entity time deltas, ensembling over configurations
+  (twice, the second time properly powered).
+
 ## DECISIONS WAITING ON THE MAINTAINER (2026-08-07)
 
 Four items where the measurement is done and the call is someone else's. Each says what the
