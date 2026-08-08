@@ -1221,6 +1221,44 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-08 — dimension joins: the fourth traversal shape, and the same signature again
+
+Shape 3 of four, built after the enumeration showed it was the only one missing. Paired on
+fixed arms, rel-avito:
+
+| task | arm | without | with | Δ | SE | t | positive |
+|---|---|---:|---:|---:|---:|---:|---:|
+| user-visits | `+counts` | 65.59 | 66.23 | **+0.64** | 0.13 | **+4.80** | 8/8 |
+| user-visits | `base` | 65.70 | 66.27 | **+0.57** | 0.15 | +3.86 | 7/8 |
+| user-visits | `+rate` | 65.84 | 66.34 | **+0.50** | 0.13 | +3.76 | 8/8 |
+| user-visits | `+struct` | 65.55 | 65.49 | −0.07 | 0.08 | −0.82 | 3/8 |
+| user-visits | `+history` | 65.43 | 65.26 | −0.17 | 0.05 | −3.47 | 2/8 |
+| user-visits | **calibrated** | 65.51 | 65.48 | **−0.03** | | | |
+| user-clicks | **calibrated** | 66.07 | 66.35 | +0.28 | | | |
+
+**The feature works — t = 4.8 on 8 of 8 seeds — and the protocol delivers −0.03.**
+
+**And the signature is now identical across two independent features on the same task.**
+
+| feature | `base` | `+struct` | calibrated |
+|---|---:|---:|---:|
+| depth-2 | **+0.61** | −0.10 | −0.06 |
+| dimension joins | **+0.57** | −0.07 | −0.03 |
+
+Both help every arm *except* `+struct`, and `+struct` is exactly what validation picks. Two
+features, built for different reasons, reaching different tables, producing the same pattern
+to within 0.04 — that is not two coincidences, it is one property of the task.
+
+**Which is the sharpest possible motivation for `--drop-stale-arms`, now running.**
+user-visits has a shared-key coverage ratio of 0.72, so the rule fires there and excludes
+`+struct` — leaving `base`, the arm carrying +0.57 and +0.61. If the account is right, this
+is the task where it should show. If it moves any of the four control tasks instead, the
+account is finished.
+
+**All four traversal shapes are now built** (entity→child, →grandchild, →parent→sibling,
+fact×dimension) and every one of the three new ones lands the same way: real on fixed arms,
+roughly nothing after selection. The features were never the constraint.
+
 ### 2026-08-07 — the GNN literature supplies the right axis, and it fits 6 of 7
 
 Three papers, read because RelGNN and RelGT beat us on most tasks and it was worth knowing
