@@ -384,7 +384,39 @@ Build Tools — clang alone cannot link a CPython extension.
 
 ## The binding constraint is the selection rule, not the features
 
-Nine effects have now been measured as **real on test and not selectable**. Each reproduces
+**And as of 2026-08-07 we know why.** Validation's entities are far more likely to already
+appear in train than test's — **81.2% against 58.6%** on rel-avito/user-visits — so any
+feature built on an entity's own history is scored on a population where that history exists
+and applied to one where it often does not. Validation therefore overrates exactly the arms
+that lean on it, and the argmax duly takes them. Measured on that task, the two rankings are
+inverted and the val−test gap grows monotonically with how much an arm uses history:
+
+| arm | VAL | TEST | val − test |
+|---|---:|---:|---:|
+| `base` | 69.22 *(val's worst)* | **66.30** *(test's best)* | 2.92 |
+| `+rate` | 74.09 | 66.06 | 8.03 |
+| `+counts` | 74.45 | 66.09 | 8.36 |
+| `+history` | 76.11 | 65.35 | 10.76 |
+| `+struct` | **77.16** *(val's best)* | 65.43 | **11.73** |
+
+Validation says `+struct` beats `base` by 8.1; test says `base` wins by 0.87. Across tasks,
+**tuning fails exactly where the val→test overlap drops AND history-dependent arms are
+eligible** — rel-trial (drop 0.0) gains +2.74, user-ignore (−1.8) gains +1.76, driver-dnf
+(−34.4, but every history arm fails its controls) gains +1.48, while user-visits (−22.6) and
+user-clicks (−34.0) lose.
+
+`--match-novelty` subsamples validation to test's seen/unseen mix, using no labels — which
+test entities are new is known at inference time. It corrects validation's **population**
+rather than trying to read a better answer out of its scores, which is what
+`--gap-validation`, `--decide-fit-pool`, `--abstain` and `--ensemble-configs` all attempted,
+and why all four failed.
+
+**How much this costs, measured two ways.** A feature worth ~+0.5 on a *fixed* configuration
+arrives as ~+0.2 after selection — depth-2 on rel-avito/user-visits gains **+0.61 on `base`
+at t = 4.72, 11 of 12 seeds, and −0.06 calibrated.** The feature works; the protocol picks
+the arm where it does nothing.
+
+Nine effects have also been measured as **real on test and not selectable**. Each reproduces
 across seeds, each survives its controls, and each is rejected — or simply not seen — by the
 validation split that the calibrated protocol selects on.
 
