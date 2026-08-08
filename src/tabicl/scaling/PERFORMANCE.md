@@ -1281,10 +1281,16 @@ the likely outcome:
 supply largely the same missing information — which is what their identical signatures
 (+0.61/−0.10 and +0.57/−0.07) were already saying.
 
-**At 66.48, user-visits would rank 5th of ten** — above RDBLearn+v2.5 (66.47), GraphSAGE
-(66.20), RelGNN (66.18) and RDBLearn (65.49); below KumoRFMv2, RelGT, RDBLearn+v3 and
-TabPFN-REL. That is a three-place move from 8th, and it is the largest single improvement
-this project has produced.
+**At 66.48, user-visits would rank 5th of ten** — a three-place move from 8th, and the
+largest single improvement this project has produced. **One of those three places is won by
+0.01.** Newly passed: RDBLearn+v2.5 at **66.47**, GraphSAGE at 66.20, RelGNN at 66.18. Still
+ahead: KumoRFMv2 69.41, RelGT 66.78, RDBLearn+v3 66.76, TabPFN-REL 66.68.
+
+A 0.01 margin is two orders of magnitude inside the ±0.6 floor, so "5th" and "6th" are the
+same measurement and the honest phrasing is **5th or 6th**. The two places over GraphSAGE and
+RelGNN are real at 0.28 and 0.30 — themselves under the floor, which is what a crowded field
+looks like: four published methods sit within 0.6 of each other here, so rank is a far more
+sensitive readout than the score it comes from.
 
 **And it does not go in the table either, for one specific reason.** The features are clean —
 depth-2 and dimension joins were built from schema structure and measured with pre-registered
@@ -1365,9 +1371,12 @@ The pre-registered reading was **≥ +0.6 → real, clears the floor, table-elig
 one number is wanted, since this quantity was chosen for re-measurement *because* it looked
 good.
 
-**Standing rel-avito/user-clicks would move 65.89 → 66.80: eighth to seventh of ten**, above
-GraphSAGE (65.90) and RDBLearn+v2.5 (65.72), below TabPFN-REL (67.09). The first rank change
-this project has earned rather than corrected.
+**Standing rel-avito/user-clicks would move 65.89 → 66.80: eighth to seventh of ten.** The
+only method newly passed is **GraphSAGE at 65.90** — RDBLearn+v2.5 (65.72) was already below
+us, so naming it alongside GraphSAGE, as an earlier version of this entry did, implied a pass
+that had already happened. Six remain ahead: RDBLearn+v3 69.06, RDBLearn 69.04, RelGT 68.30,
+RelGNN 68.23, KumoRFMv2 67.42, TabPFN-REL 67.09. It is the first rank change this project has
+earned rather than corrected, and it is one place.
 
 **The costs are real and are not in the mean.** Spread nearly doubles (0.50 → 0.93) and the
 worst seed drops from 65.34 to **65.06**, below the ordinary arm's worst. Two of twelve seeds
