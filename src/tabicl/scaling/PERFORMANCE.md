@@ -1221,6 +1221,37 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-08 — a shell mistake that let a broken step launch anyway, and a claim I made without checking
+
+The held-out run was launched with a helper script that never shipped, and I reported the run
+as started *with the prediction registered* without having verified either.
+
+**The mechanism defeats the usual habit and is worth recording.** The edit and the launch were
+separated by a **newline, not `&&`** — so the Python that was supposed to teach `cycle.ps1` to
+ship the probe raised a traceback, and the launch proceeded regardless. A newline is not a
+dependency. And the whole command was backgrounded, so that traceback went to a file I had not
+read when I described the run as underway.
+
+Two rules out of it: **`&&` between steps that must succeed in order**, and **read a
+backgrounded command's output before saying what it did.**
+
+**What it cost, precisely.** The runner prints the coverage ratio itself on any
+`--drop-stale-arms` arm, so every held-out ratio is still measured and still label-free. What
+was lost is only the *ordering*: each task's ordinary-selection score now appears before its
+ratio rather than after. A single arm's score reveals nothing about whether the rule fires or
+helps — the comparison carries the answer, and that is untouched. So this is a weaker form of
+pre-registration than I claimed, not a contaminated one, and the readings committed in the
+script are unaffected.
+
+`cycle.ps1` now ships helper scripts by wildcard, so adding one is a file drop rather than an
+edit that can fail silently — and this time the edit was verified present and re-parsed with
+the real parser before being called done.
+
+**Third instance today of a check that reported success without testing what it claimed.**
+The others: a coverage metric that measured columns which are never null and so could never
+fire, and `PSParser::Tokenize` reporting a clean parse on a file the real parser rejects with
+26 errors.
+
 ### 2026-08-08 — the pieces stack to +0.97 on user-visits, and the gain routes through the contaminated part
 
 Everything built this session, run together on rel-avito/user-visits: `--depth2
