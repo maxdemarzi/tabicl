@@ -1221,6 +1221,42 @@ are different findings and used to be indistinguishable in this log.
    columns currently contribute one `nunique` of 1 or 2 each; their *rate* has never been
    computed. Unmeasured as of this entry.
 
+### 2026-08-08 — a probe that reported a conclusion it had not measured
+
+Searching the wider RelBench family for the coverage-collapse pathology, the probe printed:
+
+```
+NO PATHOLOGY ANYWHERE ELSE. The coverage collapse is confined to rel-avito and rel-f1 ...
+```
+
+**It had measured one task of thirteen.** Ten raised `AttributeError` because the dbinfer
+tasks expose a different API, two raised `MergeError` on a datetime dtype mismatch, one
+succeeded. The hit-list was empty because almost nothing ran, and the summary read an empty
+hit-list as a null.
+
+**I wrote that line.** It is the same defect this file has now catalogued four times in a
+day — a check that reports success without testing what it claims — and this instance is the
+worst, because the output was a *conclusion in English* rather than a number that could be
+sanity-checked against a range.
+
+**The fix that matters is not the two bugs, it is the tally.** The summary now separates
+MEASURED from FAILED from INAPPLICABLE, and refuses to conclude anything unless at least half
+the task list was measured; below that it prints `INCONCLUSIVE -- absence of hits here is
+absence of measurement, not evidence`. A script that can only say "no hits" cannot distinguish
+a null from a crash, and should not be allowed to phrase either as a finding.
+
+The two underlying bugs, for completeness:
+
+* **dbinfer-\* is UNAVAILABLE, not clean.** It needs `dbinfer-relbench-adapter` plus a `dgl`
+  force-reinstall whose own installation notes warn it conflicts with torch. Breaking the
+  torch that every measurement in this project depends on, in order to probe a dataset, is not
+  a trade worth making — so those ten are recorded as unavailable and excluded from any
+  denominator.
+* **rel-ratebeer stores timestamps in microseconds** and its task table in nanoseconds;
+  `merge_asof` refuses to join across resolutions. Cast to one resolution.
+
+Re-running on eight native tasks across rel-ratebeer, rel-mimic, rel-arxiv and rel-salt.
+
 ### 2026-08-08 — VERDICT: `--drop-stale-arms` is UNVALIDATED, and RelBench cannot validate it
 
 The coverage probe on all five held-out RelBenchV1 classification tasks. Label-free, no
