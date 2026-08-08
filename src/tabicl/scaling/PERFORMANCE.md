@@ -1279,10 +1279,28 @@ correlate at **r = 0.87–0.99**, so these standard errors are the real ones:
 | depth-2, user-visits | all | −0.06 | +0.39 / −0.12 / +0.33 | | | |
 | siblings, driver-top3 | `base` | −4.01 | **−4.52** | 0.37 | −12.4 | +0.13 |
 
-**The features are real and roughly three times larger than I reported.** depth-2 is worth
-about **+1.0** on the two arms that carry it, not +0.39. Siblings are worth **+1.81** on
-driver-dnf, not +0.61. Both clear the ±0.6 floor comfortably; neither did when measured
-through the selection step.
+**The features are real and larger than the calibrated arm showed — but "roughly three times"
+was itself a four-seed number, and it shrank.** At **twelve** seeds on fixed arms:
+
+| comparison | 4 seeds | **12 seeds** | SE | t | r |
+|---|---:|---:|---:|---:|---:|
+| depth-2 user-clicks `+counts` | +0.98 | **+0.76** | 0.27 | +2.82 | +0.58 |
+| depth-2 user-clicks `base` | +0.22 | **+0.51** | 0.19 | +2.64 | +0.86 |
+| depth-2 user-clicks `+struct` | +1.03 | **+0.47** | 0.23 | +2.02 | +0.77 |
+| depth-2 user-visits `base` | +0.39 | **+0.61** | 0.13 | **+4.72** | +0.75 |
+| depth-2 user-visits `+struct` | −0.12 | −0.10 | 0.03 | −3.03 | +0.88 |
+
+**So depth-2 is worth about +0.5, not +1.0** — real (t = 2.0–4.7, high correlation, 8–11 of
+12 positive) and sitting at or just under the floor. That is the fifth consecutive estimate
+to shrink on more replicates, and this time it shrank a number I had already called
+"corrected". Four seeds is not enough to state an effect to two decimals, on either kind of
+arm.
+
+**And user-visits is the sharpest illustration of the whole problem.** Its `base` arm gains
+**+0.61 at t = 4.72, 11 of 12 positive** — about as clean as anything measured here. Its
+calibrated result is **−0.06**. The feature works; the protocol selects `+struct`, where the
+feature does nothing (−0.10), and delivers none of it. That is the coin-flip account in a
+single task, with both halves measured.
 
 **And that gap is itself the finding.** A feature worth +1.0 on a fixed configuration
 delivers **+0.39** once the calibrated protocol picks the configuration. The selection step
