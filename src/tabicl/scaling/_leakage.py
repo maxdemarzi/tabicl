@@ -226,49 +226,70 @@ def temporal_control(
 
     Notes
     -----
-    Withholding history cannot *add* information, so an improvement means the features
-    were reaching past the cutoff. This catches the failure the permutation control
-    cannot: a feature that uses only other rows' labels, correctly, but reads them from
-    the future.
+    Withholding history cannot *add* information, so an increase means the features were
+    reaching past the cutoff. This catches the failure the permutation control cannot: a
+    feature that uses only other rows' labels, correctly, but reads them from the future.
+
+    "Information" is ``|score - chance|``, not the raw score. These controls score a single
+    column directly against the label with no model fitted, so a value below chance is an
+    *inverted* feature rather than a weak one -- 0.32 carries what 0.68 carries, and a model
+    uses it by learning the negative sign. Above chance the two measures agree exactly.
     """
     if not shifts or shifts[0] != 0.0:
         raise ValueError("shifts must start at 0.0, the unshifted setting")
 
     observed = float(score_at_cutoff_shift(shifts[0]))
     control = [float(score_at_cutoff_shift(s)) for s in shifts[1:]]
-    worst = max(control) if control else observed
 
-    # This control's premise is stated in the Notes above: withholding history cannot ADD
-    # information, so a higher score means the features reached past the cutoff. That
-    # premise requires the score to measure information, which it does only ABOVE chance.
+    # Compare INFORMATION, |score - chance|, not the raw score.
     #
-    # At or below chance the block has no usable predictive signal in the fitted direction,
-    # and a rise in raw score is movement TOWARD randomness rather than toward more
-    # information. Measured as |score - chance| the comparison can even invert: on
-    # rel-amazon/item-churn the observed count block scored 0.3236 and the shifted control
-    # 0.3388, which the raw test called a leak -- yet the deviations are 0.176 and 0.161,
-    # so withholding history REDUCED the information. Both rel-amazon tasks had five of
-    # seven arms excluded on that reading, and both were then measured on a base-only
-    # feature set.
+    # These controls score a single summed column directly against the label -- no model is
+    # fitted -- so a value below chance is not a weak feature but an inverted one. On
+    # rel-amazon, items with more reviews are LESS likely to churn: `n_linked` scores 0.32,
+    # which carries exactly the information of 0.68 and which any model uses by learning the
+    # negative sign.
     #
-    # An absence of evidence is reported as exactly that. `inconclusive` is deliberately
-    # not a pass: callers must decide what to do with a block whose control cannot speak,
-    # and doing so knowingly is the whole point of separating the two.
-    if observed <= chance + tolerance:
+    # Comparing raw scores therefore inverts the verdict in that regime. rel-amazon/
+    # item-churn's count block read 0.3236 unshifted and 0.3388 shifted, so the raw test
+    # reported *** LEAK *** -- while the deviations are 0.176 and 0.161, meaning withholding
+    # history REDUCED the information, which is the opposite. Six such verdicts were issued
+    # across this project's runs against seven genuine ones, excluding five of seven arms on
+    # both rel-amazon tasks and `+struct` on rel-event/user-repeat and rel-trial/
+    # study-outcome, our two best results.
+    #
+    # Above chance the two measures agree exactly, so every genuine verdict is unchanged.
+    # An AUC outside [0, 1] means the caller's scoring function is broken, and reading it
+    # as extreme information would be the worst response. A test in this project asserted a
+    # pass on an AUC of -0.10 for months because the raw comparison accepted it silently.
+    if chance == 0.5:
+        bad = [s for s in (observed, *control) if not (0.0 <= s <= 1.0)]
+        if bad:
+            raise ValueError(
+                f"score(s) {bad} lie outside [0, 1] and cannot be ROC-AUC; "
+                f"temporal_control compares |score - chance| and cannot interpret them")
+
+    info_obs = abs(observed - chance)
+    infos = [abs(c - chance) for c in control]
+    worst = max(control, key=lambda c: abs(c - chance)) if control else observed
+    info_worst = max(infos) if infos else info_obs
+
+    # Both sides indistinguishable from chance: there is no information on either side to
+    # compare, so the control has nothing to say. Absence of evidence, reported as such.
+    if info_obs <= tolerance and info_worst <= tolerance:
         return LeakageReport(
-            True, observed, control, observed,
-            f"cannot judge: the block scores {observed:.4f}, at or below chance "
-            f"({chance:.2f}), so it carries no usable signal in the fitted direction and "
-            f"'withholding history improved the score' ({worst:.4f}) is not evidence of a "
-            f"leak -- by |score - chance| the shifted run is WEAKER ({abs(worst - chance):.4f} "
-            f"vs {abs(observed - chance):.4f})",
+            True, observed, control, chance,
+            f"cannot judge: the block scores {observed:.4f} against chance {chance:.2f} and "
+            f"the shifted runs {worst:.4f} -- both within {tolerance} of chance, so there is "
+            f"no information on either side to compare",
             inconclusive=True)
 
-    passed = worst <= observed + tolerance
+    passed = info_worst <= info_obs + tolerance
     reason = (
-        f"earlier cutoffs do not improve on {observed:.4f} (best {worst:.4f})"
+        f"earlier cutoffs do not add information to {observed:.4f} "
+        f"(|obs-chance| {info_obs:.4f} vs best shifted {info_worst:.4f})"
         if passed else
-        f"withholding history *improved* the score to {worst:.4f} from {observed:.4f} -- "
-        f"the features are reaching past the cutoff"
+        f"withholding history *increased* the information from |{observed:.4f}-chance| = "
+        f"{info_obs:.4f} to |{worst:.4f}-chance| = {info_worst:.4f} -- the features are "
+        f"reaching past the cutoff"
     )
-    return LeakageReport(passed, observed, control, observed, reason)
+    return LeakageReport(passed, observed, control, chance, reason)

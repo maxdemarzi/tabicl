@@ -2020,9 +2020,23 @@ def test_temporal_control_catches_features_reaching_past_the_cutoff():
 def test_temporal_control_passes_when_earlier_cutoffs_degrade():
     from tabicl.scaling import temporal_control
 
-    report = temporal_control(lambda shift: 0.80 - 0.03 * shift, shifts=(0.0, 30.0))
+    # 0.03 per DAY over a 30-day shift gave -0.10, which is not a possible ROC-AUC. The
+    # raw-score comparison accepted it silently; comparing |score - chance| does not, since
+    # |-0.10 - 0.5| = 0.6 is more information than |0.80 - 0.5| = 0.3. The rate is now per
+    # day at a realistic scale, and temporal_control rejects impossible scores outright.
+    report = temporal_control(lambda shift: 0.80 - 0.003 * shift, shifts=(0.0, 30.0))
     assert report.passed
     assert report.observed == pytest.approx(0.80)
+
+
+def test_temporal_control_rejects_a_score_that_cannot_be_an_auc():
+    from tabicl.scaling import temporal_control
+
+    # A caller whose scoring function returns something outside [0, 1] has a bug, and
+    # silently reading it as extreme information is the worst available response -- that is
+    # how a test in this file asserted a pass on an AUC of -0.10 for months.
+    with pytest.raises(ValueError, match="outside"):
+        temporal_control(lambda shift: 0.80 - 0.03 * shift, shifts=(0.0, 30.0))
 
 
 def test_temporal_control_requires_an_unshifted_baseline():
@@ -3570,23 +3584,32 @@ def test_numeric_still_encodes_ordinary_categoricals():
     assert X[0, 0] == X[2, 0] and X[0, 0] != X[1, 0]
 
 
-# --- the temporal control cannot judge a block that scores below chance ----------------
-# Its premise, from its own docstring: "withholding history cannot ADD information, so an
-# improvement means the features reached past the cutoff." That requires the score to
-# measure information, which it does only ABOVE chance. Below it, a higher raw score is
-# movement TOWARD randomness. Measured as |score - chance| the verdict can invert.
+# --- the temporal control must compare INFORMATION, not raw score ----------------------
+# Controls 3 and 4 score a single summed column directly against the label -- no model is
+# fitted -- so a value below chance is an INVERTED feature, not a weak one. On rel-amazon,
+# items with more reviews are less likely to churn: n_linked scores 0.32, which carries what
+# 0.68 carries. Comparing raw scores inverts the verdict there, and did: six LEAK verdicts
+# were issued below chance against seven genuine ones above it.
 
-def test_temporal_control_cannot_judge_below_chance():
+def test_temporal_control_passes_an_inverted_but_informative_block():
     from tabicl.scaling._leakage import temporal_control
-    # rel-amazon/item-churn's real numbers. Raw AUC says "withholding history improved the
-    # score" (0.3236 -> 0.3388) and the old code called it a leak. By |score - 0.5| the
-    # shifted run is WEAKER (0.161 vs 0.176): withholding history reduced the information.
+    # rel-amazon/item-churn's real numbers. Raw AUC rises 0.3236 -> 0.3388 and the old code
+    # called it a leak; the deviations FALL 0.1764 -> 0.1612, so withholding history reduced
+    # the information, which is the opposite of a leak.
     r = temporal_control(lambda s: {0.0: 0.3236, 136.0: 0.3330, 410.0: 0.3388}[s],
                          shifts=(0.0, 136.0, 410.0))
-    assert r.inconclusive is True
-    assert r.passed is True                     # not a leak
-    assert "at or below chance" in r.reason
-    assert "INCONCLUSIVE" in repr(r)
+    assert r.passed is True and r.inconclusive is False
+    assert "do not add information" in r.reason
+
+
+def test_every_real_below_chance_verdict_flips_to_pass():
+    from tabicl.scaling._leakage import temporal_control
+    # All six misfires recorded across this project's runs, with their real shifted values.
+    for obs, shifted in ((0.3236, 0.3388), (0.3207, 0.3369), (0.4039, 0.4232),
+                         (0.4090, 0.4266), (0.4186, 0.4256), (0.4671, 0.4854)):
+        r = temporal_control(lambda s, o=obs, w=shifted: {0.0: o, 30.0: w}[s],
+                             shifts=(0.0, 30.0))
+        assert r.passed, f"{obs} -> {shifted} should pass on |score - chance|"
 
 
 def test_temporal_control_still_catches_a_real_leak_above_chance():
@@ -3602,12 +3625,21 @@ def test_temporal_control_still_passes_a_clean_block():
     assert r.passed is True and r.inconclusive is False
 
 
-def test_inconclusive_is_not_silently_equal_to_pass():
-    from tabicl.scaling._leakage import LeakageReport
-    # A pass is evidence of no leak; inconclusive is absence of evidence. They must be
-    # distinguishable by a caller that cares, which is why this is a separate field rather
-    # than a reason string.
-    a = LeakageReport(True, 0.7, [0.6], 0.5, "clean")
-    b = LeakageReport(True, 0.3, [0.34], 0.5, "cannot judge", inconclusive=True)
-    assert a.passed == b.passed and a.inconclusive != b.inconclusive
-    assert "PASS" in repr(a) and "INCONCLUSIVE" in repr(b)
+def test_above_chance_verdicts_are_identical_under_both_measures():
+    from tabicl.scaling._leakage import temporal_control
+    # The fix must not disturb any verdict that was already correct: above chance,
+    # |score - chance| and the raw score order the same way.
+    for obs, shifted in ((0.5618, 0.5700), (0.6926, 0.7100), (0.8179, 0.8300),
+                         (0.7000, 0.6600), (0.6155, 0.6000)):
+        r = temporal_control(lambda s, o=obs, w=shifted: {0.0: o, 30.0: w}[s],
+                             shifts=(0.0, 30.0))
+        assert r.passed == (shifted <= obs + 0.005)
+
+
+def test_inconclusive_only_when_both_sides_are_at_chance():
+    from tabicl.scaling._leakage import temporal_control
+    # The one case with genuinely nothing to compare. Narrow on purpose: an inverted block
+    # is informative and must get a real verdict, not an abstention.
+    r = temporal_control(lambda s: {0.0: 0.501, 30.0: 0.502}[s], shifts=(0.0, 30.0))
+    assert r.inconclusive is True
+    assert "no information on either side" in r.reason
