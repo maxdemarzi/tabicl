@@ -16,7 +16,7 @@ feature spec, fit set, and the one thing that changed.
 
 ## Standing vs published results (updated 2026-08-06)
 
-RelBench, official protocol. Test ROC-AUC ×100. **Eight** of RelBenchV1's twelve entity
+RelBench, official protocol. Test ROC-AUC ×100. **Ten** of RelBenchV1's twelve entity
 classification tasks. Comparison figures are the TabPFN-3 report's Table 14 (arXiv
 2605.13986), **complete** except for KumoRFMv1 and RTzero, which the report itself flags as
 following a different evaluation protocol that overestimates performance.
@@ -35,16 +35,36 @@ field is shown here, with our rank in it.
 | rel-avito / user-clicks ◆ | **65.89** | 8/10 | 68.19 ⁿ²⁰ | — | 68.23 | 68.30 | 65.90 | 45.90 | 69.04 | 65.72 | **69.06** | 67.42 ˟ | 67.09 |
 | rel-f1 / driver-dnf ◆ | **69.66** | 9/10 | 69.95 ⁿ⁶ | — | 75.29 | **75.87** | 72.62 | 57.70 | 70.87 | 71.72 | 71.72 | 72.03 | 70.74 |
 | rel-hm / user-churn ◆◆ | **66.75** | 9/10 | — | — | **70.93** | 69.27 | 69.88 | 60.20 | 68.05 | 70.11 | 70.06 | 67.81 | 70.55 |
-| **average** ¶ | **72.62** | **7/10** | — | — | **75.42** | 73.75 | 72.16 | 64.14 | 72.78 | 72.34 | 72.97 | 73.62 | 74.25 |
+| rel-stack / user-engagement ◆◆ | **89.33** ⁴ | 8/10 | — | — | **90.75** | 90.53 | 90.59 | 77.50 | 89.39 | 90.23 | 90.59 | 88.69 | 90.66 |
+| rel-amazon / user-churn ◆◆ | **66.94** | 9/10 | — | — | **70.99** | 70.39 | 70.42 | 62.30 | 67.57 | 69.74 | 69.35 | 67.71 | 70.27 |
+| **average** ¶ | **73.72** | **9/10** | — | — | **76.51** | 75.09 | 73.83 | 65.30 | 73.92 | 73.87 | 74.37 | 74.54 | 75.49 |
 
-**Median rank 7 of 10.** Ranks: 3, 4, 6, 7, 8, 8, 9, 9. Bold in the comparison columns marks
+**Median rank 8 of 10.** Ranks: 3, 4, 6, 7, 8, 8, 8, 9, 9, 9. Bold in the comparison columns marks
 the best method for that task; **we never hold it.**
 
-¶ **The average row is over these eight tasks only, for every method — so it is internally
+¶ **The average row is over these ten tasks only, for every method — so it is internally
 comparable but is _not_ the report's Avg AUROC, which covers twelve.** Its rank cell is our
 standing among the ten methods' averages, on the same rule as every other row.
 
-◆◆ Added 2026-08-08, and it cost us a place. rel-hm/user-churn was run *because* it was
+⁴ Four replicates, not five: salvaged by `scaling/salvage.py` from a run the 3-hour ceiling
+killed before it printed a summary (~55 min/seed once disk offloading engages). A real
+measurement and a weaker one, marked rather than rounded up.
+
+◆◆ Added 2026-08-08/09 — the three tasks that dropped us from 6th to 9th. **This is the
+most important correction in this file.** They were run *because* they were missing, not
+because they looked winnable, and we place 9th, 8th and 9th on them.
+
+**The average rose while our rank collapsed, and that is the whole lesson.** Our average
+went 73.46 → 73.72 (**+0.26**); GraphSAGE's went 72.48 → 73.83 (**+1.35**). Everyone gained
+more from the added tasks than we did, so a rising number hid a falling position. At seven
+tasks we were tied 5th/6th with RDBLearn; at ten we are **9th of 10, ahead only of
+Griffin** — the method that scores 45.90 and 51.00 elsewhere.
+
+**The seven tasks this project reported for months were a flattering subset**, chosen by
+history rather than design. Nothing was tuned to them; they were simply the ones that got
+run. That is enough.
+
+◆ Added 2026-08-06, and it cost us a place. rel-hm/user-churn was run *because* it was
 missing, not because it looked winnable, and we place **9th of 10** on it — beaten by eight
 of nine methods, ahead only of Griffin. The average fell 73.46 → 72.62 and our standing among
 the methods' averages fell **6th → 7th**. Every cell in this table's average row is now
@@ -154,7 +174,7 @@ advice; ten methods remain, including us):
 | rel-avito / user-clicks ◆ | 65.89 | 8 of 10 | 69.06 RDBLearn+v3 | RDBLearn+v3, RDBLearn, RelGT, RelGNN, KumoRFMv2, TabPFN-REL, GraphSAGE |
 | rel-f1 / driver-dnf ◆ | 69.66 | 9 of 10 | 75.87 RelGT | RelGT, RelGNN, GraphSAGE, KumoRFMv2, RDBLearn+v2.5, RDBLearn+v3, RDBLearn, TabPFN-REL |
 
-◆ new on 2026-08-06. **Median rank 7 of 10.** Ranks: 3, 4, 6, 7, 8, 8, 9, 9.
+◆ new on 2026-08-06. **Median rank 8 of 10.** Ranks: 3, 4, 6, 7, 8, 8, 8, 9, 9, 9.
 
 **This is a materially worse position than this file has been describing**, and the three
 new tasks are why it is now visible: running only four tasks, two of which we happen to do

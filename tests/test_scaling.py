@@ -3249,13 +3249,35 @@ def test_average_is_a_rank_of_means_not_a_mean_of_ranks():
     assert averages(list(SEVEN), SEVEN)["ours"] == pytest.approx(73.46, abs=0.005)
 
 
-def test_the_eighth_task_costs_us_a_place():
+def test_the_three_added_tasks_cost_us_three_places():
     from tabicl.scaling.rank_table import average_rank, averages, OURS
-    # rel-hm/user-churn was run because it was missing, not because it looked winnable, and
-    # it drops us 6th -> 7th. Pinned so the cost cannot be quietly undone by a later edit.
-    assert OURS["rel-hm/user-churn"] == 66.75
-    assert average_rank(list(OURS)) == (7, 10)
-    assert averages(list(OURS))["ours"] == pytest.approx(72.62, abs=0.005)
+    # All three were run because they were missing, not because they looked winnable. They
+    # drop us 6th -> 9th. Pinned so the cost cannot be quietly undone by a later edit.
+    assert len(OURS) == 10
+    assert average_rank(list(OURS)) == (9, 10)
+    assert averages(list(OURS))["ours"] == pytest.approx(73.72, abs=0.005)
+
+
+def test_a_rising_average_hid_a_falling_rank():
+    from tabicl.scaling.rank_table import averages, OURS
+    # The trap this table is now built to expose: our mean went UP by 0.26 while our
+    # position went DOWN three places, because every rival gained more from the added
+    # tasks than we did. A reader seeing only "73.46 -> 73.72" would conclude we improved.
+    seven = {k: v for k, v in OURS.items()
+             if k not in ("rel-hm/user-churn", "rel-stack/user-engagement",
+                          "rel-amazon/user-churn")}
+    before, after = averages(list(seven), seven), averages(list(OURS))
+    assert after["ours"] > before["ours"]
+    assert after["GraphSAGE"] - before["GraphSAGE"] > after["ours"] - before["ours"]
+
+
+def test_partial_seed_counts_are_recorded_for_the_table_to_mark():
+    from tabicl.scaling.rank_table import PARTIAL_SEEDS, OURS
+    # rel-stack/user-engagement is four replicates, salvaged from a timed-out run. A real
+    # measurement and a weaker one; the table must be able to mark it rather than present
+    # it as the standard five.
+    assert PARTIAL_SEEDS["rel-stack/user-engagement"] == 4
+    assert all(k in OURS for k in PARTIAL_SEEDS)
 
 
 def test_average_refuses_a_task_set_we_have_not_measured():

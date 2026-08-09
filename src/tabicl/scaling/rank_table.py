@@ -56,7 +56,16 @@ OURS: dict[str, float] = {
     "rel-f1/driver-dnf": 69.66,
     # Added 2026-08-08, the first of the five missing tasks. Places 9/10.
     "rel-hm/user-churn": 66.75,
+    # Added 2026-08-09. rel-amazon/user-churn is a complete 5-replicate run; user-engagement
+    # is FOUR seeds, salvaged from a run the 3h ceiling killed before it printed a summary
+    # (~55 min/seed with disk offloading). Both are real measurements and one is weaker than
+    # the standard five; PARTIAL_SEEDS records which, so the table can mark it.
+    "rel-stack/user-engagement": 89.33,
+    "rel-amazon/user-churn": 66.94,
 }
+
+# Tasks measured with fewer than the standard five replicates, and how many they got.
+PARTIAL_SEEDS: dict[str, int] = {"rel-stack/user-engagement": 4}
 
 
 def rank(score: float, task: str) -> tuple[int, int]:
