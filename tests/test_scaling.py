@@ -3357,3 +3357,66 @@ def test_available_cpu_memory_can_only_shrink(monkeypatch):
     monkeypatch.setattr(inference, "_cgroup_memory_headroom", lambda: None)
     got = inference.InferenceManager.get_available_cpu_memory(mgr)
     assert got == pytest.approx(psutil.virtual_memory().available / 1024 ** 2, rel=0.2)
+
+
+# --- salvage: a timed-out run is a weaker measurement, not a lost one ------------------
+# rel-stack/user-engagement costs ~55 min/seed once disk offloading engages, against a 3h
+# ceiling, so the SUMMARY line is the part most likely to be missing -- on exactly the tasks
+# that were hardest to measure at all. These tests are about the one way this goes wrong
+# quietly: a partial mean being read as a complete one.
+
+_PARTIAL_LOG = """\
+########## NEW TASK :: rel-stack/user-engagement :: (01:00:00Z)
+  chosen +history context=10000 order=random -> VAL 89.53  TEST 89.34
+  chosen +counts context=10000 order=random -> VAL 89.11  TEST 89.12
+EXIT rel-stack/user-engagement rc=124 TIMED OUT after 10800s -- a missing measurement
+########## NEW TASK :: rel-hm/user-churn :: (04:00:00Z)
+  chosen base context=5000 order=random -> VAL 70.10  TEST 66.50
+  chosen base context=5000 order=random -> VAL 70.20  TEST 67.00
+rel-hm/user-churn  CALIBRATED TEST ROC-AUC x100 = 66.75 +- 0.23 over 2 replicates
+"""
+
+
+def test_salvage_recovers_seeds_from_a_run_with_no_summary():
+    from tabicl.scaling.salvage import salvage
+    r = {x.task: x for x in salvage(_PARTIAL_LOG)}
+    eng = r["rel-stack/user-engagement"]
+    assert eng.tests == [89.34, 89.12]
+    assert eng.mean == pytest.approx(89.23, abs=0.005)
+    assert eng.complete is False and "rc=124" in eng.exit_note
+
+
+def test_salvage_marks_a_complete_run_complete():
+    from tabicl.scaling.salvage import salvage
+    r = {x.task: x for x in salvage(_PARTIAL_LOG)}
+    assert r["rel-hm/user-churn"].complete is True
+    assert r["rel-hm/user-churn"].exit_note == ""
+
+
+def test_partial_results_always_print_their_seed_count_and_a_marker():
+    from tabicl.scaling.salvage import salvage, format_result
+    # The specific failure this guards: a 2-seed mean transcribed into the headline table
+    # as though it were the standard five.
+    r = {x.task: x for x in salvage(_PARTIAL_LOG)}
+    line = format_result(r["rel-stack/user-engagement"])
+    assert "PARTIAL" in line and "2 seeds" in line
+    assert "PARTIAL" not in format_result(r["rel-hm/user-churn"])
+
+
+def test_salvage_does_not_pool_seeds_across_tasks():
+    from tabicl.scaling.salvage import salvage
+    # Letting one task's seeds run into the next is how a sibling parser in this project
+    # reported +17.66 on a task with a two-point range.
+    r = {x.task: x for x in salvage(_PARTIAL_LOG)}
+    assert r["rel-hm/user-churn"].tests == [66.50, 67.00]
+    assert 89.34 not in r["rel-hm/user-churn"].tests
+
+
+def test_a_task_that_produced_nothing_is_reported_as_missing_not_as_zero():
+    from tabicl.scaling.salvage import salvage, format_result
+    log = ("########## NEW TASK :: rel-stack/user-badge :: (01:00:00Z)\n"
+           "EXIT rel-stack/user-badge rc=137 SIGKILL (9) -- almost certainly out of memory\n")
+    (r,) = salvage(log)
+    assert r.tests == []
+    assert "NO SEEDS COMPLETED" in format_result(r)
+    assert "missing measurement" in format_result(r)
