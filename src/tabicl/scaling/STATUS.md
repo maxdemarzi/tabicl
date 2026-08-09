@@ -266,7 +266,9 @@ and was not comparable with the published figures; it has been retired.
 
 Seven tasks, ranked against every method in the TabPFN-3 report's Table 14 that the report
 does **not** flag as using a different protocol — ten methods including us. The full
-per-method table is at the top of `PERFORMANCE.md`.
+per-method table is at the top of `PERFORMANCE.md`. **Eight of twelve tasks**; the four
+outstanding are rel-stack/user-engagement, rel-stack/user-badge, rel-amazon/user-churn and
+rel-amazon/item-churn.
 
 | task | ours | rank | best in field | gap |
 |---|---:|---:|---|---:|
@@ -277,17 +279,23 @@ per-method table is at the top of `PERFORMANCE.md`.
 | rel-avito / user-visits | 65.54 | 8/10 | KumoRFMv2 69.41 | −3.87 |
 | rel-avito / user-clicks | 65.89 | 8/10 | RDBLearn+v3 69.06 | −3.17 |
 | rel-f1 / driver-dnf | 69.66 | 9/10 | RelGT 75.87 | −6.21 |
-| **average** | **73.46** | **6/10** | RelGNN 76.06 | −2.60 |
+| rel-hm / user-churn | 66.75 | 9/10 | RelGNN 70.93 | −4.18 |
+| **average** | **72.62** | **7/10** | RelGNN 75.42 | −2.80 |
 
-**Median rank 7 of 10.** An earlier version of this section showed three comparison methods
-and reported gaps against them; RelGT beats us on three of the four original tasks and was
-absent. The average row is over these seven tasks for every method, so it is internally
-comparable but is *not* the report's twelve-task Avg AUROC.
+**Median rank 7 of 10.** Ranks 3, 4, 6, 7, 8, 8, 9, 9. An earlier version of this section
+showed three comparison methods and reported gaps against them; RelGT beats us on three of
+the four original tasks and was absent. The average row is over these **eight** tasks for
+every method, so it is internally comparable but is *not* the report's twelve-task Avg
+AUROC — and it must never be compared against the seven-task version of this row, which
+read 73.46 / 6th. Every cell is emitted by `scaling/rank_table.py`.
 
-Averaging is kinder to us than ranking — 6th on mean AUROC, 7th by median rank — because it
-rewards never collapsing, and our worst task is still mid-field where Griffin has two
-sub-52s. Even the 6th is generous: RDBLearn's average is 0.004 above ours, so that is a tie
-the sort broke. The accurate summary is **consistently mid-field, never leading.**
+**Averaging used to be kinder to us than ranking, and as of 2026-08-08 it is not.** Both
+now read 7th. rel-hm/user-churn was run *because* it was missing rather than because it
+looked winnable, and we placed 9th of 10 on it — beaten by eight of nine methods, ahead only
+of Griffin. That single task moved the average 73.46 → 72.62 and our standing 6th → 7th.
+The seven tasks reported before it were chosen by history, not design, so **the published
+average rank of 6 was flattering by one place.** The accurate summary is unchanged in kind
+and worse in degree: **consistently mid-field, never leading.**
 `PERFORMANCE.md` also carries the DFS baseline, a labelled best-configuration upper bound,
 and what to expect *before* calibrating.
 
@@ -318,9 +326,9 @@ are already what tuning would find, and tuning can cost you.** `--abstain` is th
 attempt to detect that case automatically rather than leaving it to judgement — it keeps a
 tuned choice only when the validation ranking still holds on a later slice of validation.
 
-**We win no task, and we hold no best cell in the field on any of the seven.** Our best
-showings are rel-event/user-repeat (3rd) and rel-trial (4th); our worst is rel-f1/driver-dnf
-at 9th, 6.21 behind. rel-trial moved 66.50 → 69.36 → 72.26 across 2026-08-04/05 and rose
+**We win no task, and we hold no best cell in the field on any of the eight.** Our best
+showings are rel-event/user-repeat (3rd) and rel-trial (4th); our worst are rel-f1/driver-dnf
+and rel-hm/user-churn, both 9th. rel-trial moved 66.50 → 69.36 → 72.26 across 2026-08-04/05 and rose
 from last to 4th — but a narrowed gap is not a win. This is a generic flattening pipeline in front of a stock TabICL, with
 no relational machinery in the model and no retraining, measured against systems built for
 relational data.
