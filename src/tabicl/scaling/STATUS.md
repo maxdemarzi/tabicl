@@ -266,8 +266,9 @@ and was not comparable with the published figures; it has been retired.
 
 Seven tasks, ranked against every method in the TabPFN-3 report's Table 14 that the report
 does **not** flag as using a different protocol — ten methods including us. The full
-per-method table is at the top of `PERFORMANCE.md`. **Ten of twelve tasks**; the two outstanding are
-rel-stack/user-badge (still OOM-killed at 255,360 test rows) and rel-amazon/item-churn.
+per-method table is at the top of `PERFORMANCE.md`. **Eleven of twelve tasks.** The one outstanding is rel-stack/user-badge, OOM-killed on
+five attempts across every combination of --row-chunk, --offload and --train-pool; the
+cost is in the child-table aggregation, not the fit pool.
 
 | task | ours | rank | best in field | gap |
 |---|---:|---:|---|---:|
@@ -281,13 +282,16 @@ rel-stack/user-badge (still OOM-killed at 255,360 test rows) and rel-amazon/item
 | rel-hm / user-churn | 66.75 | 9/10 | RelGNN 70.93 | −4.18 |
 | rel-stack / user-engagement | 89.33 ⁴ | 8/10 | RelGNN 90.75 | −1.42 |
 | rel-amazon / user-churn | 66.94 | 9/10 | RelGNN 70.99 | −4.05 |
-| **average** | **73.72** | **9/10** | RelGNN 76.51 | −2.79 |
+| rel-amazon / item-churn | 80.20 ⁵ | 8/10 | GraphSAGE 82.81 | −2.61 |
+| **average** | **74.31** | **9/10** | RelGNN 77.07 | −2.76 |
 
 ⁴ Four replicates, salvaged from a run the 3-hour ceiling killed before its summary.
+⁵ `--train-pool 300000` and a dropped array column; `base`-only, five of seven arms
+excluded by its own leak controls.
 
-**Median rank 8 of 10.** Ranks 3, 4, 6, 7, 8, 8, 8, 9, 9, 9. An earlier version of this section
+**Median rank 8 of 10.** Ranks 3, 4, 6, 7, 8, 8, 8, 8, 9, 9, 9. An earlier version of this section
 showed three comparison methods and reported gaps against them; RelGT beats us on three of
-the four original tasks and was absent. The average row is over these **ten** tasks for
+the four original tasks and was absent. The average row is over these **eleven** tasks for
 every method, so it is internally comparable but is *not* the report's twelve-task Avg
 AUROC — and it must never be compared against the seven- or eight-task versions of this row,
 which read 73.46 / 6th and 72.62 / 7th. Every cell is emitted by `scaling/rank_table.py`.
@@ -337,7 +341,7 @@ are already what tuning would find, and tuning can cost you.** `--abstain` is th
 attempt to detect that case automatically rather than leaving it to judgement — it keeps a
 tuned choice only when the validation ranking still holds on a later slice of validation.
 
-**We win no task, and we hold no best cell in the field on any of the ten.** Our best
+**We win no task, and we hold no best cell in the field on any of the eleven.** Our best
 showings are rel-event/user-repeat (3rd) and rel-trial (4th); our worst are rel-f1/driver-dnf
 and rel-hm/user-churn, both 9th. rel-trial moved 66.50 → 69.36 → 72.26 across 2026-08-04/05 and rose
 from last to 4th — but a narrowed gap is not a win. This is a generic flattening pipeline in front of a stock TabICL, with

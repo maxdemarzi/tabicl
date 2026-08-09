@@ -62,6 +62,11 @@ OURS: dict[str, float] = {
     # the standard five; PARTIAL_SEEDS records which, so the table can mark it.
     "rel-stack/user-engagement": 89.33,
     "rel-amazon/user-churn": 66.94,
+    # Added 2026-08-09, the eleventh. Took --train-pool (2.54M -> 300k, so feature
+    # construction fit) AND dropping rel-amazon's array-valued column, which crashed
+    # pd.factorize after the controls had already run. Its leak controls excluded five of
+    # seven arms, so this is a `base`-only result at 55 columns.
+    "rel-amazon/item-churn": 80.20,
 }
 
 # Tasks measured with fewer than the standard five replicates, and how many they got.

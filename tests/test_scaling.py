@@ -3249,13 +3249,13 @@ def test_average_is_a_rank_of_means_not_a_mean_of_ranks():
     assert averages(list(SEVEN), SEVEN)["ours"] == pytest.approx(73.46, abs=0.005)
 
 
-def test_the_three_added_tasks_cost_us_three_places():
+def test_the_added_tasks_cost_us_three_places():
     from tabicl.scaling.rank_table import average_rank, averages, OURS
     # All three were run because they were missing, not because they looked winnable. They
     # drop us 6th -> 9th. Pinned so the cost cannot be quietly undone by a later edit.
-    assert len(OURS) == 10
+    assert len(OURS) == 11
     assert average_rank(list(OURS)) == (9, 10)
-    assert averages(list(OURS))["ours"] == pytest.approx(73.72, abs=0.005)
+    assert averages(list(OURS))["ours"] == pytest.approx(74.31, abs=0.005)
 
 
 def test_a_rising_average_hid_a_falling_rank():
@@ -3265,7 +3265,7 @@ def test_a_rising_average_hid_a_falling_rank():
     # tasks than we did. A reader seeing only "73.46 -> 73.72" would conclude we improved.
     seven = {k: v for k, v in OURS.items()
              if k not in ("rel-hm/user-churn", "rel-stack/user-engagement",
-                          "rel-amazon/user-churn")}
+                          "rel-amazon/user-churn", "rel-amazon/item-churn")}
     before, after = averages(list(seven), seven), averages(list(OURS))
     assert after["ours"] > before["ours"]
     assert after["GraphSAGE"] - before["GraphSAGE"] > after["ours"] - before["ours"]
