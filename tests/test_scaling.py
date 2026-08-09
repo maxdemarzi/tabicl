@@ -3275,3 +3275,85 @@ def test_adding_a_task_changes_the_average_row_for_everyone():
     wider = averages(list(OURS) + ["rel-stack/user-badge"],
                      {**OURS, "rel-stack/user-badge": 80.0})
     assert all(wider[m] > base[m] for m in ("RelGNN", "GraphSAGE", "TabPFN-REL"))
+
+
+# --- cgroup-aware CPU memory: the bug behind two silent multi-hour failures ----------
+# psutil.virtual_memory().available reports the HOST's free memory and is blind to cgroup
+# limits. Measured on a RunPod L40S container: 450.8 GB reported against 102.4 GB real, a
+# 4.4x overestimate. It decides whether offload="auto" escalates to disk, so overestimating
+# means never escalating -- and the cgroup OOM killer sends SIGKILL, so the process dies with
+# no traceback and no CUDA error. Indistinguishable from a clean exit.
+
+def test_cgroup_headroom_is_none_without_a_limit(tmp_path, monkeypatch):
+    from tabicl._model import inference
+    # No cgroup files (Windows, bare metal) -> fall back to psutil unchanged.
+    monkeypatch.chdir(tmp_path)
+    assert inference._cgroup_memory_headroom() is None or isinstance(
+        inference._cgroup_memory_headroom(), int)
+
+
+def test_cgroup_headroom_reads_v2_and_subtracts_usage(tmp_path, monkeypatch):
+    import pathlib
+    from tabicl._model import inference
+    real = pathlib.Path.read_text
+
+    def fake(self, *a, **k):
+        # Deliberately below any plausible host RAM: the helper treats a limit at or
+        # above physical memory as "no real constraint" (that is how cgroup v1's
+        # unlimited sentinel is caught), so a 125 GB fixture would be discarded on a
+        # 64 GB test machine and the assertion would test nothing.
+        if str(self).endswith("memory.max"):
+            return "8000000000"
+        if str(self).endswith("memory.current"):
+            return "1000000000"
+        raise OSError("no such file")
+
+    monkeypatch.setattr(pathlib.Path, "exists", lambda self: True)
+    monkeypatch.setattr(pathlib.Path, "read_text", fake)
+    try:
+        assert inference._cgroup_memory_headroom() == 8000000000 - 1000000000
+    finally:
+        monkeypatch.setattr(pathlib.Path, "read_text", real)
+
+
+def test_cgroup_headroom_treats_max_as_unlimited(monkeypatch):
+    import pathlib
+    from tabicl._model import inference
+    monkeypatch.setattr(pathlib.Path, "read_text", lambda self, *a, **k: "max")
+    assert inference._cgroup_memory_headroom() is None
+
+
+def test_cgroup_headroom_ignores_the_v1_unlimited_sentinel(monkeypatch):
+    import pathlib
+    from tabicl._model import inference
+    # cgroup v1 signals "unlimited" with a value near 2**63. Treating that as a real limit
+    # would make every uncontained run think it had exabytes of headroom.
+    monkeypatch.setattr(pathlib.Path, "read_text",
+                        lambda self, *a, **k: str(9223372036854771712))
+    assert inference._cgroup_memory_headroom() is None
+
+
+def test_cgroup_headroom_never_raises(monkeypatch):
+    import pathlib
+    from tabicl._model import inference
+    # A memory estimate is not worth crashing an inference call over. Every failure path
+    # must fall back to the previous behaviour.
+    def boom(self, *a, **k):
+        raise OSError("permission denied")
+    monkeypatch.setattr(pathlib.Path, "read_text", boom)
+    assert inference._cgroup_memory_headroom() is None
+
+
+def test_available_cpu_memory_can_only_shrink(monkeypatch):
+    import psutil
+    from tabicl._model import inference
+    # The cgroup figure is INTERSECTED with psutil's, never substituted, so this change can
+    # only ever be more conservative than the behaviour every existing result was measured
+    # under.
+    mgr = inference.InferenceManager.__new__(inference.InferenceManager)
+    monkeypatch.setattr(inference, "_cgroup_memory_headroom", lambda: 1024 ** 3)
+    got = inference.InferenceManager.get_available_cpu_memory(mgr)
+    assert got == pytest.approx(1024.0)                      # 1 GiB in MB, the cgroup cap
+    monkeypatch.setattr(inference, "_cgroup_memory_headroom", lambda: None)
+    got = inference.InferenceManager.get_available_cpu_memory(mgr)
+    assert got == pytest.approx(psutil.virtual_memory().available / 1024 ** 2, rel=0.2)

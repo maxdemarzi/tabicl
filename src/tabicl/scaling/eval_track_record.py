@@ -55,7 +55,8 @@ from tabicl.scaling._leakage import permutation_test, temporal_control
 NOAMP = {k: {"use_amp": False} for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG")}
 
 
-def inference_config(row_chunk: str, offload: str = "off") -> dict:
+def inference_config(row_chunk: str, offload: str = "off",
+                     disk_dir: str = "/workspace/offload") -> dict:
     """AMP off always; row chunking and output offloading per their flags.
 
     **This runner has never used the package's own scaling features.** Row-chunked column
@@ -96,11 +97,17 @@ def inference_config(row_chunk: str, offload: str = "off") -> dict:
     if offload != "off":
         # ``offload`` is a field of MgrConfig, and MgrConfig is the *type* of each of the
         # three stage configs -- there is no separate manager key. Set it on all three, the
-        # way ``use_amp`` already is. (`InferenceConfig.update` raises KeyError on anything
-        # outside COL/ROW/ICL, so a wrong key here fails loudly rather than reading as
+        # way ``use_amp`` already is. (`InferenceConfig.update_from_dict` raises KeyError on
+        # anything outside COL/ROW/ICL, so a wrong key fails loudly rather than reading as
         # "offloading did not help" -- but it is still wrong, so it is spelled out.)
         for k in cfg:
             cfg[k]["offload"] = offload
+            if offload == "disk":
+                # Without a directory, disk offloading DISABLES ITSELF and raises only once
+                # CPU memory is already insufficient -- which on a memory-capped container
+                # is a race against the OOM killer that the OOM killer wins. Set it here so
+                # the mode cannot be silently inert.
+                cfg[k]["disk_offload_dir"] = disk_dir
     return cfg
 
 # Aggregation windows are task-scale, not universal: clinical trials run for years, ad
@@ -507,6 +514,11 @@ def main() -> None:
                          "combined rows x 342 columns on a 46 GB L40S, printing no "
                          "traceback. Default 'off': every standing number was measured "
                          "that way.")
+    ap.add_argument("--disk-offload-dir", default="/workspace/offload",
+                    help="directory for memory-mapped offload files, used only by "
+                         "--offload disk. Without one the library disables disk "
+                         "offloading and raises only once CPU memory is already short, "
+                         "which on a memory-capped container is a race the OOM killer wins.")
     ap.add_argument("--drop-stale-arms", action="store_true",
                     help="exclude history-dependent arms when the shared-key block's "
                          "COVERAGE collapses between validation and test. Label-free: reads "
@@ -1490,7 +1502,8 @@ def main() -> None:
                     n, size=len(rows), replace=False)
             clf = TabICLClassifier(
                 n_estimators=args.n_estimators, device=args.device, random_state=seed,
-                inference_config=inference_config(args.row_chunk, args.offload)).fit(X[take], source_y[take])
+                inference_config=inference_config(args.row_chunk, args.offload,
+                                                 args.disk_offload_dir)).fit(X[take], source_y[take])
             p = clf.predict_proba(Xe)[:, 1]
             probs = p if probs is None else probs + p
         if return_probs:
