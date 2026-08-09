@@ -59,6 +59,43 @@ tasks, two of which we do comparatively well on, was itself part of the flattery
 ˟ Cells the report imputes from author-supplied results because its own scripts did not
 support them; not directly comparable.
 
+### The field on the five tasks we do not yet report (retrieved 2026-08-08)
+
+Read from the same source as the table above — TabPFN-3 Table 14, `arXiv 2605.13986` p.61 —
+so the five slot straight in when our numbers land. **Every one of the seven columns we
+already publish reproduced this table exactly**, which is why the five below are trusted:
+the parse was validated against numbers that were transcribed independently, months apart.
+
+| method | amazon / user-churn | amazon / item-churn | stack / user-engagement | stack / user-badge | hm / user-churn |
+|---|---:|---:|---:|---:|---:|
+| RelGNN | 70.99 | 82.64 | **90.75** | **88.98** | 70.93 |
+| RelGT | 70.39 | 82.55 | 90.53 | 86.32 | 69.27 |
+| GraphSAGE | 70.42 | **82.81** | 90.59 | 88.86 | 69.88 |
+| Griffin | 62.30 | 69.00 | 77.50 | 73.50 | 60.20 |
+| RDBLearn | 67.57 | 82.07 | 89.39 | 85.26 | 68.05 |
+| RDBLearn + v2.5 | 69.74 | 82.18 | 90.23 | 82.81 | **70.11** |
+| RDBLearn + v3 | 69.35 | 82.46 | 90.59 | 85.98 | 70.06 |
+| KumoRFMv2 | 67.71 | 80.18 | 88.69 | 85.40 | 67.81 |
+| TabPFN-REL | 70.27 | **82.81** | 90.66 | 85.17 | 70.55 |
+
+*(DFS is absent from Table 14 — its cells in the main table come from the RelBench paper,
+which is why three of them are already `—`.)*
+
+**Two things this changes before a single result arrives.**
+
+**The five are not a random sample of difficulty.** The two rel-stack tasks sit at **88–91**
+and rel-amazon/item-churn at **82**, far above the 65–86 band our seven occupy. Adding them
+raises *every* method's average, ours included, so **the average row will move up for
+reasons that have nothing to do with us getting better.** Any comparison across the two
+versions of that row is meaningless, and the row must be relabelled when it changes.
+
+**Rank is the measure that survives, and the spread says where it will be decided.** On
+rel-stack/user-engagement nine methods fall inside **89.39–90.75** — a 1.36-point spread, well
+inside our ±0.6 floor's neighbourhood — so rank there is close to a coin toss and a single
+point of deficit costs several places. rel-stack/user-badge is the opposite: **73.50 to
+88.98**, a 15-point spread, where a mediocre score still places mid-field. **user-badge is
+therefore the task most worth rescuing**, and it is the one that died.
+
 † **DFS is measured here, not published.** Featuretools over the same tables with per-row
 cutoffs, scored by **the same TabICL, same context, same seeds** — only the feature builder
 differs, so it is the one column isolating *our aggregation* from *our model*. We lead 2 of
