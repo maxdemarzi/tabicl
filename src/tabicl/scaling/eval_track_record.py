@@ -180,6 +180,24 @@ def _numeric(df: pd.DataFrame, fit: bool = False, tag: str = "") -> np.ndarray:
     # Key by the frame's own column set, so two arms with different columns cannot share a
     # map and no caller has to remember to pass a distinct tag.
     tag = tag or str(hash(tuple(df.columns)))
+    # Drop columns whose VALUES are arrays or lists before anything tries to hash them.
+    # rel-amazon carries such a column and `pd.factorize` raises `TypeError: unhashable
+    # type: 'numpy.ndarray'` on it, which killed rel-amazon/item-churn after its features
+    # were built and its controls had run.
+    #
+    # Dropping rather than encoding is the honest option: a per-row vector has no
+    # categorical identity to factorize, and stringifying it would mint a unique category
+    # per row -- a column of distinct codes carrying no signal, indistinguishable from a
+    # row identifier, which is precisely the shape this project's leak controls exist to
+    # catch. Anything genuinely useful in such a column needs deliberate featurisation, not
+    # a silent cast.
+    unhashable = [c for c in out.columns
+                  if not pd.api.types.is_numeric_dtype(out[c])
+                  and out[c].map(lambda v: isinstance(v, (np.ndarray, list, dict, set))).any()]
+    if unhashable:
+        print(f"  dropping {len(unhashable)} array-valued column(s) from {tag}: "
+              f"{unhashable[:4]}{' ...' if len(unhashable) > 4 else ''}", flush=True)
+        out = out.drop(columns=unhashable)
     for col in out.columns:
         if pd.api.types.is_numeric_dtype(out[col]):
             continue

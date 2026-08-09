@@ -3529,3 +3529,42 @@ rel-b/alive  CALIBRATED TEST ROC-AUC x100 = 66.95 +- 0.05 over 3 replicates
     assert len(seeds) == 3                                 # not 5
     st = block_stats(seeds)
     assert st["noise"] < 1.0                               # not 11.38
+
+
+def test_numeric_drops_array_valued_columns_instead_of_crashing():
+    import numpy as np
+    import pandas as pd
+    from tabicl.scaling.eval_track_record import _numeric
+    # rel-amazon carries a column of per-row vectors. pd.factorize raises
+    # "TypeError: unhashable type: 'numpy.ndarray'" on it, which killed
+    # rel-amazon/item-churn AFTER its features were built and its controls had run.
+    df = pd.DataFrame({
+        "n": [1.0, 2.0, 3.0],
+        "cat": ["a", "b", "a"],
+        "emb": [np.array([1.0, 2.0]), np.array([3.0, 4.0]), np.array([5.0, 6.0])],
+    })
+    X = _numeric(df, fit=True, tag="arrtest")
+    assert X.shape == (3, 2)                      # emb dropped, n and cat kept
+    assert np.isfinite(X).all()
+
+
+def test_numeric_does_not_stringify_array_columns_into_row_identifiers():
+    import numpy as np
+    import pandas as pd
+    from tabicl.scaling.eval_track_record import _numeric
+    # Stringifying would mint one category per row -- a column of distinct codes carrying
+    # no signal and indistinguishable from a row identifier, which is the exact shape the
+    # leak controls exist to catch. Dropping must leave no column with all-distinct codes.
+    df = pd.DataFrame({"emb": [np.array([float(i)]) for i in range(5)]})
+    X = _numeric(df, fit=True, tag="arronly")
+    assert X.shape[1] == 0
+
+
+def test_numeric_still_encodes_ordinary_categoricals():
+    import numpy as np
+    import pandas as pd
+    from tabicl.scaling.eval_track_record import _numeric
+    df = pd.DataFrame({"cat": ["x", "y", "x", "z"]})
+    X = _numeric(df, fit=True, tag="plaincat")
+    assert X.shape == (4, 1)
+    assert X[0, 0] == X[2, 0] and X[0, 0] != X[1, 0]
