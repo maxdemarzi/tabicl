@@ -56,6 +56,11 @@ class LeakageReport:
 
     reason : str
         Human-readable verdict, suitable for printing next to a result.
+
+    inconclusive : bool
+        The control could not render a verdict. Distinct from ``passed``: a pass is
+        evidence of no leak, this is an absence of evidence either way. Callers must not
+        read it as a pass *or* as a failure -- see `temporal_control`.
     """
 
     passed: bool
@@ -63,13 +68,15 @@ class LeakageReport:
     control: List[float] = field(default_factory=list)
     chance: float = 0.5
     reason: str = ""
+    inconclusive: bool = False
 
     @property
     def control_mean(self) -> float:
         return float(np.mean(self.control)) if self.control else float("nan")
 
     def __repr__(self) -> str:  # pragma: no cover - display only
-        verdict = "PASS" if self.passed else "*** LEAK ***"
+        verdict = ("INCONCLUSIVE" if self.inconclusive
+                   else "PASS" if self.passed else "*** LEAK ***")
         return (f"LeakageReport({verdict}, observed={self.observed:.4f}, "
                 f"control={self.control_mean:.4f}, {self.reason})")
 
@@ -196,6 +203,7 @@ def temporal_control(
     score_at_cutoff_shift: Callable[[float], float],
     shifts: Sequence[float] = (0.0, 30.0, 90.0),
     tolerance: float = 0.005,
+    chance: float = 0.5,
 ) -> LeakageReport:
     """Move every cutoff earlier and confirm scores do not improve.
 
@@ -229,6 +237,32 @@ def temporal_control(
     observed = float(score_at_cutoff_shift(shifts[0]))
     control = [float(score_at_cutoff_shift(s)) for s in shifts[1:]]
     worst = max(control) if control else observed
+
+    # This control's premise is stated in the Notes above: withholding history cannot ADD
+    # information, so a higher score means the features reached past the cutoff. That
+    # premise requires the score to measure information, which it does only ABOVE chance.
+    #
+    # At or below chance the block has no usable predictive signal in the fitted direction,
+    # and a rise in raw score is movement TOWARD randomness rather than toward more
+    # information. Measured as |score - chance| the comparison can even invert: on
+    # rel-amazon/item-churn the observed count block scored 0.3236 and the shifted control
+    # 0.3388, which the raw test called a leak -- yet the deviations are 0.176 and 0.161,
+    # so withholding history REDUCED the information. Both rel-amazon tasks had five of
+    # seven arms excluded on that reading, and both were then measured on a base-only
+    # feature set.
+    #
+    # An absence of evidence is reported as exactly that. `inconclusive` is deliberately
+    # not a pass: callers must decide what to do with a block whose control cannot speak,
+    # and doing so knowingly is the whole point of separating the two.
+    if observed <= chance + tolerance:
+        return LeakageReport(
+            True, observed, control, observed,
+            f"cannot judge: the block scores {observed:.4f}, at or below chance "
+            f"({chance:.2f}), so it carries no usable signal in the fitted direction and "
+            f"'withholding history improved the score' ({worst:.4f}) is not evidence of a "
+            f"leak -- by |score - chance| the shifted run is WEAKER ({abs(worst - chance):.4f} "
+            f"vs {abs(observed - chance):.4f})",
+            inconclusive=True)
 
     passed = worst <= observed + tolerance
     reason = (

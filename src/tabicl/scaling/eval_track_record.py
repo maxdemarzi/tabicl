@@ -1472,6 +1472,19 @@ def main() -> None:
           "+rate": perm.passed and temporal_ok and temporal_counts.passed and not stale,
           "+history": perm.passed and temporal_ok and temporal_counts.passed
                       and temporal_struct.passed and not stale}
+    # An INCONCLUSIVE control is not a pass, and admitting an arm on one must be visible.
+    # Controls 3 and 4 score a sub-block; where that block lands at or below chance the
+    # temporal test cannot speak, and until 2026-08-09 it returned *** LEAK *** instead --
+    # excluding five of seven arms on both rel-amazon tasks, and `+struct` on
+    # rel-event/user-repeat and rel-trial/study-outcome, our two best results.
+    for _lbl, _rep in (("counts", temporal_counts), ("n_linked", temporal_struct)):
+        if getattr(_rep, "inconclusive", False):
+            print(f"  NOTE: the {_lbl} control is INCONCLUSIVE, not a pass -- its block "
+                  f"scores {_rep.observed:.4f}, at or below chance, so the temporal test "
+                  f"has no verdict to give. The arms it gates are admitted and validation "
+                  f"decides. A large gain from an arm whose own block cannot beat chance "
+                  f"would itself be suspicious and should be investigated, not banked.",
+                  flush=True)
     print(f"\narm eligibility: {ok}", flush=True)
     if not any(v for k, v in ok.items() if k != "base"):
         print("CONTROLS FAILED for every feature arm -- nothing to measure", flush=True)

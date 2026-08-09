@@ -3568,3 +3568,46 @@ def test_numeric_still_encodes_ordinary_categoricals():
     X = _numeric(df, fit=True, tag="plaincat")
     assert X.shape == (4, 1)
     assert X[0, 0] == X[2, 0] and X[0, 0] != X[1, 0]
+
+
+# --- the temporal control cannot judge a block that scores below chance ----------------
+# Its premise, from its own docstring: "withholding history cannot ADD information, so an
+# improvement means the features reached past the cutoff." That requires the score to
+# measure information, which it does only ABOVE chance. Below it, a higher raw score is
+# movement TOWARD randomness. Measured as |score - chance| the verdict can invert.
+
+def test_temporal_control_cannot_judge_below_chance():
+    from tabicl.scaling._leakage import temporal_control
+    # rel-amazon/item-churn's real numbers. Raw AUC says "withholding history improved the
+    # score" (0.3236 -> 0.3388) and the old code called it a leak. By |score - 0.5| the
+    # shifted run is WEAKER (0.161 vs 0.176): withholding history reduced the information.
+    r = temporal_control(lambda s: {0.0: 0.3236, 136.0: 0.3330, 410.0: 0.3388}[s],
+                         shifts=(0.0, 136.0, 410.0))
+    assert r.inconclusive is True
+    assert r.passed is True                     # not a leak
+    assert "at or below chance" in r.reason
+    assert "INCONCLUSIVE" in repr(r)
+
+
+def test_temporal_control_still_catches_a_real_leak_above_chance():
+    from tabicl.scaling._leakage import temporal_control
+    r = temporal_control(lambda s: {0.0: 0.70, 30.0: 0.78}[s], shifts=(0.0, 30.0))
+    assert r.passed is False and r.inconclusive is False
+    assert "reaching past the cutoff" in r.reason
+
+
+def test_temporal_control_still_passes_a_clean_block():
+    from tabicl.scaling._leakage import temporal_control
+    r = temporal_control(lambda s: {0.0: 0.70, 30.0: 0.66}[s], shifts=(0.0, 30.0))
+    assert r.passed is True and r.inconclusive is False
+
+
+def test_inconclusive_is_not_silently_equal_to_pass():
+    from tabicl.scaling._leakage import LeakageReport
+    # A pass is evidence of no leak; inconclusive is absence of evidence. They must be
+    # distinguishable by a caller that cares, which is why this is a separate field rather
+    # than a reason string.
+    a = LeakageReport(True, 0.7, [0.6], 0.5, "clean")
+    b = LeakageReport(True, 0.3, [0.34], 0.5, "cannot judge", inconclusive=True)
+    assert a.passed == b.passed and a.inconclusive != b.inconclusive
+    assert "PASS" in repr(a) and "INCONCLUSIVE" in repr(b)
