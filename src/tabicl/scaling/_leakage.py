@@ -205,6 +205,22 @@ def permutation_test(
     sd = float(np.std(control, ddof=1)) if len(control) > 1 else 0.0
     threshold = mean + n_sigma * sd
     passed = observed > threshold
+    # AUDITED 2026-08-09 AND DELIBERATELY NOT CHANGED. This gate is one-sided by design: it
+    # asks whether the label content adds anything BEYOND structure, which is a usefulness
+    # question rather than a leak question. But the one-sidedness has the same blind spot
+    # that had to be fixed in `temporal_control` and `permutation_control`: an informative
+    # but INVERTED block, scoring below chance, can never clear a null sitting at chance,
+    # and would be rejected for being useful in the negative direction.
+    #
+    # Every observed value across this project's runs is above chance (13 of 13, 0.5618 to
+    # 0.8179), so the premise has held everywhere it has actually been applied, and
+    # rewriting a gate that is not misfiring would add risk for no measured benefit. A
+    # warning is left instead, so the case announces itself rather than passing silently.
+    if observed < mean:
+        print(f"WARNING: permutation_test observed {observed:.4f} sits BELOW its permuted "
+              f"null {mean:.4f}. This gate is one-sided and cannot judge an inverted block: "
+              f"a feature informative in the negative direction fails it by construction. "
+              f"Treat the verdict as untested rather than as a rejection.", flush=True)
     reason = (
         f"observed {observed:.4f} beats its permuted null {mean:.4f} +- {sd:.4f} "
         f"({(observed - mean) / sd:.1f} sd)" if passed and sd > 0 else

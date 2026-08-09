@@ -4254,6 +4254,53 @@ declines to fire costs a pod cycle, and the host has 503 GB).
 methods inside 1.36 points means rank on that task is close to a coin toss, and this
 project's central finding is that validation and test disagree.
 
+### 2026-08-09 — every gate audited for the same class of bug; two were broken
+
+One question, put to every gate in the pipeline: **does this test's premise hold in every
+regime it can be applied in?** Two failed it, in opposite directions.
+
+| gate | premise | verdict |
+|---|---|---|
+| `temporal_control` | "withholding history cannot add information" — compares raw score | **BROKEN**, too strict |
+| `permutation_control` | "permuted labels should score at chance" — one-sided | **BROKEN**, too permissive |
+| `permutation_test` | "label content must beat structure by 3 sd" — one-sided | clean in practice, unchanged |
+| `temporal_informative` | "a control that moved <5% of values tested little" | clean |
+
+**Both failures come from treating a raw score as a measure of information.** These controls
+score a single summed column directly against the label with no model fitted, so a value
+below chance is an *inverted* feature, not a weak one — on rel-amazon, items with more
+reviews are less likely to churn, and `n_linked` scores 0.32, carrying exactly what 0.68
+carries. Information is `|score − chance|`.
+
+**`temporal_control` was too strict.** Comparing raw scores inverted the verdict below
+chance: item-churn's count block read 0.3236 → 0.3388 (LEAK) where the deviations were
+0.176 → 0.161 (withholding history *reduced* information). Six such verdicts across the
+archived runs against seven genuine ones, costing four tasks their arms — five of seven on
+both rel-amazon tasks, `+struct` on rel-event/user-repeat and rel-trial/study-outcome.
+
+**`permutation_control` was too permissive**, and this one hid a leak in a *published*
+number. `mean <= chance + tolerance` is blind to the half below chance.
+rel-avito/user-clicks passed at **0.4415 ± 0.0078 — 7.5 sd below chance**, meaning features
+rebuilt from shuffled labels still predict the true label. Its `+rate`, `+history` and
+`+text+rate` arms were eligible on that basis, and 65.89 was measured with them available.
+
+**That the same principle tightens one gate and loosens the other is the reason to believe
+it.** A correction that only ever opened gates in our favour would be motivated reasoning;
+there is a test asserting the two move in opposite directions.
+
+**What the fix was worth, measured rather than assumed.** On the two tasks where it freed
+one arm: rel-trial 72.26 → **72.55** (+0.29) and rel-event/user-repeat 77.89 → **77.62**
+(−0.27). Both inside the ±0.6 floor, and user-repeat's sd of 1.81 puts its SE alone at
+±0.64. **The control fix did not meaningfully change our best tasks.** rel-amazon, which
+lost five arms rather than one, is the outstanding test.
+
+**`permutation_test` was audited and deliberately left alone.** It is one-sided by design —
+a usefulness question, not a leak question — and shares the blind spot in principle: an
+informative inverted block can never clear a null sitting at chance. But all 13 observed
+values across this project's runs are above chance (0.5618–0.8179), so the premise has held
+everywhere it has been applied, and rewriting a gate that is not misfiring adds risk for no
+measured benefit. A warning was added so the case announces itself instead.
+
 ### 2026-08-09 — CORRECTION: the grid-noise figures were parsed from merged blocks
 
 **The finding stands; three of its numbers were wrong.** `grid_noise.parse_blocks` flushed a
