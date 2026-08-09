@@ -3643,3 +3643,45 @@ def test_inconclusive_only_when_both_sides_are_at_chance():
     r = temporal_control(lambda s: {0.0: 0.501, 30.0: 0.502}[s], shifts=(0.0, 30.0))
     assert r.inconclusive is True
     assert "no information on either side" in r.reason
+
+
+def test_permutation_control_is_two_sided():
+    import numpy as np
+    from tabicl.scaling import permutation_control
+    # rel-avito/user-clicks' real numbers: permuted-label features scored 0.4415, which is
+    # 7.5 sd BELOW chance and predicts the true label as well as 0.5585 would. The one-sided
+    # `mean <= chance + tolerance` read 0.4415 <= 0.52 and passed it, leaving +rate,
+    # +history and +text+rate eligible on a leaking block.
+    y = np.array([0, 1] * 50)
+    r = permutation_control(lambda labels: 0.4415, y, n_permutations=3)
+    assert r.passed is False
+    assert "inverted" in r.reason
+
+
+def test_permutation_control_still_passes_a_clean_null():
+    import numpy as np
+    from tabicl.scaling import permutation_control
+    y = np.array([0, 1] * 50)
+    assert permutation_control(lambda labels: 0.4999, y, n_permutations=3).passed
+    assert permutation_control(lambda labels: 0.5057, y, n_permutations=3).passed
+
+
+def test_permutation_control_still_catches_the_above_chance_case():
+    import numpy as np
+    from tabicl.scaling import permutation_control
+    y = np.array([0, 1] * 50)
+    r = permutation_control(lambda labels: 0.5510, y, n_permutations=3)
+    assert r.passed is False and "inverted" not in r.reason
+
+
+def test_the_two_control_fixes_pull_in_opposite_directions():
+    import numpy as np
+    from tabicl.scaling import permutation_control, temporal_control
+    # Evidence the shared principle is not motivated reasoning: comparing information rather
+    # than raw score makes the temporal control MORE permissive on an inverted block and the
+    # permutation control STRICTER on one. If both had loosened in our favour, that would be
+    # a reason to distrust the argument.
+    y = np.array([0, 1] * 50)
+    assert temporal_control(lambda s: {0.0: 0.3236, 30.0: 0.3388}[s],
+                            shifts=(0.0, 30.0)).passed is True     # was LEAK
+    assert permutation_control(lambda labels: 0.4415, y, n_permutations=3).passed is False  # was PASS

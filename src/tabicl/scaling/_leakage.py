@@ -124,12 +124,28 @@ def permutation_control(
     control = [float(build_and_score(rng.permutation(y))) for _ in range(n_permutations)]
 
     mean = float(np.mean(control))
-    passed = mean <= chance + tolerance
+    # TWO-SIDED, on |mean - chance|. The test asks whether features rebuilt from SHUFFLED
+    # labels still carry information about the true one, and information is distance from
+    # chance in either direction: a permuted-label score of 0.35 predicts the true label
+    # exactly as well as 0.65 does, inverted.
+    #
+    # The one-sided form missed that entire half. rel-avito/user-clicks passed this control
+    # at 0.4415 +- 0.0078 -- 7.5 sd BELOW chance -- while `mean <= chance + tolerance` read
+    # 0.4415 <= 0.52 and reported PASS. Its `+rate`, `+history` and `+text+rate` arms were
+    # eligible on that basis.
+    #
+    # Note the direction of this change relative to the temporal control fixed alongside it.
+    # The same principle -- compare information, not raw score -- makes THAT control more
+    # permissive and this one STRICTER. A principle that only ever loosened the gates in our
+    # favour would be worth distrusting.
+    deviation = abs(mean - chance)
+    passed = deviation <= tolerance
     reason = (
         f"permuted-label score {mean:.4f} is within {tolerance} of chance {chance}"
         if passed else
-        f"permuted labels still score {mean:.4f} against chance {chance} -- the feature "
-        f"is reading the row's own label"
+        f"permuted labels still carry information: {mean:.4f} is {deviation:.4f} from "
+        f"chance {chance} -- the feature is reading the row's own label"
+        + (" (inverted, which the one-sided test missed)" if mean < chance else "")
     )
     return LeakageReport(passed, observed, control, chance, reason)
 
