@@ -2,34 +2,46 @@
 
 Written on stopping, so this can be picked up cold. `STATUS.md` is the current state,
 `DESIGN.md` the history log. Nothing here is blocking — the branch is committed, tested
-(176 passed, 1 skipped) and pushed.
+(213 passed, 1 skipped) and pushed.
 
-## THE ONE THING TO DO NEXT (2026-08-08)
+## THE ONE THING TO DO NEXT (2026-08-08, late)
 
-**Run `--drop-stale-arms` on the five RelBenchV1 classification tasks this project does not
-already use.** Everything else below is context; this is the experiment.
+**Read the two runs now in flight, and let them decide.** Both were launched with their
+readings fixed in advance; neither needs a new idea to be worth having.
 
-Why it is the whole game right now: the rule is worth **+0.65** on rel-avito/user-clicks and
-**+0.49** on user-visits, both confirmed at twelve replicates and both the only estimates in
-that session that did not shrink. Combined with `--depth2 --dimensions` it is worth **+0.97**
-on user-visits — enough to move that task from 8th to **5th of ten**, with the worst seed
-above the current best seed.
+**Lane A — complete the benchmark.** The five RelBenchV1 classification tasks we do not
+report. We publish 7 of 12, and this file has already caught itself once reporting a subset
+where two tasks flattered us. The blocker turned out to be ours: `eval_track_record` had zero
+references to `row_chunk`, so the benchmark demonstrating scaling was not scaling. Now wired
+behind `--row-chunk auto` (default `off`, so every standing number still reproduces). If we
+place badly on the five, the published median rank is too kind and that gets said.
 
-And none of it is claimable, because **all seven tasks were used to design the rule**. I
-picked *coverage ratio* as the quantity after seeing which tasks lose from tuning, and set the
-threshold at 0.8 knowing 0.57/0.69/0.72/0.72 are the losers. That is selection on test one
-level up. The features it delivers (`--depth2`, `--dimensions`) are clean and were measured
-with pre-registered readings, but with ordinary selection they are worth −0.06 and −0.03 —
-**the entire gain routes through the contaminated component.**
+**Lane B — is the context axis of the grid pure noise?** Measured today from 34 calibrated
+blocks *already on disk*, validation-only, no GPU: the winning margin is **0.27** against
+**0.75** of val noise, and margin < noise in **32 of 34** blocks. The grid cannot separate
+the candidates it chooses between. Arm stability is 83%, context 71%; the same arm won every
+seed in 21 of 34 blocks and the context still wandered in 15 of those, carrying **sd(test)
+0.77 — above the ±0.6 floor**. The arm is `--context-grid 999999`, which clamps to `cap`.
 
-Five held-out tasks settle it either way, and both outcomes are worth having:
+**Why that rule is table-eligible when `--drop-stale-arms` was not, and this distinction is
+the useful one to carry forward.** `--drop-stale-arms` needed a threshold, and the threshold
+was chosen knowing which tasks lose from tuning — selection on test, one level up. That is
+why it stands at +0.65/+0.49 confirmed and **withheld**, and why the held-out test could not
+rescue it: coverage collapse occurs only on rel-avito and rel-f1, while eleven other tasks
+sit at 0.96–1.78, so there is no signal to fit a threshold against on this benchmark. It is
+real and unvalidatable here, which is not the same as wrong.
 
-* **It holds** → a three-place rank move on user-visits and one place on user-clicks, from
-  code already written and tested. Then the default question opens.
-* **It does not** → the features stay worth ~0 after selection, and the honest summary of
-  this entire line of work is a negative result. Say so.
+The context rule has **no free parameter**. "Use the largest context" is fully determined
+before a test row is read, so there is nothing to tune and nothing to tune on test. Worst
+case it is accuracy-neutral and still cuts the grid ~3×, which is a cost result worth taking.
 
-Set the reading before the run, as with everything else that survived here.
+**Reading, fixed before the run** (means over 8 seeds, floor ±0.6): `B ≥ A + 0.6` on most
+tasks → the context axis was costing us, shrink the grid. `|B − A| < 0.6` everywhere → free
+but harmless, take it for cost and report it as a cost result, not an accuracy one.
+`B ≤ A − 0.6` → the small contexts earn their place, the axis stays. One of the four tasks
+(rel-event/user-repeat) is in the regime where the *arm* wanders rather than the context, and
+the hypothesis predicts fixing the context will not be enough there — including a task it
+should fail on is the point.
 
 ## STATE AS OF 2026-08-08
 
@@ -39,12 +51,14 @@ Set the reading before the run, as with everything else that survived here.
   real on a fixed configuration — t of 2.8 to 4.8 — and worth roughly nothing after
   selection. Two produce the identical signature on the same task, helping every arm except
   the one validation picks.
-* **`--drop-stale-arms` is the first intervention here to survive its own controls**: it
-  refuses arms whose feature block's coverage collapses between validation and test, using
-  links and timestamps only. Two gains (+0.69, +0.53 on our two worst tasks), five
-  bit-identical results including all four control tasks, no losses. **Awaiting a
-  12-replicate confirmation** — five estimates in that session shrank on more replicates and
-  this one is not exempt.
+* **`--drop-stale-arms` is CLOSED: real, and unvalidatable on this benchmark.** It refuses
+  arms whose feature block's coverage collapses between validation and test, using links and
+  timestamps only. Confirmed at twelve replicates at **+0.65 / +0.49** (+0.97 stacked) — the
+  only estimates that did not shrink on replication. **Withheld from the table**: its
+  threshold was chosen knowing which tasks lose from tuning. The boundary was then measured
+  to see whether it could be validated honestly, and it cannot — coverage collapse occurs
+  only on rel-avito (0.48/0.57/0.69) and rel-f1 (0.72/0.74), while eleven other tasks across
+  seven databases sit at 0.96–1.78, leaving no signal to fit a threshold against.
 * **Measure features on FIXED-configuration arms, not the calibrated block.** Fixed arms
   correlate at r = 0.88–0.94 across seeds and pairing is worth 2.4–3.0× on the standard
   error; calibrated arms correlate at −0.03 to +0.34 and pairing buys nothing, because
