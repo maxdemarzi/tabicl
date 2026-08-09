@@ -462,18 +462,18 @@ arrives as ~+0.2 after selection — depth-2 on rel-avito/user-visits gains **+0
 at t = 4.72, 11 of 12 seeds, and −0.06 calibrated.** The feature works; the protocol picks
 the arm where it does nothing.
 
-**And one level below that, measured 2026-08-08 from 34 calibrated blocks already on disk —
+**And one level below that, measured 2026-08-08 from 41 calibrated blocks already on disk —
 the grid cannot tell its own candidates apart.** `python -m tabicl.scaling.grid_noise <log>`:
 
 | quantity | value |
 |---|---:|
-| winning margin — val(winner) − val(runner-up), within a seed | **0.27** |
-| val noise — sd across seeds of *one fixed candidate* | **0.75** |
+| winning margin — val(winner) − val(runner-up), within a seed | **0.35** |
+| val noise — sd across seeds of *one fixed candidate* | **0.69** |
 | blocks where margin < noise | **32 / 34** |
 
-The two axes differ. Arm stability averages **83%**, context **71%**; the same arm won every
-seed in **21 of 34** blocks, and in **15 of those** the context still wandered, carrying mean
-**sd(test) 0.77 — above the ±0.6 floor**. Where the arm has settled, the grid's remaining
+The two axes differ. Arm stability averages **84%**, context **72%**; the same arm won every
+seed in **25 of 41** blocks, and in **15 of those** the context still wandered, carrying mean
+**sd(test) 0.89 — above the ±0.6 floor**. Where the arm has settled, the grid's remaining
 freedom is a coin flip over context size that moves test by more than the benchmark resolves.
 Every low-arm-stability block is **rel-event** (33–58%); rel-avito, rel-trial and rel-f1 all
 sit at 100%.

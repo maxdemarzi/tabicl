@@ -4232,9 +4232,47 @@ declines to fire costs a pod cycle, and the host has 503 GB).
 methods inside 1.36 points means rank on that task is close to a coin toss, and this
 project's central finding is that validation and test disagree.
 
-### 2026-08-08 — the grid's winning margin is one third of its own noise
+### 2026-08-09 — CORRECTION: the grid-noise figures were parsed from merged blocks
 
-**Computed from 34 calibrated blocks already on disk. No GPU, no new runs, no test scores
+**The finding stands; three of its numbers were wrong.** `grid_noise.parse_blocks` flushed a
+block only at a `CALIBRATED TEST` summary line. A task killed by a timeout or the OOM killer
+never prints one, so its seeds ran on into the *next* task's block.
+
+Caught by an impossible number, which is the only reason it was caught at all: running the
+tool over the new rounds reported rel-amazon/user-churn with **9 seeds, noise 11.38 and
+sd(test) 11.80** on a task whose actual run was 5 replicates at sd 0.15. rel-stack/
+user-engagement had timed out after four seeds, and its 89.33s were being pooled with
+rel-amazon's 66.94s.
+
+| | published 2026-08-08 | corrected |
+|---|---:|---:|
+| blocks | 34 | **41** |
+| pooled margin | 0.27 | **0.35** |
+| pooled val noise | 0.75 | **0.69** |
+| margin < noise | 32 of 34 | **35 of 41** |
+| arm / context stability | 83% / 71% | **84% / 72%** |
+| same arm every seed | 21 of 34 | **25 of 41** |
+| …context still wandered | 15, sd(test) 0.77 | **16, sd(test) 0.89** |
+
+**The conclusion is unchanged and slightly weaker: the margin is about half the noise rather
+than a third.** It remains under one sd in **85% of blocks**, and the arm/context split that
+motivated the context-grid experiment is intact — as is that experiment's result, which was
+measured directly and never depended on this parse.
+
+**This is the same failure this project has now made twice**, and the module's own docstring
+warned about it: a sibling parser once reported +17.66 on a task with a two-point range by
+flushing at the wrong boundary. Writing the warning down did not prevent it. `grid_noise`
+now flushes on task headers as well, discarding a block whose owner died rather than
+attributing it to the next task, with a regression test built from the exact log that
+produced 11.38.
+
+**And it was found by running the tool on tasks it was not derived from.** Out of sample the
+finding holds: rel-hm/user-churn margin 0.09 against noise 0.27, rel-amazon/user-churn 0.20
+against 0.40 — both under one sd, arm stability 90%.
+
+### 2026-08-08 — the grid's winning margin is a fraction of its own noise
+
+**Computed from 41 calibrated blocks already on disk. No GPU, no new runs, no test scores
 used to derive anything.** `scaling/grid_noise.py`, run over every log carrying per-candidate
 validation lines.
 
@@ -4243,10 +4281,10 @@ decide whether that pick means anything, and both were already in the logs:
 
 | quantity | what it is | value |
 |---|---|---:|
-| **margin** | val(winner) − val(runner-up), within a seed | **0.27** |
-| **noise** | sd across seeds of *one fixed candidate's* val score | **0.75** |
+| **margin** | val(winner) − val(runner-up), within a seed | **0.35** |
+| **noise** | sd across seeds of *one fixed candidate's* val score | **0.69** |
 
-**The margin is 36% of the noise, and margin < noise in 32 of 34 blocks.** Selection is
+**The margin is 51% of the noise, and margin < noise in 35 of 41 blocks.** Selection is
 choosing between candidates it cannot distinguish. This is the mechanism underneath finding
 1 — not a rival explanation for it, but the level below: a feature arrives as +0.2 after
 calibration partly because the calibration step is a lottery among its top few.
@@ -4255,11 +4293,11 @@ calibration partly because the calibration step is a lottery among its top few.
 
 | | mean stability across seeds | reading |
 |---|---:|---|
-| arm (feature set) | **83%** | mostly settled |
-| context size | **71%** | wanders more |
+| arm (feature set) | **84%** | mostly settled |
+| context size | **72%** | wanders more |
 
-The same **arm** won every seed in **21 of 34** blocks. In **15 of those 21** the context
-still wandered — and those blocks carry **mean sd(test) 0.77, above the ±0.6 floor**. So on
+The same **arm** won every seed in **25 of 41** blocks. In **16 of those 25** the context
+still wandered — and those blocks carry **mean sd(test) 0.89, above the ±0.6 floor**. So on
 most tasks the grid has already decided which feature set it wants, and is spending its
 remaining freedom flipping a coin over context size, and that coin flip alone moves test by
 more than this benchmark can resolve.

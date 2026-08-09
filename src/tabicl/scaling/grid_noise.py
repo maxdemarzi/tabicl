@@ -11,12 +11,12 @@ whether that pick carries information, and the logs already contain both:
     MARGIN   val(winner) - val(runner-up), within one seed. What selection thinks it gained.
     NOISE    sd across seeds of ONE FIXED candidate's val score. What a val score is worth.
 
-Measured over 34 blocks on 2026-08-08: **margin 0.27, noise 0.75, margin < noise in 32 of
+Measured over 41 blocks on 2026-08-08: **margin 0.35, noise 0.69, margin < noise in 32 of
 34**. The grid is choosing between candidates it cannot tell apart.
 
 The grid is a product of two axes and they do not behave alike. Arm stability averages 83%,
-context stability 71%; the same arm won every seed in 21 of 34 blocks, and in 15 of those the
-context still wandered, carrying mean sd(test) 0.77 -- above this benchmark's +-0.6 floor.
+context stability 71%; the same arm won every seed in 21 of 41 blocks, and in 16 of those the
+context still wandered, carrying mean sd(test) 0.89 -- above this benchmark's +-0.6 floor.
 That is the actionable half: where the arm has settled, the remaining freedom is a coin flip
 over context size that moves test by more than we can resolve.
 
@@ -38,6 +38,12 @@ from pathlib import Path
 CAND = re.compile(r"^\s{2}(\S+)\s+context=(\d+)\s+(?:val|cv)=(\d+\.\d+)")
 CHOSEN = re.compile(r"^\s+chosen (\S+) context=(\d+).*?VAL (\d+\.\d+)\s+TEST (\d+\.\d+)")
 TOTAL = re.compile(r"^(\S+)/(\S+)\s+CALIBRATED TEST ROC-AUC x100 = (\d+\.\d+)")
+# A task HEADER also ends the previous block. Relying on the summary alone is not enough:
+# a task killed by a timeout or the OOM killer never prints one, so its seeds run on into
+# the next task. That is not hypothetical -- rel-stack/user-engagement timed out after four
+# seeds and its 89.33s pooled with rel-amazon/user-churn's 66.94s, giving one 9-seed block
+# at "noise" 11.38 and sd(test) 11.80 on tasks whose real sds are 0.20 and 0.15.
+HEADER = re.compile(r"^#+ (?:NEW TASK|GRID) :: (\S+?)/(\S+?) ::")
 
 
 def parse_blocks(text: str) -> list[tuple[str, list, float]]:
@@ -69,6 +75,11 @@ def parse_blocks(text: str) -> list[tuple[str, list, float]]:
         if m:
             if cur:
                 out.append((f"{m.group(1)}/{m.group(2)}", cur, float(m.group(3))))
+            cur, seed = [], {}
+            continue
+        if HEADER.match(line):
+            # Discard, rather than emit: without a summary there is no task-level score to
+            # attach, and a block whose owner died is exactly the one not to report.
             cur, seed = [], {}
     return out
 

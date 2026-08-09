@@ -3495,3 +3495,37 @@ def test_train_pool_is_a_uniform_draw_and_deterministic():
     b = np.sort(np.random.default_rng(0).choice(1000, size=200, replace=False))
     assert (a == b).all()                          # seed 0, so two runs agree
     assert len(set(a.tolist())) == 200             # without replacement
+
+
+def test_grid_noise_flushes_on_a_task_header_not_only_on_a_summary():
+    from tabicl.scaling.grid_noise import parse_blocks, block_stats
+    # A task killed by a timeout or the OOM killer never prints a CALIBRATED summary, so a
+    # parser that flushes only on summaries lets its seeds run into the NEXT task. That is
+    # what happened on 2026-08-09: rel-stack/user-engagement timed out after four seeds and
+    # its 89.33s pooled with rel-amazon/user-churn's 66.94s, producing one 9-seed block at
+    # "noise" 11.38 on tasks whose real sds are 0.20 and 0.15. The published block count was
+    # wrong (34 rather than 41) for the same reason.
+    log = """\
+########## NEW TASK :: rel-a/dead ::
+  base                 context=1000   val=89.00
+  chosen base context=1000 order=random -> VAL 89.00  TEST 89.33
+  base                 context=1000   val=89.10
+  chosen base context=1000 order=random -> VAL 89.10  TEST 89.20
+########## NEW TASK :: rel-b/alive ::
+  base                 context=1000   val=70.00
+  +x                   context=1000   val=71.00
+  chosen +x context=1000 order=random -> VAL 71.00  TEST 66.90
+  base                 context=1000   val=70.10
+  +x                   context=1000   val=71.20
+  chosen +x context=1000 order=random -> VAL 71.20  TEST 67.00
+  base                 context=1000   val=70.20
+  +x                   context=1000   val=71.10
+  chosen +x context=1000 order=random -> VAL 71.10  TEST 66.95
+rel-b/alive  CALIBRATED TEST ROC-AUC x100 = 66.95 +- 0.05 over 3 replicates
+"""
+    blocks = parse_blocks(log)
+    assert [b[0] for b in blocks] == ["rel-b/alive"]      # the dead task is discarded
+    (_, seeds, _), = blocks
+    assert len(seeds) == 3                                 # not 5
+    st = block_stats(seeds)
+    assert st["noise"] < 1.0                               # not 11.38
