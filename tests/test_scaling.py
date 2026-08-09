@@ -3201,3 +3201,60 @@ def test_every_flag_combination_is_accepted_by_tabicl(row_chunk, offload):
     cfg.update_from_dict(inference_config(row_chunk, offload))
     assert all(getattr(cfg, k).use_amp is False
                for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG"))
+
+
+# --- rank_table: the headline table's arithmetic, which has been wrong by hand before ----
+
+def test_rank_table_reproduces_every_published_cell():
+    from tabicl.scaling.rank_table import rank, OURS
+    # The rule was inferred from these seven, so this is the test that keeps it inferred.
+    # DFS is displayed in the table but NOT ranked, which is what makes the denominator 10.
+    published = {"rel-event/user-repeat": 3, "rel-trial/study-outcome": 4,
+                 "rel-f1/driver-top3": 6, "rel-event/user-ignore": 7,
+                 "rel-avito/user-visits": 8, "rel-avito/user-clicks": 8,
+                 "rel-f1/driver-dnf": 9}
+    for task, expected in published.items():
+        r, n = rank(OURS[task], task)
+        assert (r, n) == (expected, 10), f"{task}: got {r}/{n}, table says {expected}/10"
+
+
+def test_rank_table_has_all_twelve_tasks_and_nine_methods():
+    from tabicl.scaling.rank_table import FIELD, METHODS
+    assert len(FIELD) == 12 and len(METHODS) == 9
+    assert all(len(v) == 9 for v in FIELD.values())
+
+
+def test_rank_refuses_a_task_with_no_published_field():
+    from tabicl.scaling.rank_table import rank
+    # Inventing a denominator would produce a rank that looks authoritative and means
+    # nothing. Better to fail than to publish it.
+    with pytest.raises(KeyError):
+        rank(70.0, "rel-nonesuch/made-up")
+
+
+def test_average_is_a_rank_of_means_not_a_mean_of_ranks():
+    from tabicl.scaling.rank_table import average_rank, averages, OURS
+    tasks = list(OURS)
+    ar, an = average_rank(tasks)
+    assert (ar, an) == (6, 10)          # the published average cell
+    assert isinstance(ar, int)          # "6.43" was a mean of ranks and ranked us against nothing
+    assert averages(tasks)["ours"] == pytest.approx(73.46, abs=0.005)
+
+
+def test_average_refuses_a_task_set_we_have_not_measured():
+    from tabicl.scaling.rank_table import averages
+    # Averaging every method over 12 tasks while averaging ourselves over 7 is precisely the
+    # flattery this table was corrected for once already.
+    with pytest.raises(ValueError):
+        averages(["rel-stack/user-badge", "rel-f1/driver-dnf"])
+
+
+def test_adding_a_task_changes_the_average_row_for_everyone():
+    from tabicl.scaling.rank_table import averages, OURS
+    # The five missing tasks are not a random sample of difficulty -- rel-stack sits at
+    # 88-91. Adding one lifts EVERY method's average, so the row must never be compared
+    # across two different task sets.
+    base = averages(list(OURS))
+    wider = averages(list(OURS) + ["rel-stack/user-badge"],
+                     {**OURS, "rel-stack/user-badge": 80.0})
+    assert all(wider[m] > base[m] for m in ("RelGNN", "GraphSAGE", "TabPFN-REL"))
