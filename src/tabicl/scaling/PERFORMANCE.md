@@ -4112,6 +4112,51 @@ something other than model quality — see the 11.68-point user-ignore entry abo
 `max|Δp| = 1.1e-05`, AUC identical with `offload="auto"` engaged, on both 128- and
 161-column feature sets. Survived a direct attempt to break it while hunting the −3.21.
 
+### 2026-08-08 — the context axis of the grid buys nothing and costs variance
+
+Four tasks, 8 replicates per arm. **A** = the default three-context grid. **B** =
+`--context-grid 999999`, which the code clamps to `cap`: one context, the size validation
+already prefers. Motivated entirely by validation-only analysis (see the margin/noise entry
+below), so the rule is one the calibrated protocol is allowed to adopt.
+
+| task | A | sd | B | sd | Δ | t | sd ratio | F test |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| rel-trial / study-outcome | 73.39 | 0.93 | 73.37 | 0.74 | −0.02 | −0.05 | 1.3× | p 0.56 |
+| rel-f1 / driver-top3 | 79.90 | **2.04** | 79.27 | 0.74 | −0.63 | −0.82 | **2.8×** | **p 0.016** |
+| rel-avito / user-clicks | 66.07 | 0.54 | 66.14 | 0.57 | +0.07 | +0.25 | 0.9× | p 0.89 |
+| rel-event / user-repeat | 78.71 | **1.30** | 78.51 | 0.30 | −0.20 | −0.42 | **4.3×** | **p 0.001** |
+
+**On accuracy this is a null, and it was pre-registered as the likely outcome.** Mean Δ
+−0.19. No task has |t| > 1. Three of four are inside the ±0.6 floor; rel-f1's −0.63 sits
+marginally outside it but at t = −0.82 is not resolved from zero, and it is reported here
+rather than rounded into the floor.
+
+**The variance result was not predicted and is the substantive finding.** Mean sd falls
+**1.20 → 0.59**, and the reduction is statistically real on two of the four tasks under an
+F test (df 7,7). Arm A's sd ranges 0.54–2.04; arm B's never exceeds 0.74.
+
+This is the mechanism the log analysis predicted, observed directly: where the feature set
+has settled, the grid spends its remaining freedom choosing a context by coin flip, and that
+choice lands in the result as seed-to-seed spread. Removing the choice removes the spread.
+On rel-f1 the three-context grid swung **75.74–82.46** across eight seeds; the single-context
+arm swung **78.48–80.66**.
+
+**Why this matters more than a null usually does.** This project's binding constraint is
+that real effects sit near the measurement floor. Halving the sd means a future A/B needs
+roughly **a quarter of the replicates** for the same power — and the selection sweep is
+**3× cheaper** because the grid is a third the size. A change that buys sensitivity and cost
+for no accuracy loss is worth more here than a small AUC gain that could not be verified.
+
+**One caveat that keeps this off the table for now.** Every standing number was measured
+with the three-context grid. Flipping the default would mean reruns no longer reproduce
+them, and the deltas above — while null — are not zero. Recorded as a maintainer decision
+rather than applied, and the reading was fixed before the run either way.
+
+**A prediction that held, and one that did not.** rel-event/user-repeat was included
+*because* the log analysis said its **arm** wanders rather than its context, so fixing the
+context should not be enough. On the mean that was right (−0.20, nothing). On variance it
+was the largest effect measured (4.3×), which the analysis did not anticipate.
+
 ### 2026-08-08 — the first of the five missing tasks, and it places 9th of 10
 
 **rel-hm/user-churn = 66.75 ± 0.23 over 5 replicates (range 66.50–67.11).** Calibrated

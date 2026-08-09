@@ -4,44 +4,54 @@ Written on stopping, so this can be picked up cold. `STATUS.md` is the current s
 `DESIGN.md` the history log. Nothing here is blocking — the branch is committed, tested
 (235 passed, 1 skipped) and pushed.
 
-## THE ONE THING TO DO NEXT (2026-08-08, late)
+## THE ONE THING TO DO NEXT (2026-08-08, later still)
 
-**Read the two runs now in flight, and let them decide.** Both were launched with their
-readings fixed in advance; neither needs a new idea to be worth having.
+**Finish the benchmark. Four of twelve tasks are still unmeasured, and the eighth just cost
+us a place — so our published position is not yet the honest one.**
 
-**Lane A — complete the benchmark.** The five RelBenchV1 classification tasks we do not
-report. We publish 7 of 12, and this file has already caught itself once reporting a subset
-where two tasks flattered us. The blocker turned out to be ours: `eval_track_record` had zero
-references to `row_chunk`, so the benchmark demonstrating scaling was not scaling. Now wired
-behind `--row-chunk auto` (default `off`, so every standing number still reproduces). If we
-place badly on the five, the published median rank is too kind and that gets said.
+rel-hm/user-churn came in at **66.75, rank 9/10**, beaten by eight of nine methods. Average
+73.46 → 72.62, our standing 6th → 7th. It was run *because* it was missing, not because it
+looked winnable, and that is exactly why it was worth running. The four outstanding tasks
+are **rel-stack/user-engagement, rel-stack/user-badge, rel-amazon/user-churn** and
+**rel-amazon/item-churn**, and on the published field two of them sit at 82–91 — a band we
+have never measured ourselves in.
 
-**Lane B — is the context axis of the grid pure noise?** Measured today from 34 calibrated
-blocks *already on disk*, validation-only, no GPU: the winning margin is **0.27** against
-**0.75** of val noise, and margin < noise in **32 of 34** blocks. The grid cannot separate
-the candidates it chooses between. Arm stability is 83%, context 71%; the same arm won every
-seed in 21 of 34 blocks and the context still wandered in 15 of those, carrying **sd(test)
-0.77 — above the ±0.6 floor**. The arm is `--context-grid 999999`, which clamps to `cap`.
+**The blocker is understood and a fix is under test.** Both rel-stack tasks died on the
+query side, and user-engagement said so precisely: it completed its **entire** validation
+sweep (all 15 candidates, val 87.94–89.53) and died at the **test** prediction. Validation
+queries fit, test queries did not, same process, minutes apart. Out of the box
+`COL_CONFIG.offload` is `"auto"` while `ICL_CONFIG.offload` is `False`, so the in-context
+stage holds query outputs on the GPU; `--offload cpu` reaches exactly that. `--row-chunk`
+does not and never could — it shrinks activations, not outputs.
 
-**Why that rule is table-eligible when `--drop-stale-arms` was not, and this distinction is
-the useful one to carry forward.** `--drop-stale-arms` needed a threshold, and the threshold
-was chosen knowing which tasks lose from tuning — selection on test, one level up. That is
-why it stands at +0.65/+0.49 confirmed and **withheld**, and why the held-out test could not
-rescue it: coverage collapse occurs only on rel-avito and rel-f1, while eleven other tasks
-sit at 0.96–1.78, so there is no signal to fit a threshold against on this benchmark. It is
-real and unvalidatable here, which is not the same as wrong.
+**Set no expectation for the four.** Do not read user-engagement's val 89.5 as a test
+prediction: nine methods lie inside 1.36 points there, so rank is near a coin toss, and the
+central finding of this project is that validation and test disagree.
 
-The context rule has **no free parameter**. "Use the largest context" is fully determined
-before a test row is read, so there is nothing to tune and nothing to tune on test. Worst
-case it is accuracy-neutral and still cuts the grid ~3×, which is a cost result worth taking.
+## DECIDED, AWAITING A MAINTAINER CALL — the grid's context axis (2026-08-08)
 
-**Reading, fixed before the run** (means over 8 seeds, floor ±0.6): `B ≥ A + 0.6` on most
-tasks → the context axis was costing us, shrink the grid. `|B − A| < 0.6` everywhere → free
-but harmless, take it for cost and report it as a cost result, not an accuracy one.
-`B ≤ A − 0.6` → the small contexts earn their place, the axis stays. One of the four tasks
-(rel-event/user-repeat) is in the regime where the *arm* wanders rather than the context, and
-the hypothesis predicts fixing the context will not be enough there — including a task it
-should fail on is the point.
+**Measured: no accuracy effect, and roughly half the variance, at a third of the cost.**
+Four tasks, 8 replicates per arm, `--context-grid 999999` (clamps to `cap`) against the
+default three-context grid.
+
+| | mean Δ | sd, three contexts | sd, one context |
+|---|---:|---:|---:|
+| across four tasks | **−0.19** | 0.54–2.04 (mean 1.20) | 0.30–0.74 (mean **0.59**) |
+
+No task has |t| > 1. The variance reduction is significant under an F test on two of four
+(rel-f1 p 0.016, rel-event/user-repeat p 0.001).
+
+**The case for flipping the default:** halving the sd means a future A/B needs about a
+**quarter** of the replicates for the same power, and the sweep is **3× cheaper**. Given
+that this project's constraint is that real effects sit near the measurement floor, that is
+worth more than a small AUC gain we could not verify anyway.
+
+**The case against, which is why this is not done unilaterally:** every standing number was
+measured with the three-context grid, so flipping it means reruns stop reproducing the
+table, and the deltas — while null — are not zero.
+
+**Unlike `--drop-stale-arms`, this rule is table-eligible in principle**: it has no free
+parameter, so there is nothing that could have been tuned on test.
 
 ## STATE AS OF 2026-08-08
 
