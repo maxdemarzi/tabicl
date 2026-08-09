@@ -228,12 +228,26 @@ def create(offset: int = 0):
             except Exception as exc:      # noqa: BLE001 - try the next combination
                 last = exc
                 print(f"  unavailable: {str(exc)[:110]}", flush=True)
+                # The call can fail AFTER the machine exists -- a timeout on the response
+                # still leaves a running pod, and we never saw its id. If one turned up
+                # under our name, destroy it before trying the next combination; an
+                # unnoticed pod bills by the second. Best-effort: a failure to look is not
+                # a reason to abandon the retry loop.
+                try:
+                    stray = find_pod()
+                    if stray is not None:
+                        print(f"  found a stray {stray['id']} from the failed create -- "
+                              f"terminating", flush=True)
+                        runpod.terminate_pod(stray["id"])
+                except Exception:         # noqa: BLE001 - never block the retry
+                    pass
     raise SystemExit(f"could not create a pod: {last}")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("action", choices=["create", "status", "exec", "stop", "terminate"])
+    ap.add_argument("action", choices=["create", "status", "exec", "stop",
+                                       "terminate", "sweep"])
     ap.add_argument("--cmd", default="")
     ap.add_argument("--timeout", type=int, default=3600)
     ap.add_argument("--keep", action="store_true", help="leave the pod running")
@@ -290,6 +304,30 @@ def main() -> int:
             runpod.terminate_pod(pod["id"])
             time.sleep(10)
         raise SystemExit(f"no usable host after 12 attempts; rejected {sorted(bad_hosts)}")
+
+    if args.action == "sweep":
+        # Terminate pods this harness cannot see by name, and ONLY those.
+        #
+        # `find_pod` matches on NAME, so a pod that never received ours is invisible to
+        # every other code path here -- including the teardown in `cycle.ps1`'s finally.
+        # That is not hypothetical: `create` swallows exceptions from `create_pod` to try
+        # the next GPU/cloud combination, and when the call fails AFTER RunPod has already
+        # created the machine, the id is never returned to us. One such pod
+        # (`black-swan-l40s`) billed unnoticed on 2026-08-09 through a full round, while
+        # the round's own teardown correctly reported terminating a different pod.
+        #
+        # Matching on the `tabicl-` prefix rather than on an exact name is what makes this
+        # safe to run while another lane is working: lanes are `tabicl-bench` and
+        # `tabicl-bench-b`, so a concurrent run is never touched, while an auto-named
+        # orphan always is.
+        others = [x for x in runpod.get_pods()
+                  if not (x.get("name") or "").startswith("tabicl-")]
+        for x in others:
+            print(f"SWEEP terminating untracked pod {x['id']} ({x.get('name')})")
+            runpod.terminate_pod(x["id"])
+        left = [(x["id"], x.get("name")) for x in runpod.get_pods()]
+        print(f"swept {len(others)} untracked pod(s); pods now: {left or 'none'}")
+        return 0
 
     pod = find_pod()
     if not pod:
