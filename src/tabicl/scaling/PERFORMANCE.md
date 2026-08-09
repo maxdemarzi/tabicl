@@ -4278,15 +4278,33 @@ chance: item-churn's count block read 0.3236 → 0.3388 (LEAK) where the deviati
 archived runs against seven genuine ones, costing four tasks their arms — five of seven on
 both rel-amazon tasks, `+struct` on rel-event/user-repeat and rel-trial/study-outcome.
 
-**`permutation_control` was too permissive**, and this one hid a leak in a *published*
-number. `mean <= chance + tolerance` is blind to the half below chance.
-rel-avito/user-clicks passed at **0.4415 ± 0.0078 — 7.5 sd below chance**, meaning features
-rebuilt from shuffled labels still predict the true label. Its `+rate`, `+history` and
-`+text+rate` arms were eligible on that basis, and 65.89 was measured with them available.
+**`permutation_control` was too permissive** — `mean <= chance + tolerance` is blind to the
+half below chance — and it is fixed. **But my first account of why it mattered was wrong in
+two ways, and both are worth recording.**
 
-**That the same principle tightens one gate and loosens the other is the reason to believe
-it.** A correction that only ever opened gates in our favour would be motivated reasoning;
-there is a test asserting the two move in opposite directions.
+I claimed rel-avito/user-clicks' published 65.89 rested on a leak this gate missed. It does
+not. **`eval_track_record` never calls `permutation_control`** — it calls
+`permutation_test` — so no benchmark number here has ever been gated by it. The arms I said
+were freed by it were excluded by the *temporal* controls, and re-measuring confirmed
+eligibility is **byte-identical before and after**.
+
+And the 0.4415 figure I cited is `permutation_test`'s null, which is **not anomalous**. That
+block contains **count columns, which do not depend on label values**, so they survive
+shuffling with their structural predictive power intact. A permuted null away from chance is
+exactly what should happen — a point this codebase already makes elsewhere. I read a
+designed-in property as evidence of a defect.
+
+The fix stands as a library correction: for a block built *entirely* from permuted labels,
+two-sided is right. It changes nothing here.
+
+**Measured consequence: none.** rel-avito/user-clicks 65.89 → **65.76** (−0.13) and
+user-visits 65.54 → **65.70** (+0.16), both inside the ±0.6 floor, with identical arm
+eligibility. That is the correct outcome for a change that touches nothing in this path, and
+it is reported as a null rather than dressed up.
+
+**That the same principle tightens one gate and loosens the other is still the reason to
+believe it** — a correction that only ever opened gates in our favour would be motivated
+reasoning. But only the temporal fix reaches any number in this table.
 
 **What the fix was worth, measured rather than assumed.** On the two tasks where it freed
 one arm: rel-trial 72.26 → **72.55** (+0.29) and rel-event/user-repeat 77.89 → **77.62**

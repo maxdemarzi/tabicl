@@ -127,17 +127,27 @@ def permutation_control(
     # TWO-SIDED, on |mean - chance|. The test asks whether features rebuilt from SHUFFLED
     # labels still carry information about the true one, and information is distance from
     # chance in either direction: a permuted-label score of 0.35 predicts the true label
-    # exactly as well as 0.65 does, inverted.
+    # exactly as well as 0.65 does, inverted. The one-sided form was blind to that half.
     #
-    # The one-sided form missed that entire half. rel-avito/user-clicks passed this control
-    # at 0.4415 +- 0.0078 -- 7.5 sd BELOW chance -- while `mean <= chance + tolerance` read
-    # 0.4415 <= 0.52 and reported PASS. Its `+rate`, `+history` and `+text+rate` arms were
-    # eligible on that basis.
+    # CORRECTION, 2026-08-09. This was first committed with a justification that was wrong
+    # in two ways, and the wrongness is worth keeping visible.
     #
-    # Note the direction of this change relative to the temporal control fixed alongside it.
-    # The same principle -- compare information, not raw score -- makes THAT control more
-    # permissive and this one STRICTER. A principle that only ever loosened the gates in our
-    # favour would be worth distrusting.
+    #   1. It claimed rel-avito/user-clicks' published number rested on a leak this test
+    #      missed. It does not. `eval_track_record` never calls this function -- it calls
+    #      `permutation_test` -- so no benchmark result has ever been gated by it. The arms
+    #      in question were excluded by the TEMPORAL controls, and their eligibility is
+    #      byte-identical before and after this change.
+    #
+    #   2. The 0.4415 figure it cited is `permutation_test`'s null, and it is not anomalous.
+    #      That block contains COUNT columns, which do not depend on label values, so they
+    #      survive shuffling and keep their structural predictive power. A permuted null
+    #      away from chance is exactly what should happen there.
+    #
+    # The change is kept because it is correct for what this function documents itself as
+    # testing -- features rebuilt entirely FROM the permuted labels, which should land at
+    # chance. Callers whose block also carries label-independent structure will see a
+    # two-sided failure that is expected rather than a leak, and should use
+    # `permutation_test`, which asks the different and correct question for that case.
     deviation = abs(mean - chance)
     passed = deviation <= tolerance
     reason = (

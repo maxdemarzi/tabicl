@@ -3648,10 +3648,15 @@ def test_inconclusive_only_when_both_sides_are_at_chance():
 def test_permutation_control_is_two_sided():
     import numpy as np
     from tabicl.scaling import permutation_control
-    # rel-avito/user-clicks' real numbers: permuted-label features scored 0.4415, which is
-    # 7.5 sd BELOW chance and predicts the true label as well as 0.5585 would. The one-sided
-    # `mean <= chance + tolerance` read 0.4415 <= 0.52 and passed it, leaving +rate,
-    # +history and +text+rate eligible on a leaking block.
+    # A purely label-derived block scoring 0.4415 after its labels are shuffled carries
+    # 0.0585 of information about the true label, inverted, and the one-sided
+    # `mean <= chance + tolerance` read 0.4415 <= 0.52 and passed it.
+    #
+    # NOT a real case from this benchmark: eval_track_record calls permutation_test, never
+    # this function, so no result here was ever gated by it. 0.4415 was originally cited as
+    # rel-avito/user-clicks evidence and that was wrong twice over -- it is
+    # permutation_test's null, and that block contains count columns which survive label
+    # shuffling by construction, so a null away from chance is expected there.
     y = np.array([0, 1] * 50)
     r = permutation_control(lambda labels: 0.4415, y, n_permutations=3)
     assert r.passed is False
@@ -3674,13 +3679,13 @@ def test_permutation_control_still_catches_the_above_chance_case():
     assert r.passed is False and "inverted" not in r.reason
 
 
-def test_the_two_control_fixes_pull_in_opposite_directions():
+def test_the_two_control_changes_pull_in_opposite_directions():
     import numpy as np
     from tabicl.scaling import permutation_control, temporal_control
-    # Evidence the shared principle is not motivated reasoning: comparing information rather
-    # than raw score makes the temporal control MORE permissive on an inverted block and the
-    # permutation control STRICTER on one. If both had loosened in our favour, that would be
-    # a reason to distrust the argument.
+    # Comparing information rather than raw score makes the temporal control MORE permissive
+    # on an inverted block and the permutation control STRICTER on one. Only the first is
+    # reachable from eval_track_record; the second is a library-facing fix with no effect on
+    # any benchmark number here.
     y = np.array([0, 1] * 50)
     assert temporal_control(lambda s: {0.0: 0.3236, 30.0: 0.3388}[s],
                             shifts=(0.0, 30.0)).passed is True     # was LEAK
