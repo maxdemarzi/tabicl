@@ -3153,3 +3153,51 @@ def test_grid_noise_intersects_candidates_across_seeds():
     # intersection has a single candidate and the block declines to report.
     log = _GRID_LOG.replace("  +struct              context=1000   val=64.00\n", "")
     assert block_stats(parse_blocks(log)[0][1]) is None
+
+
+def test_offload_off_reproduces_the_original_config_exactly():
+    from tabicl.scaling.eval_track_record import inference_config, NOAMP
+    # Same contract as --row-chunk off: every standing number was measured on this dict.
+    assert inference_config("off", "off") == NOAMP
+    assert inference_config("off") == NOAMP
+
+
+def test_offload_sets_every_stage_not_just_the_column_one():
+    from tabicl.scaling.eval_track_record import inference_config
+    # The point of the flag is the ICL stage. Out of the box COL_CONFIG.offload is already
+    # "auto" while ICL_CONFIG.offload is False, so a version of this that set only
+    # COL_CONFIG would change nothing and read as "offloading did not help".
+    cfg = inference_config("off", "cpu")
+    assert all(cfg[k]["offload"] == "cpu"
+               for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG"))
+
+
+def test_offload_and_row_chunk_compose_without_clobbering():
+    from tabicl.scaling.eval_track_record import inference_config
+    # They address different tensors -- activations vs outputs -- so a shape can need both.
+    cfg = inference_config("auto", "cpu")
+    assert cfg["COL_CONFIG"]["row_chunk"] == "auto"
+    assert cfg["COL_CONFIG"]["offload"] == "cpu"
+
+
+def test_offload_never_mutates_the_shared_default():
+    from tabicl.scaling.eval_track_record import inference_config, NOAMP
+    inference_config("auto", "cpu")
+    inference_config("always", "disk")
+    assert NOAMP == {k: {"use_amp": False}
+                     for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG")}
+
+
+@pytest.mark.parametrize("row_chunk", ["off", "auto", "always"])
+@pytest.mark.parametrize("offload", ["off", "auto", "cpu", "disk"])
+def test_every_flag_combination_is_accepted_by_tabicl(row_chunk, offload):
+    from tabicl._model.inference_config import InferenceConfig
+    from tabicl.scaling.eval_track_record import inference_config
+    # The runner builds this dict and hands it to TabICLClassifier. A key or value the
+    # library rejects turns into a crash hours into a pod run, after feature building has
+    # already been paid for -- which is the expensive way to learn that MgrConfig is the
+    # TYPE of the stage configs rather than a fourth key beside them.
+    cfg = InferenceConfig()
+    cfg.update_from_dict(inference_config(row_chunk, offload))
+    assert all(getattr(cfg, k).use_amp is False
+               for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG"))

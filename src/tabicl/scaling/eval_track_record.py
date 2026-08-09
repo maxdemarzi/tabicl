@@ -55,24 +55,52 @@ from tabicl.scaling._leakage import permutation_test, temporal_control
 NOAMP = {k: {"use_amp": False} for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG")}
 
 
-def inference_config(row_chunk: str) -> dict:
-    """AMP off always; row chunking per the flag.
+def inference_config(row_chunk: str, offload: str = "off") -> dict:
+    """AMP off always; row chunking and output offloading per their flags.
 
-    **This runner has never used the package's own scaling feature.** Row-chunked column
+    **This runner has never used the package's own scaling features.** Row-chunked column
     embedding is item 1 of four in `STATUS.md` -- "Working. Exact, not approximate", verified
     at ``max|dp| = 1.1e-05`` with identical AUC -- and `eval_track_record` contained zero
-    references to `row_chunk` or `offload`. The benchmark that exists to demonstrate scaling
-    was not scaling, which is why rel-stack/user-engagement died: 88,137 test rows at 342
-    columns is an inference-side shape nothing here had met before.
+    references to ``row_chunk`` or ``offload``. The benchmark that exists to demonstrate
+    scaling was not scaling.
 
-    ``"auto"`` decides per call from the real tensor shape and real free VRAM, so it is a
-    no-op wherever memory is already sufficient. Default is ``"off"`` regardless, because
-    every standing number was measured without it and "exact" is a claim about this
-    package's own tests rather than about every shape it will now meet.
+    The two knobs address *different* tensors and compose, which is the whole reason both
+    are here: ``row_chunk`` shrinks the column-embedding **activations**, ``offload`` moves
+    the **output** tensors off the GPU. A shape can be too large for one and not the other.
+
+    **Sizing, because the failure this addresses was silent.** TabICL is in-context, so the
+    context and the queries pass through the stages *together*: sizes scale with
+    ``n_context + n_query``, not ``n_context``. On rel-stack/user-badge that is ~10k + ~250k
+    rows at 342 columns, the order of an L40S's 46 GB, and the process died in its first
+    forward pass having printed **no traceback**. Ruled out by measurement rather than
+    assumption: host RAM (503 GB, 471 free, no OOM-kill record), the 2h timeout (it died at
+    12m27s), and a partial checkpoint (106 MB, no ``.incomplete``).
+
+    **And row chunking alone did not save it** -- that run already passed ``--row-chunk
+    auto``. Which points at where the defaults are asymmetric: out of the box
+    ``COL_CONFIG.offload`` is already ``"auto"``, while ``ICL_CONFIG.offload`` is ``False``.
+    The column stage offloads its outputs and the in-context stage never does, so at ~250k
+    queries the ICL outputs stay resident. That is what ``--offload`` reaches and
+    ``--row-chunk`` cannot: chunking shrinks activations, offloading moves outputs.
+
+    This is a diagnosis, not a confirmed fix. It is consistent with every observation above
+    and it has not yet been demonstrated to make the task run.
+
+    Defaults are ``"off"`` for both, because every standing number was measured without them
+    and "exact" is a claim about this package's own tests rather than about every shape it
+    will now meet.
     """
     cfg = {k: dict(v) for k, v in NOAMP.items()}
     if row_chunk != "off":
         cfg["COL_CONFIG"]["row_chunk"] = True if row_chunk == "always" else "auto"
+    if offload != "off":
+        # ``offload`` is a field of MgrConfig, and MgrConfig is the *type* of each of the
+        # three stage configs -- there is no separate manager key. Set it on all three, the
+        # way ``use_amp`` already is. (`InferenceConfig.update` raises KeyError on anything
+        # outside COL/ROW/ICL, so a wrong key here fails loudly rather than reading as
+        # "offloading did not help" -- but it is still wrong, so it is spelled out.)
+        for k in cfg:
+            cfg[k]["offload"] = offload
     return cfg
 
 # Aggregation windows are task-scale, not universal: clinical trials run for years, ad
@@ -467,6 +495,18 @@ def main() -> None:
                          "at 342 columns, and died without it. Default 'off' because every "
                          "standing number was measured that way and chunking should be "
                          "opted into rather than silently changing what a rerun reproduces.")
+    ap.add_argument("--offload", choices=["off", "auto", "cpu", "disk"], default="off",
+                    help="where to keep inference OUTPUT tensors. Independent of "
+                         "--row-chunk and composes with it: chunking shrinks the "
+                         "column-embedding ACTIVATIONS, offloading moves the OUTPUTS off "
+                         "the GPU, and a shape can be too large for one and not the other. "
+                         "TabICL is in-context, so context and queries pass through the "
+                         "embedder together and the activation scales with "
+                         "(n_context + n_query), not n_context -- which is how "
+                         "rel-stack/user-badge died in its first forward pass at ~260k "
+                         "combined rows x 342 columns on a 46 GB L40S, printing no "
+                         "traceback. Default 'off': every standing number was measured "
+                         "that way.")
     ap.add_argument("--drop-stale-arms", action="store_true",
                     help="exclude history-dependent arms when the shared-key block's "
                          "COVERAGE collapses between validation and test. Label-free: reads "
@@ -1450,7 +1490,7 @@ def main() -> None:
                     n, size=len(rows), replace=False)
             clf = TabICLClassifier(
                 n_estimators=args.n_estimators, device=args.device, random_state=seed,
-                inference_config=inference_config(args.row_chunk)).fit(X[take], source_y[take])
+                inference_config=inference_config(args.row_chunk, args.offload)).fit(X[take], source_y[take])
             p = clf.predict_proba(Xe)[:, 1]
             probs = p if probs is None else probs + p
         if return_probs:

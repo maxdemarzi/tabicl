@@ -357,9 +357,24 @@ after 12 replicates *reversed* the blocking result (−0.44 became +0.15).
 `eval_track_record` contained zero references to `row_chunk` or `offload`. Row-chunked
 column embedding is item 1 of the four techniques this package provides — "Working. Exact,
 not approximate", verified at `max|Δp| = 1.1e-05` — and the benchmark demonstrating scaling
-was not scaling. This is why rel-stack/user-engagement (1.36M train rows, 342 columns) had
-no score. Wired in 2026-08-08 behind `--row-chunk`, defaulting to `off` so every standing
-number still reproduces.
+was not scaling. Wired in 2026-08-08 behind `--row-chunk`, defaulting to `off` so every
+standing number still reproduces.
+
+**Chunking alone was not the answer, and saying so is the point of this entry.** With
+`--row-chunk auto` on, rel-stack/user-badge still died in its first forward pass, printing
+no traceback, 12m27s in — after passing every leakage control and building its 342–358
+column feature set over 3.39M train rows. Ruled out by measurement, not assumption: host RAM
+(503 GB, 471 free, no OOM-kill record), the 2h timeout (it died well inside it), and a
+partial checkpoint (106 MB, no `.incomplete`).
+
+What the config actually shows is an **asymmetry in the defaults**: `COL_CONFIG.offload` is
+already `"auto"` out of the box while `ICL_CONFIG.offload` is `False`. The column stage
+offloads its outputs; the in-context stage never does. Since TabICL passes context and
+queries through together, sizes scale with `n_context + n_query` — ~10k + ~250k rows here —
+so the ICL outputs stay resident. `--offload` was added to reach exactly that, and it
+composes with `--row-chunk` because the two address different tensors: chunking shrinks
+activations, offloading moves outputs. **This is a diagnosis consistent with every
+observation above, and it has not yet been shown to make the task run.**
 
 ### 9. The harness failed silently seven times, and that is the transferable lesson
 
