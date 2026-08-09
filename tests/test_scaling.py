@@ -3051,3 +3051,40 @@ def test_paired_surfaces_a_variance_change_the_mean_hides():
     out = buf.getvalue()
     assert "spread 2.05 -> 0.57" in out
     assert "worst seed 65.60 -> 69.65" in out
+
+
+# --------------------------------------------------------------------------------------
+# inference_config -- row chunking, the package's own scaling feature, which the benchmark
+# runner had never used. Zero references to row_chunk or offload in eval_track_record until
+# 2026-08-08, which is why rel-stack/user-engagement died at 88,137 test rows x 342 columns.
+# --------------------------------------------------------------------------------------
+
+def test_row_chunk_off_reproduces_the_original_config_exactly():
+    from tabicl.scaling.eval_track_record import inference_config, NOAMP
+    # Every standing number was measured on this exact dict. If "off" ever diverges from it,
+    # a rerun silently stops reproducing the table.
+    assert inference_config("off") == NOAMP
+    assert "row_chunk" not in inference_config("off")["COL_CONFIG"]
+
+
+def test_row_chunk_modes_set_the_documented_values():
+    from tabicl.scaling.eval_track_record import inference_config
+    assert inference_config("auto")["COL_CONFIG"]["row_chunk"] == "auto"
+    assert inference_config("always")["COL_CONFIG"]["row_chunk"] is True
+
+
+def test_row_chunk_never_mutates_the_shared_default():
+    from tabicl.scaling.eval_track_record import inference_config, NOAMP
+    # A shallow copy here would let one call leak chunking into every later one, including
+    # the arm it is being compared against -- an A/B where both arms silently became B.
+    inference_config("always")
+    inference_config("auto")
+    assert "row_chunk" not in NOAMP["COL_CONFIG"]
+
+
+def test_row_chunk_leaves_amp_off_in_every_mode():
+    from tabicl.scaling.eval_track_record import inference_config
+    # AMP costs 7.3 AUC on rel-event. It must stay off whatever chunking does.
+    for mode in ("off", "auto", "always"):
+        cfg = inference_config(mode)
+        assert all(cfg[k]["use_amp"] is False for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG"))

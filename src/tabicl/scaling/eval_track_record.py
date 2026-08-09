@@ -54,6 +54,27 @@ from tabicl.scaling._leakage import permutation_test, temporal_control
 
 NOAMP = {k: {"use_amp": False} for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG")}
 
+
+def inference_config(row_chunk: str) -> dict:
+    """AMP off always; row chunking per the flag.
+
+    **This runner has never used the package's own scaling feature.** Row-chunked column
+    embedding is item 1 of four in `STATUS.md` -- "Working. Exact, not approximate", verified
+    at ``max|dp| = 1.1e-05`` with identical AUC -- and `eval_track_record` contained zero
+    references to `row_chunk` or `offload`. The benchmark that exists to demonstrate scaling
+    was not scaling, which is why rel-stack/user-engagement died: 88,137 test rows at 342
+    columns is an inference-side shape nothing here had met before.
+
+    ``"auto"`` decides per call from the real tensor shape and real free VRAM, so it is a
+    no-op wherever memory is already sufficient. Default is ``"off"`` regardless, because
+    every standing number was measured without it and "exact" is a claim about this
+    package's own tests rather than about every shape it will now meet.
+    """
+    cfg = {k: dict(v) for k, v in NOAMP.items()}
+    if row_chunk != "off":
+        cfg["COL_CONFIG"]["row_chunk"] = True if row_chunk == "always" else "auto"
+    return cfg
+
 # Aggregation windows are task-scale, not universal: clinical trials run for years, ad
 # impressions for days. A single default would quietly handicap one task or the other.
 DEFAULT_WINDOWS = {
@@ -437,6 +458,15 @@ def main() -> None:
                          "+counts 8.36, +history 10.76, +struct 11.73). Validation entities "
                          "are 81.2%% seen against test's 58.6%%, so track-record features "
                          "look far better there than they will perform.")
+    ap.add_argument("--row-chunk", choices=["off", "auto", "always"], default="off",
+                    help="row-chunked column embedding, the package's own scaling feature, "
+                         "which this runner has never used. 'auto' decides per call from the "
+                         "real tensor shape and free VRAM, so it is a no-op where memory "
+                         "already suffices. Needed on the large RelBench databases: "
+                         "rel-stack/user-engagement is 1.36M train rows and 88,137 test rows "
+                         "at 342 columns, and died without it. Default 'off' because every "
+                         "standing number was measured that way and chunking should be "
+                         "opted into rather than silently changing what a rerun reproduces.")
     ap.add_argument("--drop-stale-arms", action="store_true",
                     help="exclude history-dependent arms when the shared-key block's "
                          "COVERAGE collapses between validation and test. Label-free: reads "
@@ -1418,9 +1448,9 @@ def main() -> None:
             else:
                 take = np.random.default_rng(seed * 1000 + d).choice(
                     n, size=len(rows), replace=False)
-            clf = TabICLClassifier(n_estimators=args.n_estimators, device=args.device,
-                                   random_state=seed,
-                                   inference_config=NOAMP).fit(X[take], source_y[take])
+            clf = TabICLClassifier(
+                n_estimators=args.n_estimators, device=args.device, random_state=seed,
+                inference_config=inference_config(args.row_chunk)).fit(X[take], source_y[take])
             p = clf.predict_proba(Xe)[:, 1]
             probs = p if probs is None else probs + p
         if return_probs:
