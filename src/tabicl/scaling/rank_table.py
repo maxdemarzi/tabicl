@@ -54,6 +54,8 @@ OURS: dict[str, float] = {
     "rel-avito/user-visits": 65.54,
     "rel-avito/user-clicks": 65.89,
     "rel-f1/driver-dnf": 69.66,
+    # Added 2026-08-08, the first of the five missing tasks. Places 9/10.
+    "rel-hm/user-churn": 66.75,
 }
 
 

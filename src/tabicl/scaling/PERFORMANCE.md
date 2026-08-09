@@ -16,7 +16,7 @@ feature spec, fit set, and the one thing that changed.
 
 ## Standing vs published results (updated 2026-08-06)
 
-RelBench, official protocol. Test ROC-AUC ×100. **Seven** of RelBenchV1's twelve entity
+RelBench, official protocol. Test ROC-AUC ×100. **Eight** of RelBenchV1's twelve entity
 classification tasks. Comparison figures are the TabPFN-3 report's Table 14 (arXiv
 2605.13986), **complete** except for KumoRFMv1 and RTzero, which the report itself flags as
 following a different evaluation protocol that overestimates performance.
@@ -34,17 +34,24 @@ field is shown here, with our rank in it.
 | rel-avito / user-visits | **65.54** | 8/10 | 66.21 | 65.81 | 66.18 | 66.78 | 66.20 | 60.70 | 65.49 | 66.47 | 66.76 | **69.41** ˟ | 66.68 |
 | rel-avito / user-clicks ◆ | **65.89** | 8/10 | 68.19 ⁿ²⁰ | — | 68.23 | 68.30 | 65.90 | 45.90 | 69.04 | 65.72 | **69.06** | 67.42 ˟ | 67.09 |
 | rel-f1 / driver-dnf ◆ | **69.66** | 9/10 | 69.95 ⁿ⁶ | — | 75.29 | **75.87** | 72.62 | 57.70 | 70.87 | 71.72 | 71.72 | 72.03 | 70.74 |
-| **average** ¶ | **73.46** | **6/10** | — | — | **76.06** | 74.39 | 72.48 | 64.71 | 73.46 | 72.66 | 73.38 | 74.45 | 74.77 |
+| rel-hm / user-churn ◆◆ | **66.75** | 9/10 | — | — | **70.93** | 69.27 | 69.88 | 60.20 | 68.05 | 70.11 | 70.06 | 67.81 | 70.55 |
+| **average** ¶ | **72.62** | **7/10** | — | — | **75.42** | 73.75 | 72.16 | 64.14 | 72.78 | 72.34 | 72.97 | 73.62 | 74.25 |
 
-**Median rank 7 of 10.** Ranks: 3, 4, 6, 7, 8, 8, 9. Bold in the comparison columns marks
+**Median rank 7 of 10.** Ranks: 3, 4, 6, 7, 8, 8, 9, 9. Bold in the comparison columns marks
 the best method for that task; **we never hold it.**
 
-¶ **The average row is over these seven tasks only, for every method — so it is internally
+¶ **The average row is over these eight tasks only, for every method — so it is internally
 comparable but is _not_ the report's Avg AUROC, which covers twelve.** Its rank cell is our
 standing among the ten methods' averages, on the same rule as every other row.
 
-**The average ranks us higher than the median rank does, and the difference is the point.**
-On mean AUROC we are 6th and on median rank 7th. The 6th is generous even so: RDBLearn is
+◆◆ Added 2026-08-08, and it cost us a place. rel-hm/user-churn was run *because* it was
+missing, not because it looked winnable, and we place **9th of 10** on it — beaten by eight
+of nine methods, ahead only of Griffin. The average fell 73.46 → 72.62 and our standing among
+the methods' averages fell **6th → 7th**. Every cell in this table's average row is now
+computed by `scaling/rank_table.py`, whose tests pin the published seven-task cells exactly.
+
+**The average and the median rank now agree, and that is worse news than when they did not.**
+Both read 7th. The 6th is generous even so: RDBLearn is
 ahead of us by 0.004 — the two are a tie that the sort had to break. Averaging rewards
 *never collapsing* —
 Griffin scores 45.90 and 51.00 on two tasks and its average falls 8 points below anyone
@@ -147,7 +154,7 @@ advice; ten methods remain, including us):
 | rel-avito / user-clicks ◆ | 65.89 | 8 of 10 | 69.06 RDBLearn+v3 | RDBLearn+v3, RDBLearn, RelGT, RelGNN, KumoRFMv2, TabPFN-REL, GraphSAGE |
 | rel-f1 / driver-dnf ◆ | 69.66 | 9 of 10 | 75.87 RelGT | RelGT, RelGNN, GraphSAGE, KumoRFMv2, RDBLearn+v2.5, RDBLearn+v3, RDBLearn, TabPFN-REL |
 
-◆ new on 2026-08-06. **Median rank 7 of 10.** Ranks: 3, 4, 6, 7, 8, 8, 9.
+◆ new on 2026-08-06. **Median rank 7 of 10.** Ranks: 3, 4, 6, 7, 8, 8, 9, 9.
 
 **This is a materially worse position than this file has been describing**, and the three
 new tasks are why it is now visible: running only four tasks, two of which we happen to do
@@ -4104,6 +4111,61 @@ something other than model quality — see the 11.68-point user-ignore entry abo
 ### Earlier — row chunking verified exact
 `max|Δp| = 1.1e-05`, AUC identical with `offload="auto"` engaged, on both 128- and
 161-column feature sets. Survived a direct attempt to break it while hunting the −3.21.
+
+### 2026-08-08 — the first of the five missing tasks, and it places 9th of 10
+
+**rel-hm/user-churn = 66.75 ± 0.23 over 5 replicates (range 66.50–67.11).** Calibrated
+protocol, `--row-chunk auto`, current defaults. **Rank 9 of 10.**
+
+| beaten by | | we beat |
+|---|---|---|
+| RelGNN 70.93 · TabPFN-REL 70.55 · RDBLearn+v2.5 70.11 · RDBLearn+v3 70.06 · GraphSAGE 69.88 · RelGT 69.27 · RDBLearn 68.05 · KumoRFMv2 67.81 | | Griffin 60.20 |
+
+Eight of nine methods beat us, and the one we beat is the method that collapses elsewhere
+(45.90 and 51.00 on two other tasks). We are **1.06 below the next method up** and 4.18 off
+the best.
+
+**What it costs, computed by `scaling/rank_table.py` rather than by hand:**
+
+| | 7 tasks | 8 tasks |
+|---|---:|---:|
+| our average | 73.46 | **72.62** |
+| our rank among the methods' averages | 6/10 | **7/10** |
+| median rank | 7 | 7 |
+
+**This is the pre-registered "we place badly" branch, and it is the reason the run was
+worth doing.** The seven tasks we had been reporting were chosen by history rather than by
+design. On the eighth, chosen only because it was missing, we place second-to-last. The
+published average rank of 6 was flattering by one place.
+
+**One qualification, so the earlier note is not over-read.** The entry above predicts that
+adding the five will *raise* every method's average — that was said of the three tasks whose
+fields sit at 82–91 (both rel-stack, rel-amazon/item-churn). rel-hm/user-churn is not one of
+them: its field spans 60.20–70.93, below our seven-task band, so it pulls averages *down*
+for everyone. It pulls ours down further because we sit near its floor.
+
+### 2026-08-08 — two of the five died, and the second one says exactly why
+
+Same round. **rel-stack/user-badge** (255,360 test rows) died in its first forward pass.
+**rel-stack/user-engagement** (88,137 test rows) completed its **entire validation sweep** —
+all 15 candidates, val 87.94–89.53 — and died at the **test prediction**, before printing
+its `chosen … TEST` line.
+
+**That is the diagnosis, not an inference from it.** Validation queries fit and test queries
+did not, in the same process, on the same task, minutes apart. The failure scales with the
+number of **query** rows, which is what it must do if the in-context stage is holding query
+outputs on the GPU — TabICL passes context and queries through together, so size goes as
+`n_context + n_query`. `--row-chunk auto` was already on and did not prevent it; chunking
+shrinks activations, offloading moves outputs, and this shape needs the second.
+
+Both are recorded as **missing measurements, not nulls**. Relaunched with `--offload cpu`
+(deterministic rather than `auto`: these shapes are known not to fit, a threshold that
+declines to fire costs a pod cycle, and the host has 503 GB).
+
+**Do not read user-engagement's val 89.5 as a test prediction.** The field there spans
+89.39–90.75 across nine methods, so it is consistent with placing mid-field — but nine
+methods inside 1.36 points means rank on that task is close to a coin toss, and this
+project's central finding is that validation and test disagree.
 
 ### 2026-08-08 — the grid's winning margin is one third of its own noise
 

@@ -3232,13 +3232,30 @@ def test_rank_refuses_a_task_with_no_published_field():
         rank(70.0, "rel-nonesuch/made-up")
 
 
+SEVEN = {"rel-event/user-repeat": 77.89, "rel-trial/study-outcome": 72.26,
+         "rel-f1/driver-top3": 81.98, "rel-event/user-ignore": 80.98,
+         "rel-avito/user-visits": 65.54, "rel-avito/user-clicks": 65.89,
+         "rel-f1/driver-dnf": 69.66}
+
+
 def test_average_is_a_rank_of_means_not_a_mean_of_ranks():
-    from tabicl.scaling.rank_table import average_rank, averages, OURS
-    tasks = list(OURS)
-    ar, an = average_rank(tasks)
-    assert (ar, an) == (6, 10)          # the published average cell
+    from tabicl.scaling.rank_table import average_rank, averages
+    # Pinned to the SEVEN tasks explicitly, not to whatever OURS currently holds. OURS grows
+    # as tasks land -- rel-hm/user-churn joined on 2026-08-08 and moved these to 72.62 and
+    # 7/10 -- and a test that follows it would stop checking anything.
+    ar, an = average_rank(list(SEVEN), SEVEN)
+    assert (ar, an) == (6, 10)          # the published seven-task cell
     assert isinstance(ar, int)          # "6.43" was a mean of ranks and ranked us against nothing
-    assert averages(tasks)["ours"] == pytest.approx(73.46, abs=0.005)
+    assert averages(list(SEVEN), SEVEN)["ours"] == pytest.approx(73.46, abs=0.005)
+
+
+def test_the_eighth_task_costs_us_a_place():
+    from tabicl.scaling.rank_table import average_rank, averages, OURS
+    # rel-hm/user-churn was run because it was missing, not because it looked winnable, and
+    # it drops us 6th -> 7th. Pinned so the cost cannot be quietly undone by a later edit.
+    assert OURS["rel-hm/user-churn"] == 66.75
+    assert average_rank(list(OURS)) == (7, 10)
+    assert averages(list(OURS))["ours"] == pytest.approx(72.62, abs=0.005)
 
 
 def test_average_refuses_a_task_set_we_have_not_measured():
