@@ -2,7 +2,7 @@
 
 Written on stopping, so this can be picked up cold. `STATUS.md` is the current state,
 `DESIGN.md` the history log. Nothing here is blocking — the branch is committed, tested
-(213 passed, 1 skipped) and pushed.
+(235 passed, 1 skipped) and pushed.
 
 ## THE ONE THING TO DO NEXT (2026-08-08, late)
 

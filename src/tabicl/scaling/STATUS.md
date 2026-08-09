@@ -547,7 +547,7 @@ smallest.
 
 ## Tests
 
-`tests/test_scaling.py` — 213 passed, 1 skipped. The skip is the compiled backend when
+`tests/test_scaling.py` — 235 passed, 1 skipped. The skip is the compiled backend when
 it has not been built.
 
 ## Running measurements
