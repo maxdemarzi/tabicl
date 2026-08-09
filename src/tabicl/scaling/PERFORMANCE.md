@@ -4091,6 +4091,22 @@ rel-event is the task where the arm itself is unstable is consistent with its be
 that has resisted every instrument this project has built — including `--gap-validation`,
 which made it worse.
 
+**A hypothesis this kills, with its confound stated.** Same logs, 26 blocks with ≥4 seeds:
+within a block, across seeds, `r(val, test)` is **+0.36 mean, +0.50 median, negative in only
+5 of 26**. So validation is *not* globally anti-correlated with test, and "the protocol
+maximises a quantity that actively opposes the one we are scored on" is refuted.
+
+**But this number is weaker than it looks and must not be quoted as evidence selection
+works.** It is confounded by seed: a seed whose context draw happens to be favourable scores
+higher on validation *and* on test through the same cause, with no selection involved. What
+the correlation measures is mostly shared seed luck.
+
+What it does establish is where the inversion is *not*. It is not a seed-level val↔test
+opposition. That leaves the between-candidate account — which is exactly what the margin
+result above measures, and there the margin is 0.27 against 0.75 of noise. The two results
+fit together: validation tracks test well enough across seeds, and cannot separate the
+candidates it is asked to choose between.
+
 **Now under test on lane B**: `--context-grid 999999`, which the code clamps to `cap` — one
 context, the size validation already prefers. Pre-registered reading in `work_b.sh`.
 

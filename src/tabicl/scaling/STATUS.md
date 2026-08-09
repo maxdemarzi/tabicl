@@ -12,7 +12,7 @@ relational feature layer and a compiled join engine underneath it.
 
 | # | Feature | State | Default |
 |---|---|---|---|
-| 1 | Row-chunked column embedding | Working. Exact, not approximate. | off |
+| 1 | Row-chunked column embedding | Working. Exact, not approximate. Wired into `eval_track_record` 2026-08-08 via `--row-chunk`; it had never been used by the benchmark that demonstrates scaling. | off |
 | 2 | Multi-query KV cache | Size win confirmed; needs pretraining to use for accuracy. | off |
 | 3 | Relational flattening | Working. No model change. | n/a |
 | 4 | Test-time compute | Working. Improves **calibration**, and cannot improve ROC-AUC. | off |
@@ -443,6 +443,28 @@ arrives as ~+0.2 after selection — depth-2 on rel-avito/user-visits gains **+0
 at t = 4.72, 11 of 12 seeds, and −0.06 calibrated.** The feature works; the protocol picks
 the arm where it does nothing.
 
+**And one level below that, measured 2026-08-08 from 34 calibrated blocks already on disk —
+the grid cannot tell its own candidates apart.** `python -m tabicl.scaling.grid_noise <log>`:
+
+| quantity | value |
+|---|---:|
+| winning margin — val(winner) − val(runner-up), within a seed | **0.27** |
+| val noise — sd across seeds of *one fixed candidate* | **0.75** |
+| blocks where margin < noise | **32 / 34** |
+
+The two axes differ. Arm stability averages **83%**, context **71%**; the same arm won every
+seed in **21 of 34** blocks, and in **15 of those** the context still wandered, carrying mean
+**sd(test) 0.77 — above the ±0.6 floor**. Where the arm has settled, the grid's remaining
+freedom is a coin flip over context size that moves test by more than the benchmark resolves.
+Every low-arm-stability block is **rel-event** (33–58%); rel-avito, rel-trial and rel-f1 all
+sit at 100%.
+
+Note this is *not* a val↔test anti-correlation: across seeds within a block `r(val, test)` is
+**+0.36 mean, +0.50 median**, negative in 5 of 26 — though that figure is confounded by seed
+luck and should not be read as evidence that selection works. Validation tracks test across
+seeds and cannot separate the candidates it is asked to choose between. These are consistent,
+and only the second is actionable.
+
 Nine effects have also been measured as **real on test and not selectable**. Each reproduces
 across seeds, each survives its controls, and each is rejected — or simply not seen — by the
 validation split that the calibrated protocol selects on.
@@ -525,7 +547,7 @@ smallest.
 
 ## Tests
 
-`tests/test_scaling.py` — 168 passed, 1 skipped. The skip is the compiled backend when
+`tests/test_scaling.py` — 213 passed, 1 skipped. The skip is the compiled backend when
 it has not been built.
 
 ## Running measurements
