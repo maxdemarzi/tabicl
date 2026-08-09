@@ -271,6 +271,110 @@ five points. Pair everything.
 
 ---
 
+## What this file establishes (read this before the run log)
+
+Everything below this section is chronological: 93 dated entries, in the order the
+measurements were taken. That order is itself evidence — several conclusions here are only
+trustworthy because the entry that overturned them is still visible above the correction.
+But chronology is a poor way to *find* anything, so this section states what survived, with
+the evidence, and nothing else.
+
+**The headline number did not move this session, and that is the honest summary.** Eight
+candidate improvements were refuted, two defaults changed, one rule confirmed and then
+withheld. The table at the top is unchanged from where it started.
+
+### 1. Selection is the binding constraint, not features
+
+This is the single most useful finding, and it reframes the remaining work.
+
+A feature worth **+0.5 to +0.6 on a fixed configuration** arrives as **+0.2 or less after
+calibration**. The clearest case, rel-avito/user-visits: depth-2 traversal moves the `base`
+arm 65.70 → 66.30 (**+0.61, t = 4.72, 11 of 12 seeds**) and the calibrated result moves
+**−0.06**. The feature is real. Selection does not deliver it.
+
+The mechanism is specific and was measured, not assumed: depth-2 and dimension joins help
+every arm *except* `+struct`, and validation picks `+struct`. Their signatures are nearly
+identical (**+0.61 / −0.10** and **+0.57 / −0.07**), which suggests two routes to the same
+missing quantity rather than two independent gains.
+
+**Consequence for anyone continuing this work:** building a ninth feature has a poor prior.
+The gap between what the features are worth and what the protocol collects is larger than
+anything a new feature has produced.
+
+### 2. Pairing by seed is worth 3× on fixed arms and nothing on calibrated ones
+
+Fixed-configuration arms correlate **r = 0.88–0.94** across seeds; pairing cuts the standard
+error by **2.4–3.0×**. Calibrated arms correlate **r = −0.03 to +0.34**; pairing buys
+nothing, because selection re-picks a different configuration per seed and destroys the
+correlation that pairing exploits.
+
+Practical rule, enforced in `paired.py`: report `r`, and warn below 0.5. A paired test on
+calibrated arms that does not check `r` will report a confident number built on an
+assumption that is false.
+
+### 3. The measurement floor is ±0.6, and the winner's curse ran 40–85%
+
+Gate results shrank toward zero by **40–85%** between the gate and the confirmation run,
+every time it was checked. Nothing under **±0.6** on this benchmark should be believed
+without replication. Several of the eight refutations are simply gate results that did not
+survive being measured properly.
+
+### 4. All four traversal shapes exist, and three of them are real-but-unselectable
+
+Entity→child, entity→grandchild, entity→parent→sibling, and fact×dimension (star join) are
+all implemented. The three added this session are **real on fixed arms (t = 2.8–4.8)** and
+**≈ 0 after selection** — see finding 1. Feature coverage is not what limits this project.
+
+### 5. `--drop-stale-arms` works, is withheld, and cannot be validated on available data
+
+Confirmed at 12 replicates: **+0.65 / +0.49**, **+0.97 stacked** — the only estimates all
+session that did not shrink on replication.
+
+**It is not in the table**, because its threshold was chosen with test knowledge. The
+boundary was then measured to see whether it could be validated honestly: coverage collapse
+occurs *only* on rel-avito (0.48 / 0.57 / 0.69) and rel-f1 (0.72 / 0.74). Eleven other tasks
+across seven databases sit at **0.96–1.78** — no signal to fit a threshold against. The rule
+is real and unvalidatable on this benchmark, which is a different thing from wrong.
+
+### 6. Eight ideas refuted, with the measurement each died to
+
+Per-entity label history · abstention · entity novelty · novelty matching · entity time
+deltas · ensembling over configurations (twice) · the coin-flip account of the val/test
+inversion · siblings-as-implemented (**−4.5** on driver-top3: the gate tested one traversal
+path, the implementation took 18).
+
+Three accounts of the val/test inversion were built and tested. Coin-flip is **dead**
+(argmax beats a top-5 ensemble). Entity novelty is **dead** (novelty-matching *widened* the
+gap). Neighbour-signal collapse **survives** — it fits 6 of 7 tasks — and remains unconfirmed.
+
+### 7. Two defaults changed on evidence
+
+`--children` 3 → 0, removing a cross-machine reproducibility defect. `--categories` 0 → 8,
+after 12 replicates *reversed* the blocking result (−0.44 became +0.15).
+
+### 8. The benchmark runner was not using the package's own scaling feature
+
+`eval_track_record` contained zero references to `row_chunk` or `offload`. Row-chunked
+column embedding is item 1 of the four techniques this package provides — "Working. Exact,
+not approximate", verified at `max|Δp| = 1.1e-05` — and the benchmark demonstrating scaling
+was not scaling. This is why rel-stack/user-engagement (1.36M train rows, 342 columns) had
+no score. Wired in 2026-08-08 behind `--row-chunk`, defaulting to `off` so every standing
+number still reproduces.
+
+### 9. The harness failed silently seven times, and that is the transferable lesson
+
+Seven distinct failures in the pod harness produced **output shaped like a result rather
+than an error**: a stale archive that ran last round's code; a coverage probe that printed
+"NO PATHOLOGY ANYWHERE ELSE" having measured 1 of 13 tasks; a parser reporting +17.66 on a
+task with a 2-point range; a lexer-only check reporting "PARSES" on a file the real parser
+rejected with 26 errors; a leak check run against the wrong split.
+
+Every one is now guarded in code rather than in intent. The rule this produced, which
+generalises past this project: **a check that can pass without doing its work is worse than
+no check**, because it converts an unknown into a false negative.
+
+---
+
 ## Run log
 
 ### 2026-08-05 — which child tables: dict order spends a slot on a causally-empty table
@@ -3948,6 +4052,53 @@ something other than model quality — see the 11.68-point user-ignore entry abo
 ### Earlier — row chunking verified exact
 `max|Δp| = 1.1e-05`, AUC identical with `offload="auto"` engaged, on both 128- and
 161-column feature sets. Survived a direct attempt to break it while hunting the −3.21.
+
+### 2026-08-08 — the grid's winning margin is one third of its own noise
+
+**Computed from 34 calibrated blocks already on disk. No GPU, no new runs, no test scores
+used to derive anything.** `scaling/grid_noise.py`, run over every log carrying per-candidate
+validation lines.
+
+The calibrated protocol picks the argmax of ~9 candidates on validation. Two quantities
+decide whether that pick means anything, and both were already in the logs:
+
+| quantity | what it is | value |
+|---|---|---:|
+| **margin** | val(winner) − val(runner-up), within a seed | **0.27** |
+| **noise** | sd across seeds of *one fixed candidate's* val score | **0.75** |
+
+**The margin is 36% of the noise, and margin < noise in 32 of 34 blocks.** Selection is
+choosing between candidates it cannot distinguish. This is the mechanism underneath finding
+1 — not a rival explanation for it, but the level below: a feature arrives as +0.2 after
+calibration partly because the calibration step is a lottery among its top few.
+
+**Which axis is the lottery matters, and the two axes behave differently:**
+
+| | mean stability across seeds | reading |
+|---|---:|---|
+| arm (feature set) | **83%** | mostly settled |
+| context size | **71%** | wanders more |
+
+The same **arm** won every seed in **21 of 34** blocks. In **15 of those 21** the context
+still wandered — and those blocks carry **mean sd(test) 0.77, above the ±0.6 floor**. So on
+most tasks the grid has already decided which feature set it wants, and is spending its
+remaining freedom flipping a coin over context size, and that coin flip alone moves test by
+more than this benchmark can resolve.
+
+**It splits cleanly by database.** Every low-arm-stability block is **rel-event** (33–58%,
+sd(test) 1.0–2.1). rel-avito, rel-trial and rel-f1 all sit at **100% arm stability**. That
+rel-event is the task where the arm itself is unstable is consistent with its being the task
+that has resisted every instrument this project has built — including `--gap-validation`,
+which made it worse.
+
+**Now under test on lane B**: `--context-grid 999999`, which the code clamps to `cap` — one
+context, the size validation already prefers. Pre-registered reading in `work_b.sh`.
+
+**Note what makes this rule table-eligible when `--drop-stale-arms` was not.** That rule
+needed a threshold and the threshold was chosen knowing test, which is why it stands at
++0.65 confirmed and withheld. This rule has **no free parameter**: "use the largest context"
+is fully determined before a test row is read. There is nothing to tune, so there is nothing
+to tune on test. Worst case it is neutral on accuracy and still cuts the grid ~3×.
 
 ---
 

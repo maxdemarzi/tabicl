@@ -3088,3 +3088,68 @@ def test_row_chunk_leaves_amp_off_in_every_mode():
     for mode in ("off", "auto", "always"):
         cfg = inference_config(mode)
         assert all(cfg[k]["use_amp"] is False for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG"))
+
+
+# --- grid_noise: the diagnostic that says whether calibrated selection means anything ----
+# These target how it could report a confident WRONG number, not whether it runs. Its whole
+# output is a ratio, and both halves of that ratio are easy to corrupt silently.
+
+_GRID_LOG = """\
+  base                 context=1000   val=60.00
+  +struct              context=1000   val=62.00
+  chosen +struct context=1000 order=random -> VAL 62.00  TEST 55.00
+  base                 context=1000   val=61.00
+  +struct              context=1000   val=63.00
+  chosen +struct context=1000 order=random -> VAL 63.00  TEST 56.00
+  base                 context=1000   val=62.00
+  +struct              context=1000   val=64.00
+  chosen +struct context=1000 order=random -> VAL 64.00  TEST 57.00
+rel-x/task-a  CALIBRATED TEST ROC-AUC x100 = 56.00 +- 1.00 over 3 replicates
+  base                 context=1000   val=70.00
+  +struct              context=1000   val=71.00
+  chosen +struct context=1000 order=random -> VAL 71.00  TEST 65.00
+rel-x/task-b  CALIBRATED TEST ROC-AUC x100 = 65.00 +- 0.00 over 1 replicates
+"""
+
+
+def test_grid_noise_does_not_let_two_blocks_run_together():
+    from tabicl.scaling.grid_noise import parse_blocks
+    # The sibling parser reported +17.66 on a two-point-range task by flushing only at arm
+    # headers. Here the same bug would pool task-a's 60s with task-b's 70s and report a
+    # noise of ~4 instead of ~1, turning a lottery verdict into a decisive one.
+    blocks = parse_blocks(_GRID_LOG)
+    assert [b[0] for b in blocks] == ["rel-x/task-a", "rel-x/task-b"]
+    assert [len(b[1]) for b in blocks] == [3, 1]
+
+
+def test_grid_noise_excludes_the_chosen_line_from_the_grid():
+    from tabicl.scaling.grid_noise import parse_blocks
+    # `chosen` repeats the winner's score. Counting it as a candidate would make the top two
+    # entries identical and drive every margin to 0.00 -- a spurious unanimous "lottery".
+    cands = parse_blocks(_GRID_LOG)[0][1][0][0]
+    assert set(cands) == {("base", 1000), ("+struct", 1000)}
+
+
+def test_grid_noise_computes_margin_and_noise_on_a_known_case():
+    from tabicl.scaling.grid_noise import parse_blocks, block_stats
+    st = block_stats(parse_blocks(_GRID_LOG)[0][1])
+    assert st["margin"] == pytest.approx(2.0)      # 62-60, 63-61, 64-62
+    assert st["noise"] == pytest.approx(1.0)       # sd(60,61,62) == sd(62,63,64) == 1.0
+    assert st["ratio"] == pytest.approx(2.0)
+    assert st["arm_stability"] == 1.0 and st["n_arms"] == 1
+
+
+def test_grid_noise_refuses_a_noise_estimate_from_two_seeds():
+    from tabicl.scaling.grid_noise import parse_blocks, block_stats
+    # sd of two numbers is not a noise estimate, and this module's headline IS a ratio whose
+    # denominator is that sd. Returning None beats returning a confident quotient.
+    assert block_stats(parse_blocks(_GRID_LOG)[1][1]) is None
+
+
+def test_grid_noise_intersects_candidates_across_seeds():
+    from tabicl.scaling.grid_noise import parse_blocks, block_stats
+    # A candidate only some seeds scored cannot be a runner-up: comparing the winner against
+    # something one seed never measured invents a margin. Seed 3 drops +struct, so the
+    # intersection has a single candidate and the block declines to report.
+    log = _GRID_LOG.replace("  +struct              context=1000   val=64.00\n", "")
+    assert block_stats(parse_blocks(log)[0][1]) is None
