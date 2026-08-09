@@ -3442,3 +3442,56 @@ def test_a_task_that_produced_nothing_is_reported_as_missing_not_as_zero():
     assert r.tests == []
     assert "NO SEEDS COMPLETED" in format_result(r)
     assert "missing measurement" in format_result(r)
+
+
+# --- --train-pool: release train rows the fit will never use --------------------------
+# The fit draws --context rows (10,000). Every train row is materialised for every arm
+# anyway: rel-stack/user-badge builds ~48 GB (5 arms x 3.39M rows x ~350 cols x 8B) to use
+# 0.3% of it, then dies when inference buffers land on top. That it is arms x rows x columns
+# rather than rows alone is settled by measurement -- rel-amazon/user-churn survived 4.7M
+# train rows and 352k test rows on a single 52-column arm.
+
+def _pool_args(**kw):
+    import argparse
+    d = dict(train_pool=0, context=10000, context_orders="random")
+    d.update(kw)
+    return argparse.Namespace(**d)
+
+
+def test_train_pool_default_is_off_so_standing_numbers_reproduce():
+    import pathlib as _p
+    # Every standing number was measured with the whole train pool resident. The flag must
+    # default to 0 so a rerun reproduces them; a default that quietly subsampled the fit
+    # pool would change results without changing the command line.
+    src = _p.Path("src/tabicl/scaling/eval_track_record.py").read_text(encoding="utf-8")
+    i = src.index('"--train-pool"')
+    assert "default=0" in src[i:i + 200]
+
+
+def test_train_pool_subsample_keeps_arms_labels_and_frame_aligned():
+    import numpy as np
+    import pandas as pd
+    # The alignment this protects: `time_order` and the gap-validation pools are derived
+    # from `train` further down, so subsampling the arms without subsampling `train` and
+    # `y` misaligns every index into the fit pool -- silently, and in a way that would read
+    # as a modelling result rather than a bug.
+    n, pool = 1000, 200
+    arms = {"base": (np.arange(n * 3).reshape(n, 3), np.zeros((10, 3)))}
+    y = np.arange(n)
+    train = pd.DataFrame({"t": np.arange(n)})
+    keep = np.sort(np.random.default_rng(0).choice(n, size=pool, replace=False))
+    arms = {k: (v[0][keep], v[1]) for k, v in arms.items()}
+    y2, train2 = y[keep], train.iloc[keep].reset_index(drop=True)
+    assert len(arms["base"][0]) == len(y2) == len(train2) == pool
+    # row i of every subsampled object must still describe the same original row
+    assert arms["base"][0][0, 0] == keep[0] * 3
+    assert y2[0] == keep[0] and train2["t"].iloc[0] == keep[0]
+    assert arms["base"][1].shape[0] == 10          # the eval matrix is untouched
+
+
+def test_train_pool_is_a_uniform_draw_and_deterministic():
+    import numpy as np
+    a = np.sort(np.random.default_rng(0).choice(1000, size=200, replace=False))
+    b = np.sort(np.random.default_rng(0).choice(1000, size=200, replace=False))
+    assert (a == b).all()                          # seed 0, so two runs agree
+    assert len(set(a.tolist())) == 200             # without replacement

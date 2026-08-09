@@ -519,6 +519,14 @@ def main() -> None:
                          "--offload disk. Without one the library disables disk "
                          "offloading and raises only once CPU memory is already short, "
                          "which on a memory-capped container is a race the OOM killer wins.")
+    ap.add_argument("--train-pool", type=int, default=0,
+                    help="subsample the fit pool to N rows after features are built, "
+                         "before inference. The fit uses --context rows, so the remaining "
+                         "train rows are materialised and never used: rel-stack/user-badge "
+                         "builds ~48 GB of arm matrices to draw 10,000 rows, then dies when "
+                         "inference buffers land on top. 0 disables it, which is every "
+                         "standing number. Refuses non-random --context-orders, where a "
+                         "uniform subsample would change what recency means.")
     ap.add_argument("--drop-stale-arms", action="store_true",
                     help="exclude history-dependent arms when the shared-key block's "
                          "COVERAGE collapses between validation and test. Label-free: reads "
@@ -1459,6 +1467,48 @@ def main() -> None:
     widths = ", ".join(f"{k} {v[0].shape[1]}" for k, v in arms.items())
     print(f"feature widths: {widths}; {len(arms['base'][0])} train rows, "
           f"context={args.context}", flush=True)
+
+    # --- release the train rows this run will never use ----------------------------------
+    # The fit uses `context` rows -- 10,000 by default -- drawn from the train pool. The
+    # arms above materialise EVERY train row for every arm, so rel-stack/user-badge builds
+    # ~48 GB of matrices (5 arms x 3.39M rows x ~350 columns x 8 bytes) in order to use
+    # 0.3% of them, and is then killed when inference buffers land on top of that.
+    #
+    # That it is the matrices and not the row count is settled by measurement, not by
+    # argument: rel-amazon/user-churn survived 4.7M train rows and 352k test rows -- MORE
+    # of both -- because it flattens to a single 52-column arm. Scale alone is not the
+    # constraint; arms x rows x columns is.
+    #
+    # Subsampling here rather than before feature construction is deliberate. Construction
+    # completed on user-badge (it printed the line above); the kill came afterwards. So the
+    # peak that matters is what stays RESIDENT during inference, and dropping it here is
+    # both sufficient and far less invasive than reworking the feature builders.
+    #
+    # `train` and `y` are subsampled alongside the arms because `time_order` and the
+    # gap-validation pools are derived from `train` further down; leaving them full length
+    # would misalign every index into the fit pool -- silently, and in a way that would read
+    # as a modelling result.
+    if args.train_pool and len(arms["base"][0]) > args.train_pool:
+        if [o.strip() for o in args.context_orders.split(",") if o.strip()] != ["random"]:
+            raise SystemExit(
+                "--train-pool subsamples the fit pool uniformly, which is statistically "
+                "equivalent for RANDOM context draws and not for recency-ordered ones: "
+                "the most recent rows of a uniform subsample span a far wider window than "
+                "the most recent rows overall. Refusing rather than quietly changing what "
+                f"--context-orders {args.context_orders!r} means.")
+        if args.train_pool < 5 * args.context:
+            raise SystemExit(f"--train-pool {args.train_pool} is under 5x --context "
+                             f"{args.context}; the pool would barely exceed the draw.")
+        before = len(arms["base"][0])
+        keep = np.sort(np.random.default_rng(0).choice(
+            before, size=args.train_pool, replace=False))
+        arms = {k: (v[0][keep], v[1]) for k, v in arms.items()}
+        y = y[keep]
+        train = train.iloc[keep].reset_index(drop=True)
+        freed = sum(v[0].shape[1] for v in arms.values()) * (before - args.train_pool) * 8
+        print(f"train pool: {before:,} -> {args.train_pool:,} rows (uniform, seed 0), "
+              f"~{freed / 2**30:.1f} GB released before inference; the fit draws "
+              f"{args.context:,}", flush=True)
 
     def score(X, Xe, rows, seed, truth=None, fit_y=None, return_probs=False):
         """Fit and score, optionally averaging predictions over several context draws.
