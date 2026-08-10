@@ -4351,8 +4351,38 @@ someone else's. And this is test-side on fixed arms; eleven interventions this w
 on fixed arms and worth about 0 after selection, and there is no reason yet to think this one
 is different. **Nothing here is table-eligible until the calibrated protocol produces it.**
 
-**One task is not a finding**, which this project learned the expensive way when seven tasks
-turned out to be a flattering subset. Replication across tasks is running.
+**REPLICATED ACROSS FIVE TASKS, AND IT IS MIXED — mean +0.78, not +1.58.**
+
+| task | our rank | TabICL | TabFM | Δ | seeds |
+|---|---:|---:|---:|---:|---:|
+| rel-f1 / driver-top3 | 6th | 81.91 | **85.19** | **+3.28** | 5/5 |
+| rel-trial / study-outcome | 4th | 70.64 | 72.22 | **+1.58** | 5/5 |
+| rel-avito / user-visits | 8th | 65.92 | 66.38 | +0.45 | 5/5 |
+| rel-event / user-repeat | 3rd | 77.08 | 77.34 | +0.27 | 4/5 |
+| **rel-event / user-ignore** | 7th | 81.08 | **79.38** | **−1.70** | **0/5** |
+
+**user-ignore is a real loss, not noise**: SE 0.42, t ≈ −4, zero of five seeds positive.
+So TabFM is not uniformly better — it is much better on two tasks, level on two, and
+clearly worse on one.
+
+**Running five tasks instead of banking the first is what kept this honest.** After three
+the mean was +1.77; the full five give **+0.78**, an overclaim of more than a factor of two
+avoided. That is the same error the seven-task table made, caught this time before it was
+written down as a result.
+
+**What +0.78 would be worth, stated as arithmetic and not as a claim.** Our twelve-task
+average is 75.10 against RelGNN 78.06, TabPFN-REL 76.91, RelGT 76.65, RDBLearn+v3 76.01,
+KumoRFMv2 75.91, GraphSAGE 75.83. A uniform +0.78 would put us near 75.88 — roughly 6th of
+10 rather than 9th. **Three places, not a lead**, and every caveat below still applies.
+
+**Why a per-task choice is not available.** Picking TabFM where it wins and TabICL where it
+loses requires knowing which is which, and that is selection on test — the exact error
+`--drop-stale-arms` was withheld for. A validation-side rule might exist, but it does not
+yet, and the honest number for "swap the backbone" is the uniform one.
+
+**Still not table-eligible.** Fixed arms, test-side, 5 seeds. Eleven interventions this week
+were real here and worth about 0 after selection, and the calibrated protocol is a separate
+run that has not happened.
 
 **Getting here took four attempts and each failure is worth recording**, because none were
 about the model: Python 3.10.12 against a 3.11-or-later requirement (the image list falls
