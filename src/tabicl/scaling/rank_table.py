@@ -61,6 +61,11 @@ OURS: dict[str, float] = {
     # (~55 min/seed with disk offloading). Both are real measurements and one is weaker than
     # the standard five; PARTIAL_SEEDS records which, so the table can mark it.
     "rel-stack/user-engagement": 89.33,
+    # 66.94 was measured under the superseded temporal control, which left this task a
+    # single 52-column arm. With seven arms the old configuration no longer runs; two
+    # re-measurement attempts gave 67.57 (1 seed, disk-offload I/O error) and 67.22
+    # (2 seeds, timeout), both inside the floor and both too thin to publish. Kept, with
+    # the caveat recorded in PERFORMANCE.md rather than hidden.
     "rel-amazon/user-churn": 66.94,
     # Added 2026-08-09, the eleventh. Took --train-pool (2.54M -> 300k, so feature
     # construction fit) AND dropping rel-amazon's array-valued column, which crashed

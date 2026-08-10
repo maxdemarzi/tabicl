@@ -4343,9 +4343,30 @@ the arms it freed, which is the same finding this project has reached eight othe
 `+struct` and the history family were available on rel-amazon for the first time, and the
 calibrated result moved −0.12.
 
-rel-amazon/user-churn could not be re-measured: freeing five arms pushed it from one
-52-column arm to seven and it died `rc=137` without `--train-pool`, which had been withheld
-to keep the comparison single-variable. That is a planning error rather than a new defect.
+**rel-amazon/user-churn's cell is not reproducible by current code, and two further
+attempts did not fix it.** Freeing five arms pushed it from one 52-column arm to seven, so
+the configuration behind 66.94 now dies `rc=137`. A follow-up round tried both ways and
+neither produced a publishable number:
+
+| arm | outcome |
+|---|---|
+| no pool | seven arms built at 4.7M rows — further than ever — then `OSError: [Errno 5]` in `memmap.flush()`: **disk offload exhausted the pod's disk**, a constraint distinct from every memory failure before it. **67.57 over 1 seed.** |
+| `--train-pool 300000` | `rc=124` at the 4-hour ceiling. **67.22 over 2 seeds.** |
+
+Both sit **+0.3 to +0.6 above 66.94**, consistent with the null verdict everywhere else, and
+both are far too weak to publish at one and two replicates.
+
+**The cell keeps 66.94, with this stated rather than hidden.** It was measured under the
+superseded control on a single arm; the corrected pipeline gives 67.2–67.6 on thin evidence,
+inside the floor. Spending another 8 hours of GPU time to resolve a difference smaller than
+the measurement floor, on the day the benchmark reached twelve of twelve, is not a good
+trade — and saying so is more useful than a number nobody should rely on.
+
+**The disk failure is a new, separate limit worth recording.** `--offload disk` trades RAM
+for disk, and the pod's volume is finite: on the largest task in the benchmark it filled.
+Anyone reaching for disk offload at this scale needs to size the volume first, and
+`_resolve_offload_mode` consults `get_available_disk_space` yet still chose a path that ran
+out — so the estimate is optimistic somewhere.
 
 ⁴ Four replicates, salvaged from a run the 4-hour ceiling killed. The table keeps the
 complete 5-replicate 80.20; the difference is inside the floor and swapping a complete
