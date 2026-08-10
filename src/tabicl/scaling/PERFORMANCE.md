@@ -4317,6 +4317,57 @@ declines to fire costs a pod cycle, and the host has 503 GB).
 methods inside 1.36 points means rank on that task is close to a coin toss, and this
 project's central finding is that validation and test disagree.
 
+### 2026-08-10 — THE BACKBONE: TabFM beats TabICL by +1.58 on identical features
+
+**The first real gain of this session, and the largest single effect measured all week.**
+For scale, our entire deficit to the field average is 2.96.
+
+`eval_backbone.py` was written months ago to separate a confound that undermines every "our
+features are behind" line in this file: our peer group — TabPFN-REL, RDBLearn+v3, KumoRFMv2
+— is exactly our shape, flatten-then-tabular-foundation-model, and **every one of them runs
+on a different backbone than we do.** It has been blocked since it was written because
+TabPFN 6.0.0 and later will not release weights without a registered account.
+
+**TabFM unblocks it.** Google Research, 2026-06-30: zero-shot, frozen, in-context,
+scikit-learn compatible, weights on Hugging Face with no token gate.
+
+rel-trial/study-outcome, 5 seeds, **identical features, identical context rows, identical
+seeds** — the only variable is the model:
+
+| seed | TabICL | TabFM |
+|---|---:|---:|
+| 0 | 70.43 | 71.76 |
+| 1 | 71.11 | 72.73 |
+| 2 | 70.00 | 72.17 |
+| 3 | 70.69 | 72.12 |
+| 4 | 70.96 | 72.31 |
+| **mean** | 70.64 | **72.22** |
+
+**+1.58, SE 0.16, t about 10, 5 of 5 seeds.** Cost 19s/seed against TabICL's 7s.
+
+**What this does and does not mean, stated before any of it reaches the table.** A win here
+is *"our featurisation plus a stronger backbone"*, not *"our method improved"* — the model is
+someone else's. And this is test-side on fixed arms; eleven interventions this week were real
+on fixed arms and worth about 0 after selection, and there is no reason yet to think this one
+is different. **Nothing here is table-eligible until the calibrated protocol produces it.**
+
+**One task is not a finding**, which this project learned the expensive way when seven tasks
+turned out to be a flattering subset. Replication across tasks is running.
+
+**Getting here took four attempts and each failure is worth recording**, because none were
+about the model: Python 3.10.12 against a 3.11-or-later requirement (the image list falls
+through when py3.11 is unavailable for a cloud/GPU pair — now overridable with
+`TABICL_IMAGE_MATCH`); `jaxtyping.Array` missing because `TabFMClassifier` annotations need
+jax importable even on the pytorch backend; and a **silent CPU fit** — `load()` takes
+`device` as a keyword defaulting to `None`, `TabFMClassifier` has no device argument at all,
+and the run produces correct AUCs about thirty times slower with nothing to indicate it.
+That last one is now structural: the loader checks parameter placement and refuses.
+
+**Precision note for whoever reads the replication.** `load()` defaults to
+`dtype=torch.bfloat16`, which its docstring calls the intended compute precision rather than
+a shortcut. AMP was measured on this benchmark costing **7.3 AUC** on rel-event, so precision
+is not a free variable here even when a model is designed for it.
+
 ### 2026-08-10 — the model wants a REPRESENTATIVE context, not a LOCAL one
 
 **The retrieval intuition is backwards for this model, and the smaller the context the more
