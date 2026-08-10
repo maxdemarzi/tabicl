@@ -79,6 +79,14 @@ def main() -> None:
                     help="matched across both backbones so the comparison stays one "
                          "variable. TabPFN's own default is 8, so this may understate it; "
                          "--tabpfn-default adds a second TabPFN arm at its default.")
+    ap.add_argument("--tabfm", action="store_true",
+                    help="add a TabFM arm (Google Research, 2026-06-30). Zero-shot, frozen, "
+                         "in-context -- our paradigm -- and its weights are on Hugging Face "
+                         "without the token gate that has blocked the TabPFN arm since this "
+                         "file was written. Weights are non-commercial licensed.")
+    ap.add_argument("--tabpfn", action="store_true",
+                    help="add the TabPFN arm. Off by default because it needs a "
+                         "TABPFN_TOKEN, which this project does not have.")
     ap.add_argument("--tabpfn-default", action="store_true",
                     help="also score TabPFN at its shipped defaults, which is what a user "
                          "of that library would actually get.")
@@ -88,9 +96,22 @@ def main() -> None:
     if args.device.startswith("cpu") and torch.cuda.is_available():
         raise SystemExit("refusing to run on CPU while CUDA is available")
 
-    from tabpfn import TabPFNClassifier
-    import tabpfn
-    print(f"tabpfn {getattr(tabpfn, '__version__', '?')}", flush=True)
+    TabPFNClassifier = None
+    if args.tabpfn:
+        from tabpfn import TabPFNClassifier
+        import tabpfn
+        print(f"tabpfn {getattr(tabpfn, '__version__', '?')}", flush=True)
+
+    # TabFM: Google Research, released 2026-06-30. Zero-shot, frozen weights, in-context --
+    # our exact paradigm -- and unlike TabPFN-3 its weights are on Hugging Face without a
+    # token gate, which is why this arm can exist at all. The WEIGHTS are under
+    # `tabfm-non-commercial-v1.0`; the code is Apache 2.0.
+    TabFMClassifier = tabfm_model = None
+    if args.tabfm:
+        from tabfm import TabFMClassifier
+        from tabfm import tabfm_v1_0_0_pytorch as tabfm_v1_0_0
+        tabfm_model = tabfm_v1_0_0.load()
+        print("tabfm 1.0.0 loaded", flush=True)
 
     db = get_dataset(args.dataset, download=True).get_db()
     task = get_task(args.dataset, args.task, download=True)
@@ -144,10 +165,23 @@ def main() -> None:
                              ignore_pretraining_limits=True)
         return m.fit(X[rows], y[rows]).predict_proba(Xe)[:, 1]
 
-    arms = [("tabicl", lambda r, s: tabicl(r, s)),
-            (f"tabpfn@{args.n_estimators}", lambda r, s: tabpfn(r, s, args.n_estimators))]
-    if args.tabpfn_default:
-        arms.append(("tabpfn@default", lambda r, s: tabpfn(r, s, 8)))
+    def tabfm(rows, seed):
+        # max_num_rows defaults to 100 CONTEXT ROWS -- two orders of magnitude below the
+        # 10,000 this project runs on TabICL, and the model compensates by ensembling over
+        # several sampled contexts. Raised to the run's own context so the comparison is
+        # like-for-like on data seen; if the model degrades there, that is a fact about the
+        # model at our scale and is what we want to learn.
+        m = TabFMClassifier(model=tabfm_model, n_estimators=args.n_estimators,
+                            max_num_rows=len(rows), max_num_features=X.shape[1])
+        return m.fit(X[rows], y[rows]).predict_proba(Xe)[:, 1]
+
+    arms = [("tabicl", lambda r, s: tabicl(r, s))]
+    if args.tabpfn:
+        arms.append((f"tabpfn@{args.n_estimators}", lambda r, s: tabpfn(r, s, args.n_estimators)))
+        if args.tabpfn_default:
+            arms.append(("tabpfn@default", lambda r, s: tabpfn(r, s, 8)))
+    if args.tabfm:
+        arms.append((f"tabfm@{args.n_estimators}", lambda r, s: tabfm(r, s)))
 
     scores: dict = {name: [] for name, _ in arms}
     print(f"\n{'seed':>5}" + "".join(f"{n:>16}" for n, _ in arms), flush=True)

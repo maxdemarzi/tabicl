@@ -49,6 +49,17 @@ IMAGES = [
     "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
     "runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04",
 ]
+# A round that needs a specific interpreter can demand one. `create` walks IMAGES in order
+# per (cloud, GPU) and falls through to the 3.10 image whenever the 3.11 one is unavailable
+# for that combination -- which is how a round needing Python >= 3.11 silently landed on
+# 3.10.12 and failed its install. Set TABICL_IMAGE_MATCH to a substring to restrict the list
+# rather than editing it, so the constraint lives with the round and not in the module.
+_image_match = os.environ.get("TABICL_IMAGE_MATCH", "")
+if _image_match:
+    IMAGES = [i for i in IMAGES if _image_match in i]
+    if not IMAGES:
+        raise SystemExit(f"TABICL_IMAGE_MATCH={_image_match!r} matched no image")
+
 # Community capacity is erratic and some hosts have broken CUDA; secure costs more but
 # is far likelier to yield a usable machine.
 CLOUDS = ["COMMUNITY", "SECURE"]
