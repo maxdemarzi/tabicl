@@ -75,7 +75,13 @@ parameter, so there is nothing that could have been tuned on test.
   selection varies per seed. `tabicl.scaling.paired` reports `r` and warns below 0.5.
 * Refuted with measurements, do not rebuild: label history (per-entity), abstention,
   entity novelty, novelty matching, entity time deltas, ensembling over configurations
-  (twice, the second time properly powered).
+  (twice, the second time properly powered), a validation-noise fallback rule (refuted
+  offline against known outcomes, 2 of 6 — worse than a coin flip), and **NFA /
+  within-table neighbourhood aggregation** (−0.10 at a width the model can carry, against
+  +1.20 to +3.30 for every other arm; inapplicable outright on rel-avito, whose task rows
+  have no groupable categorical column). The NFA code is kept and exported — it is correct,
+  tested, and causal by construction — but it is off by default and should not be revisited
+  without a task whose entity table carries several moderate-cardinality categoricals.
 
 ## OPEN OBSERVATION — disk offload can exhaust the disk it just checked (2026-08-10)
 

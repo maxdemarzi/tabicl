@@ -4317,6 +4317,61 @@ declines to fire costs a pod cycle, and the host has 503 GB).
 methods inside 1.36 points means rank on that task is close to a coin toss, and this
 project's central finding is that validation and test disagree.
 
+### 2026-08-10 — NFA: the literature's within-table structure is worth nothing here
+
+**Tenth refutation, and the first taken from a paper rather than invented.**
+
+Cucumides & Geerts, *Grables: Tabular Learning Beyond Independent Rows* (arXiv 2602.03945),
+separate structure **across tables** (`DB`) from structure **within** a table (`T`). Every
+traversal this package builds is `DB`. On `relbench-trial` they measure fixed within-table
+aggregations at **0.7254**, beating row-local LightGBM (0.7009), both GNN baselines (0.6860,
+0.6861), a finetuned relational foundation model (0.7116) **and** learned message passing
+over the cross-table structure we already build (`Tab+GNN(DB)`, 0.7180). Fixed aggregations,
+no GNN, no retraining — our exact constraint. That is why it was worth building.
+
+**Built as an exact reduction:** for one column, "rows sharing value *a*" is a GROUP BY, so
+the neighbourhood aggregate is an as-of aggregation of the table onto itself. Causality holds
+by construction — a row's cutoff is its own timestamp and the scan counts strictly earlier
+rows, so no row is ever its own neighbour.
+
+**Gate 1, rel-trial, 12 seeds, fixed arms, 150 columns:**
+
+| +history | +rate | +counts | +struct | base | **+nfa** |
+|---:|---:|---:|---:|---:|---:|
+| 73.06 | 72.80 | 71.02 | 70.97 | 69.77 | **66.41** |
+
+**−3.36.** Calibrated with and without came back **bit-identical** (72.71, same range), so
+validation refused the arm in all 8 seeds.
+
+**Gate 2, narrow — count and mean only, no windows, 18 columns:** `+nfa` **69.67** against
+base **69.77**. **−0.10.**
+
+**So width caused the −3.36, and the neighbourhood itself is worth nothing.** Both facts
+matter. The full menu emitted 150 columns onto a base measured at `--max-columns 2`, and
+width is not free here — the same budget is worth +3.0 on one task and −19.5 on another. The
+paper used AutoGluon tree ensembles, which tolerate wide inputs far better than TabICL at a
+fixed context. Correcting the width recovered the loss and revealed **exactly zero signal**,
+while every other arm beats base by +1.20 to +3.30.
+
+**A structural precondition, found by the run and worth keeping.** On rel-avito/user-visits
+the column selector reported *"no column groups rows usefully"* — every candidate is
+near-unique or near-constant, so **NFA is inapplicable there at all**. RelBench task tables
+are `(entity_id, timestamp, label)`; whatever can be grouped on comes from the joined entity
+table, and rel-avito's users carry nothing with moderate cardinality. rel-trial's studies
+carry `source` and `phase`. **The family needs an entity table with groupable categorical
+attributes, which not every task has.**
+
+**Why no third variant.** The pre-registered reading said a narrow result within 0.6 of base
+was worth a calibrated test. It is not, and the branch was imprecise rather than the decision
+being moved: it was written for "negative" or "positive" and did not anticipate *exactly
+neutral*. A feature worth 0.00 on fixed arms cannot survive selection when nine features
+worth +0.5 to +0.6 did not, and on this task `+history` is already +3.30 and eligible.
+
+**The honest conclusion: the literature result does not transfer to a pipeline that already
+carries cross-table structure and pays for column width.** Their gain is measured against a
+row-local model with no relational features at all; ours already has them, and the two
+sources evidently overlap on this task far more than their `T+DB` result suggested.
+
 ### 2026-08-10 — a hunt that cost no GPU time and refuted three things
 
 All four questions below were settled from logs already on disk. Two of them would have
