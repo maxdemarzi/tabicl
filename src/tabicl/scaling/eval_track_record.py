@@ -368,6 +368,29 @@ def mmd_context_indices(X: np.ndarray, Xe: np.ndarray, n_context: int, seed: int
     return chosen
 
 
+_TABFM = None
+
+
+def _tabfm(device: str):
+    """Load TabFM once and keep it. Refuses CPU when CUDA is present.
+
+    `load()` takes `device` as a KEYWORD defaulting to None, which lands on CPU, and
+    `TabFMClassifier` has no device argument at all -- so load time is the only place to set
+    it and omitting it fails silently, producing correct AUCs about thirty times slower.
+    That happened once already; the check is structural rather than remembered.
+    """
+    global _TABFM
+    if _TABFM is None:
+        from tabfm import tabfm_v1_0_0_pytorch as tabfm_v1_0_0
+        _TABFM = tabfm_v1_0_0.load(device=device)
+        if torch.cuda.is_available() and hasattr(_TABFM, "parameters"):
+            where = {q.device.type for q in _TABFM.parameters()}
+            if where and where != {"cuda"}:
+                raise SystemExit(f"TabFM loaded onto {where} while CUDA is available.")
+        print(f"backbone: TabFM 1.0.0 on {device}", flush=True)
+    return _TABFM
+
+
 def abstention_choice(split_val: dict) -> tuple[tuple | None, tuple | None, bool]:
     """Keep the tuned pick only if its validation ranking survives a time gap.
 
@@ -730,6 +753,13 @@ def main() -> None:
                          "them; label-free. 'mmd' is CRUMB (arXiv 2606.11473) at K=1: greedily "
                          "minimise maximum mean discrepancy to the queries, which adds a "
                          "REDUNDANCY penalty kNN lacks. Content has never been tested here.")
+    ap.add_argument("--backbone", choices=["tabicl", "tabfm"], default="tabicl",
+                    help="which tabular foundation model runs underneath. Every standing "
+                         "number is 'tabicl'. 'tabfm' is Google Research's TabFM 1.0.0 -- "
+                         "zero-shot, frozen, in-context, same paradigm -- measured test-side "
+                         "at +3.28/+1.58/+0.45/+0.27/-1.70 across five tasks (mean +0.78). "
+                         "This flag exists so that can be put through the CALIBRATED "
+                         "protocol, which is the only thing that moves a published cell.")
     ap.add_argument("--drop-stale-arms", action="store_true",
                     help="exclude history-dependent arms when the shared-key block's "
                          "COVERAGE collapses between validation and test. Label-free: reads "
@@ -1834,10 +1864,21 @@ def main() -> None:
             else:
                 take = np.random.default_rng(seed * 1000 + d).choice(
                     n, size=len(rows), replace=False)
-            clf = TabICLClassifier(
-                n_estimators=args.n_estimators, device=args.device, random_state=seed,
-                inference_config=inference_config(args.row_chunk, args.offload,
-                                                 args.disk_offload_dir)).fit(X[take], source_y[take])
+            if args.backbone == "tabfm":
+                from tabfm import TabFMClassifier
+                # No random_state and no device: seeds vary the CONTEXT DRAW only, which is
+                # the variance this benchmark actually cares about. max_num_rows defaults to
+                # 100 and must be raised to the run's own context or the arms are not
+                # comparable on data seen.
+                clf = TabFMClassifier(model=_tabfm(args.device),
+                                      n_estimators=args.n_estimators,
+                                      max_num_rows=len(take),
+                                      max_num_features=X.shape[1]).fit(X[take], source_y[take])
+            else:
+                clf = TabICLClassifier(
+                    n_estimators=args.n_estimators, device=args.device, random_state=seed,
+                    inference_config=inference_config(args.row_chunk, args.offload,
+                                                     args.disk_offload_dir)).fit(X[take], source_y[take])
             p = clf.predict_proba(Xe)[:, 1]
             probs = p if probs is None else probs + p
         if return_probs:
