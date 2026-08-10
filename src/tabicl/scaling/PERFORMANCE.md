@@ -4273,6 +4273,59 @@ declines to fire costs a pod cycle, and the host has 503 GB).
 methods inside 1.36 points means rank on that task is close to a coin toss, and this
 project's central finding is that validation and test disagree.
 
+### 2026-08-10 — a hunt that cost no GPU time and refuted three things
+
+All four questions below were settled from logs already on disk. Two of them would have
+been a pod round each.
+
+**1. Can the expanded benchmark now validate `--drop-stale-arms`?** No, and it was already
+answered. The rule is worth +0.65 / +0.49 confirmed but needs a coverage threshold chosen
+with test knowledge. rel-stack's coverage ratio is **0.99** — no collapse — and the boundary
+was already measured across rel-ratebeer, rel-arxiv and rel-salt. Reopening it without new
+information would be re-litigating a decided result.
+
+**2. Would one fixed arm beat per-task selection?** No, and validation alone says so. Across
+41 blocks and 207 seed-level picks the arms chosen are **+struct 36%, +rate 23%, base 20%,
++counts 17%, +history 3%** — nothing dominates — and the choice is strongly *task*-specific:
+rel-trial takes `+rate` 89% of the time, rel-f1 takes `base` 91%, rel-avito takes `+struct`
+100%, rel-amazon takes `base` 100%. A single global arm would be badly wrong nearly
+everywhere.
+
+**3. That corrects an overbroad claim of mine.** "The grid cannot distinguish its candidates"
+was measured as a pooled margin-vs-noise ratio, which conflates two different failures.
+Separating the axes:
+
+| | mean gap | exceeds val noise in |
+|---|---:|---:|
+| across arms (best arm vs best other arm) | 0.62 | **12 of 32 blocks** |
+| within one arm (across contexts) | 0.53 | 8 of 32 blocks |
+| val noise | 0.71 | — |
+
+**Arms are distinguishable on a third of blocks and decisively so on some tasks** — rel-trial
+runs 1.6–2.3 against noise 0.66, rel-f1 0.47–0.72 against 0.21–0.42. The honest statement is
+narrower than the one published on 2026-08-08: *contexts* are mostly indistinguishable, which
+is why fixing that axis was free; *arms* carry real task-specific signal, which is why fixing
+that axis would not be.
+
+**4. A parameter-free reconstruction of `--drop-stale-arms`, refuted before it was run.**
+If arms are indistinguishable on some tasks, fall back to `base` whenever the best arm's
+margin over the best *other* arm is within validation noise — no threshold, no test
+knowledge, and it would have made the +0.65 claimable. Checked against what tuning is
+actually worth per task:
+
+| task | gap / noise | rule | tuning worth |
+|---|---:|---|---:|
+| rel-trial / study-outcome | 2.42 | keep | **+2.74** |
+| rel-event / user-ignore | 0.15 | **fall back** | **+1.76** |
+| rel-event / user-repeat | 0.18 | **fall back** | **+0.76** |
+| rel-f1 / driver-top3 | 1.76 | keep | −0.06 |
+| rel-avito / user-visits | 1.03 | keep | −0.11 |
+| rel-avito / user-clicks | 0.44 | **fall back** | **−1.29** |
+
+**It agrees with the sign of tuning on 2 of 6 tasks — worse than a coin flip.** It falls back
+precisely where tuning helps most after rel-trial, and keeps the tuned arm on both tasks
+where tuning is negative. Dead. **Ninth refuted idea, and the first refuted for free.**
+
 ### 2026-08-09 — every gate audited for the same class of bug; two were broken
 
 One question, put to every gate in the pipeline: **does this test's premise hold in every
