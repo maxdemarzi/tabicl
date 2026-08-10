@@ -3267,9 +3267,9 @@ def test_the_added_tasks_cost_us_three_places():
     from tabicl.scaling.rank_table import average_rank, averages, OURS
     # All three were run because they were missing, not because they looked winnable. They
     # drop us 6th -> 9th. Pinned so the cost cannot be quietly undone by a later edit.
-    assert len(OURS) == 11
+    assert len(OURS) == 12
     assert average_rank(list(OURS)) == (9, 10)
-    assert averages(list(OURS))["ours"] == pytest.approx(74.31, abs=0.005)
+    assert averages(list(OURS))["ours"] == pytest.approx(75.10, abs=0.005)
 
 
 def test_a_rising_average_hid_a_falling_rank():
@@ -3279,7 +3279,8 @@ def test_a_rising_average_hid_a_falling_rank():
     # tasks than we did. A reader seeing only "73.46 -> 73.72" would conclude we improved.
     seven = {k: v for k, v in OURS.items()
              if k not in ("rel-hm/user-churn", "rel-stack/user-engagement",
-                          "rel-amazon/user-churn", "rel-amazon/item-churn")}
+                          "rel-amazon/user-churn", "rel-amazon/item-churn",
+                          "rel-stack/user-badge")}
     before, after = averages(list(seven), seven), averages(list(OURS))
     assert after["ours"] > before["ours"]
     assert after["GraphSAGE"] - before["GraphSAGE"] > after["ours"] - before["ours"]
@@ -3298,8 +3299,12 @@ def test_average_refuses_a_task_set_we_have_not_measured():
     from tabicl.scaling.rank_table import averages
     # Averaging every method over 12 tasks while averaging ourselves over 7 is precisely the
     # flattery this table was corrected for once already.
+    # Every task is measured now, so the refusal is exercised with an explicit `ours` that
+    # is missing one -- which is the real situation it guards: averaging every method over
+    # twelve tasks while averaging ourselves over fewer.
+    partial = {"rel-f1/driver-dnf": 69.66}
     with pytest.raises(ValueError):
-        averages(["rel-stack/user-badge", "rel-f1/driver-dnf"])
+        averages(["rel-stack/user-badge", "rel-f1/driver-dnf"], partial)
 
 
 def test_adding_a_task_changes_the_average_row_for_everyone():
@@ -3758,3 +3763,18 @@ def test_asof_handles_an_entirely_disjoint_key_set():
     cutoffs = np.array([pd.Timestamp("2020-03-01")] * 2, dtype="datetime64[ns]")
     out = asof_statistics(tbl, keys, cutoffs)
     assert len(out) == 2
+
+
+
+def test_the_twelve_task_average_reproduces_the_published_column():
+    from tabicl.scaling.rank_table import averages, OURS, FIELD
+    # The decisive cross-check on every field figure transcribed into this module: with all
+    # twelve tasks present, our computed averages must equal Table 14's own Avg AUROC column
+    # exactly. If a single cell were mistyped this would not hold.
+    published = {"RelGNN": 78.06, "RelGT": 76.65, "GraphSAGE": 75.83, "Griffin": 66.29,
+                 "RDBLearn": 75.55, "RDBLearn+v2.5": 75.31, "RDBLearn+v3": 76.01,
+                 "KumoRFMv2": 75.91, "TabPFN-REL": 76.91}
+    assert len(OURS) == len(FIELD) == 12
+    got = averages(list(FIELD))
+    for method, expected in published.items():
+        assert got[method] == pytest.approx(expected, abs=0.005), method

@@ -67,10 +67,16 @@ OURS: dict[str, float] = {
     # pd.factorize after the controls had already run. Its leak controls excluded five of
     # seven arms, so this is a `base`-only result at 55 columns.
     "rel-amazon/item-churn": 80.20,
+    # Added 2026-08-09, the twelfth and last. Six attempts: --row-chunk, --offload cpu,
+    # --offload disk and --train-pool all bound the model or the fit pool and all failed
+    # rc=137. What unblocked it was dropping child rows whose key is never queried, which
+    # bounds the AGGREGATION. Four salvaged replicates.
+    "rel-stack/user-badge": 83.80,
 }
 
 # Tasks measured with fewer than the standard five replicates, and how many they got.
-PARTIAL_SEEDS: dict[str, int] = {"rel-stack/user-engagement": 4}
+PARTIAL_SEEDS: dict[str, int] = {"rel-stack/user-engagement": 4,
+                                 "rel-stack/user-badge": 4}
 
 
 def rank(score: float, task: str) -> tuple[int, int]:

@@ -16,7 +16,7 @@ feature spec, fit set, and the one thing that changed.
 
 ## Standing vs published results (updated 2026-08-06)
 
-RelBench, official protocol. Test ROC-AUC ×100. **Eleven** of RelBenchV1's twelve entity
+RelBench, official protocol. Test ROC-AUC ×100. **All twelve** of RelBenchV1's entity
 classification tasks. Comparison figures are the TabPFN-3 report's Table 14 (arXiv
 2605.13986), **complete** except for KumoRFMv1 and RTzero, which the report itself flags as
 following a different evaluation protocol that overestimates performance.
@@ -36,16 +36,26 @@ field is shown here, with our rank in it.
 | rel-f1 / driver-dnf ◆ | **69.66** | 9/10 | 69.95 ⁿ⁶ | — | 75.29 | **75.87** | 72.62 | 57.70 | 70.87 | 71.72 | 71.72 | 72.03 | 70.74 |
 | rel-hm / user-churn ◆◆ | **66.75** | 9/10 | — | — | **70.93** | 69.27 | 69.88 | 60.20 | 68.05 | 70.11 | 70.06 | 67.81 | 70.55 |
 | rel-stack / user-engagement ◆◆ | **89.33** ⁴ | 8/10 | — | — | **90.75** | 90.53 | 90.59 | 77.50 | 89.39 | 90.23 | 90.59 | 88.69 | 90.66 |
+| rel-stack / user-badge ◆◆ | **83.80** ⁴⁵ | 8/10 | — | — | **88.98** | 86.32 | 88.86 | 73.50 | 85.26 | 82.81 | 85.98 | 85.40 | 85.17 |
 | rel-amazon / user-churn ◆◆ | **66.94** | 9/10 | — | — | **70.99** | 70.39 | 70.42 | 62.30 | 67.57 | 69.74 | 69.35 | 67.71 | 70.27 |
 | rel-amazon / item-churn ◆◆ | **80.20** ⁵ | 8/10 | — | — | 82.64 | 82.55 | **82.81** | 69.00 | 82.07 | 82.18 | 82.46 | 80.18 | **82.81** |
-| **average** ¶ | **74.31** | **9/10** | — | — | **77.07** | 75.77 | 74.64 | 65.63 | 74.66 | 74.62 | 75.10 | 75.05 | 76.15 |
+| **average** ¶ | **75.10** | **9/10** | — | — | **78.06** | 76.65 | 75.83 | 66.29 | 75.55 | 75.31 | 76.01 | 75.91 | 76.91 |
 
-**Median rank 8 of 10.** Ranks: 3, 4, 6, 7, 8, 8, 8, 8, 9, 9, 9. Bold in the comparison columns marks
+**Median rank 8 of 10.** Ranks: 3, 4, 6, 7, 8, 8, 8, 8, 8, 9, 9, 9. Bold in the comparison columns marks
 the best method for that task; **we never hold it.**
 
-¶ **The average row is over these eleven tasks only, for every method — so it is internally
-comparable but is _not_ the report's Avg AUROC, which covers twelve.** Its rank cell is our
+¶ **The average row now covers all twelve tasks, so it IS the report's Avg AUROC.** The
+cross-check is exact: our computed averages reproduce Table 14's own `Avg AUROC` column to
+the digit for all nine methods — RelGNN 78.06, TabPFN-REL 76.91, RelGT 76.65, RDBLearn+v3
+76.01, KumoRFMv2 75.91, GraphSAGE 75.83, RDBLearn 75.55, RDBLearn+v2.5 75.31, Griffin 66.29.
+That validates every field figure transcribed here, and makes this row directly comparable
+to the published one — which the seven-, eight-, ten- and eleven-task versions never were. Its rank cell is our
 standing among the ten methods' averages, on the same rule as every other row.
+
+⁴⁵ Four salvaged replicates *and* `--train-pool 300000`. Six attempts: `--row-chunk auto`,
+`--offload cpu`, `--offload disk` and `--train-pool` all bound the model or the fit pool and
+all died `rc=137`. What unblocked it was dropping child rows whose key is never queried,
+which bounds the **aggregation** — exact, since those rows live only in blocks never indexed.
 
 ⁵ Measured with `--train-pool 300000` (2,536,014 → 300,000) so feature construction fit,
 and with rel-amazon's array-valued column dropped. Its leak controls excluded five of seven
@@ -73,7 +83,16 @@ Griffin** — the method that scores 45.90 and 51.00 elsewhere.
 history rather than design. Nothing was tuned to them; they were simply the ones that got
 run. That is enough.
 
-**Eleven of twelve, 2026-08-09.** rel-amazon/item-churn came in at 80.20 (8th) and moved the
+**TWELVE OF TWELVE, 2026-08-09.** rel-stack/user-badge came in at 83.80 (8th) on the sixth
+attempt. The benchmark is complete: **9th of 10 on a twelve-task average of 75.10**, median
+rank 8, ranks 3, 4, 6, 7, 8, 8, 8, 8, 8, 9, 9, 9.
+
+**The five tasks added since the original seven placed 8th, 8th, 8th, 9th and 9th — every
+one at or below our published median.** They were run because they were missing, not because
+they looked winnable. The seven reported for months were a flattering subset, and the
+published 6th of 10 was wrong by three places.
+
+**Eleven of twelve, earlier the same day.** rel-amazon/item-churn came in at 80.20 (8th) and moved the
 average 73.72 → 74.31 with our standing unchanged at **9th of 10**. The pattern is now
 consistent across every task added since the original seven: **we place 8th or 9th on all
 four of them.** Ranks across eleven tasks are 3, 4, 6, 7, 8, 8, 8, 8, 9, 9, 9 — two good
@@ -196,7 +215,7 @@ advice; ten methods remain, including us):
 | rel-avito / user-clicks ◆ | 65.89 | 8 of 10 | 69.06 RDBLearn+v3 | RDBLearn+v3, RDBLearn, RelGT, RelGNN, KumoRFMv2, TabPFN-REL, GraphSAGE |
 | rel-f1 / driver-dnf ◆ | 69.66 | 9 of 10 | 75.87 RelGT | RelGT, RelGNN, GraphSAGE, KumoRFMv2, RDBLearn+v2.5, RDBLearn+v3, RDBLearn, TabPFN-REL |
 
-◆ new on 2026-08-06. **Median rank 8 of 10.** Ranks: 3, 4, 6, 7, 8, 8, 8, 8, 9, 9, 9.
+◆ new on 2026-08-06. **Median rank 8 of 10.** Ranks: 3, 4, 6, 7, 8, 8, 8, 8, 8, 9, 9, 9.
 
 **This is a materially worse position than this file has been describing**, and the three
 new tasks are why it is now visible: running only four tasks, two of which we happen to do
