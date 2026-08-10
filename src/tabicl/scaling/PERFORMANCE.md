@@ -4317,6 +4317,56 @@ declines to fire costs a pod cycle, and the host has 503 GB).
 methods inside 1.36 points means rank on that task is close to a coin toss, and this
 project's central finding is that validation and test disagree.
 
+### 2026-08-10 — kNN context selection: real on fixed arms, gone after selection (tenth time)
+
+**The axis had never been tested.** Every context experiment here varied SIZE
+(`--context-grid`) or ORDER (`random`/`recent`); which ROWS go in had not been tried, and
+`select_context` sat in `_retrieval.py` unreachable from the runner.
+
+**Fixed arms, rel-avito/user-visits, 12 seeds, paired by seed** — the task where the pool is
+86,619 against a context of 10,000, so selection can actually differ from a random draw:
+
+| arm | random | kNN | Δ | SE | t | positive |
+|---|---:|---:|---:|---:|---:|---:|
+| base | 66.04 | 66.60 | +0.57 | 0.21 | **2.68** | 10/12 |
+| +struct | 65.64 | 65.89 | +0.25 | 0.07 | **3.62** | 11/12 |
+| +counts | 65.78 | 66.17 | +0.39 | 0.16 | **2.45** | 7/12 |
+| +rate | 65.62 | 66.20 | +0.58 | 0.22 | **2.64** | 9/12 |
+| +history | 65.34 | 65.44 | +0.09 | 0.11 | 0.82 | 8/12 |
+
+Four of five arms clear t > 2.4 and all five point the same way, replicated independently in
+a second lane (base 66.68 vs 66.60). **The effect is real.**
+
+**Calibrated, 8 replicates, same round:**
+
+| task | random | kNN | Δ |
+|---|---:|---:|---:|
+| rel-avito / user-visits | 65.64 ± 0.26 | 65.71 ± 0.20 | **+0.07** |
+| rel-avito / user-clicks | 65.63 ± 0.38 | 65.96 ± 0.18 | **+0.33** |
+
+**+0.57 on fixed arms becomes +0.20 after selection.** Tenth instance of the pattern.
+
+**And the argument for why this one should have been different was wrong, which is the part
+worth keeping.** Nine features helped SOME arms and not others, so validation could route
+around them — measured on this very task, where depth-2 gains +0.61 on `base` at t = 4.72
+and the calibrated result moves −0.06. A context change helps EVERY arm uniformly, so there
+is no unaffected arm to escape to. It helped all five arms and the calibrated result still
+did not move. **Uniformity is not sufficient; the dilution has another source**, and the
+likeliest is the context grid: the fixed-arm runs use 10,000 while the calibrated protocol
+sweeps 2,500/5,000/10,000, so the gain is measured at one size and averaged over three.
+
+**One real secondary effect: it halves the variance.** sd 0.38 → 0.18 on user-clicks and
+0.26 → 0.20 on user-visits. The same shape as the context-grid result — no accuracy, less
+spread — and for the same reason, that removing a lottery removes its contribution to
+seed-to-seed noise.
+
+**What this does NOT close.** Thomas et al. (arXiv 2406.05207) ablate retrieval at
+**20–1000 neighbours**; our smallest grid entry is 2,500 and these runs used 10,000. We have
+tested retrieval only in a regime the literature does not claim it works in — and this
+project's own rel-event measurement (recency worth **+7.50 at context 1,000** against +0.31
+at 10,000) says small selected contexts can be worth far more than large ones. That is a
+separate experiment and it is running.
+
 ### 2026-08-10 — compression is not an alternative to deletion: TabICL needs the columns
 
 **Eleventh refutation, and it says something about the backbone rather than about a feature.**
