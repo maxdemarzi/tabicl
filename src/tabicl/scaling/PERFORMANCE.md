@@ -4317,6 +4317,40 @@ declines to fire costs a pod cycle, and the host has 503 GB).
 methods inside 1.36 points means rank on that task is close to a coin toss, and this
 project's central finding is that validation and test disagree.
 
+### 2026-08-10 — compression is not an alternative to deletion: TabICL needs the columns
+
+**Eleventh refutation, and it says something about the backbone rather than about a feature.**
+
+`--max-columns` reaches a workable width by *deleting* source columns; three of four
+databases run it at 2, so most of every child table never reaches the model. GOTabPFN
+(arXiv 2606.05441) does the opposite for a frozen backbone: keep every column and project.
+Tested at equal width, StandardScaler + PCA fitted on train only, 12 seeds, fixed arms:
+
+| task | arm | selection | projection | Δ | widths |
+|---|---|---:|---:|---:|---|
+| rel-trial | base | 69.77 | 66.81 | **−2.96** | 134 → 128 |
+| rel-trial | +struct | 70.97 | 65.08 | **−5.89** | 139 → 128 |
+| rel-trial | +rate | 72.80 | 68.04 | **−4.76** | 149 → 128 |
+| rel-trial | +history | 73.06 | 66.97 | **−6.09** | 154 → 128 |
+| rel-avito/user-visits | base | 66.04 | 64.08 | **−1.96** | 176 → 128 |
+| rel-avito/user-visits | +history | 65.34 | 62.94 | **−2.40** | 192 → 128 |
+
+**Ten of ten arm-task pairs negative.** The decisive case is rel-trial, where the widths are
+**134 against 128** — near-identical — and the loss is still 3 to 6 points. **This is not a
+width effect.**
+
+**What it says: TabICL is not a generic function approximator over an abstract feature
+space.** It is an *in-context* tabular model, and a principal component is not a column —
+it has no stable identity across rows to attend over, no marginal distribution the prior
+recognises, no semantics. Coverage-ranked raw columns keep all of that; a rotation of them
+destroys it. The pessimistic branch was pre-registered on exactly this reasoning.
+
+**The practical consequence is that `--max-columns` is not a weakness to be engineered
+around.** Deleting columns is a bad-looking rescue that is nonetheless the *right* one for
+this backbone, and the information it discards cannot be recovered by projecting instead.
+Anyone reaching for dimensionality reduction in front of a tabular foundation model should
+measure this first.
+
 ### 2026-08-10 — NFA: the literature's within-table structure is worth nothing here
 
 **Tenth refutation, and the first taken from a paper rather than invented.**
