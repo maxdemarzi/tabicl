@@ -774,6 +774,30 @@ def asof_statistics(
 
     child = _coerce_booleans(child)
     df = child.df
+
+    # Drop child rows whose key is never queried, BEFORE any prefix array is built.
+    #
+    # Exact, not approximate. Every lookup below is confined to
+    # ``starts[entity_key] : starts[entity_key + 1]`` -- a row whose key appears in no
+    # entity row lives only in blocks that are never indexed, so removing it cannot change
+    # a single output value. The one thing it does move is the variance pivot
+    # (``values[finite].mean()``), which shifts rounding only: variance is shift-invariant
+    # and the mean is shifted back. Computing that pivot over the rows actually used is if
+    # anything better conditioned.
+    #
+    # The cost this removes is the whole reason rel-stack/user-badge has no number. The
+    # prefix arrays are three float64 columns plus a count over ``len(df)`` -- the FULL
+    # child table -- while rel-stack's postHistory, votes, comments and posts run to
+    # millions of rows each and span every user in the database. The query set is at most
+    # the entity rows, and with ``--train-pool`` it is far smaller than that. Five attempts
+    # at this task failed on memory with --row-chunk, --offload cpu, --offload disk and
+    # --train-pool, because all four bound the model or the fit pool and none of them
+    # bound the aggregation.
+    if len(df):
+        needed = pd.unique(keys)
+        mask = df[child.foreign_key].isin(needed).to_numpy()
+        if not mask.all():
+            df = df.loc[mask]
     if columns is None:
         excluded = {child.foreign_key, child.time_column, child.primary_key}
         columns = _budgeted_columns(child, df, [

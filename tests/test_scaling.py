@@ -3690,3 +3690,71 @@ def test_the_two_control_changes_pull_in_opposite_directions():
     assert temporal_control(lambda s: {0.0: 0.3236, 30.0: 0.3388}[s],
                             shifts=(0.0, 30.0)).passed is True     # was LEAK
     assert permutation_control(lambda labels: 0.4415, y, n_permutations=3).passed is False  # was PASS
+
+
+# --- as-of aggregation: child rows for unqueried keys are dead weight -------------------
+# The prefix arrays are built over the FULL child table -- three float64 columns plus a
+# count over len(df) -- while every lookup is confined to one key's block. rel-stack's child
+# tables run to millions of rows spanning every user in the database, which is why
+# user-badge failed on memory under --row-chunk, --offload and --train-pool alike: all of
+# those bound the model or the fit pool, none bound the aggregation.
+
+def _asof_frame():
+    import numpy as np
+    import pandas as pd
+    from tabicl.scaling import Table
+    rng = np.random.default_rng(0)
+    n = 400
+    df = pd.DataFrame({
+        "uid": rng.integers(0, 40, n),
+        "ts": pd.to_datetime("2020-01-01") + pd.to_timedelta(rng.integers(0, 100, n), "D"),
+        "v": rng.normal(1000.0, 5.0, n),
+    })
+    return Table(df, foreign_key="uid", name="ev", time_column="ts")
+
+
+def test_asof_is_unchanged_by_dropping_unqueried_keys():
+    import numpy as np
+    import pandas as pd
+    from tabicl.scaling import asof_statistics
+    # The exactness claim, tested directly: aggregating over the full child table and over
+    # a child table pre-filtered to the queried keys must agree, because rows of other keys
+    # live only in blocks that are never indexed.
+    tbl = _asof_frame()
+    keys = np.array([1, 2, 3, 5, 8])
+    cutoffs = np.array([pd.Timestamp("2020-03-01")] * len(keys), dtype="datetime64[ns]")
+    full = asof_statistics(tbl, keys, cutoffs)
+
+    from dataclasses import replace
+    pre = replace(tbl, df=tbl.df[tbl.df["uid"].isin(keys)].reset_index(drop=True))
+    trimmed = asof_statistics(pre, keys, cutoffs)
+
+    assert list(full.columns) == list(trimmed.columns)
+    pd.testing.assert_frame_equal(full.reset_index(drop=True),
+                                  trimmed.reset_index(drop=True),
+                                  check_exact=False, rtol=1e-9, atol=1e-9)
+
+
+def test_asof_still_correct_when_a_key_has_no_child_rows():
+    import numpy as np
+    import pandas as pd
+    from tabicl.scaling import asof_statistics
+    # The filter must not turn "key present but no rows before the cutoff" into a missing
+    # row: a key with nothing to aggregate still needs an output row.
+    tbl = _asof_frame()
+    keys = np.array([1, 9999])            # 9999 appears in no child row at all
+    cutoffs = np.array([pd.Timestamp("2020-03-01")] * 2, dtype="datetime64[ns]")
+    out = asof_statistics(tbl, keys, cutoffs)
+    assert len(out) == 2
+
+
+def test_asof_handles_an_entirely_disjoint_key_set():
+    import numpy as np
+    import pandas as pd
+    from tabicl.scaling import asof_statistics
+    # Every child row filtered away. Must still return one row per query rather than raise.
+    tbl = _asof_frame()
+    keys = np.array([5000, 5001])
+    cutoffs = np.array([pd.Timestamp("2020-03-01")] * 2, dtype="datetime64[ns]")
+    out = asof_statistics(tbl, keys, cutoffs)
+    assert len(out) == 2
