@@ -380,6 +380,10 @@ def _tabfm(device: str):
     That happened once already; the check is structural rather than remembered.
     """
     global _TABFM
+    # torch is imported inside main(), not at module scope, so this helper must import it
+    # itself. Without this the CPU guard raises NameError -- and it does so only on the
+    # tabfm path, so every TabICL arm passes and the failure looks like a TabFM problem.
+    import torch
     if _TABFM is None:
         from tabfm import tabfm_v1_0_0_pytorch as tabfm_v1_0_0
         _TABFM = tabfm_v1_0_0.load(device=device)
