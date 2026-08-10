@@ -1225,6 +1225,7 @@ def neighbour_aggregates(
     group_columns: Sequence[str],
     value_columns: Optional[Sequence[str]] = None,
     windows: Optional[Sequence[pd.Timedelta]] = None,
+    keep_stats: Optional[Sequence[str]] = None,
 ) -> pd.DataFrame:
     """Time-aware Neighbourhood Feature Aggregation: aggregate over rows sharing a value.
 
@@ -1279,6 +1280,14 @@ def neighbour_aggregates(
         block = asof_statistics(tbl, keys, cutoffs)
         # `asof_statistics` already prefixes with the table name (`nfa_<col>`), so do
         # not prefix again -- `nfa_country__nfa_country__count` helps nobody.
+        if keep_stats is not None:
+            # Width is not free on this pipeline. The same column budget is worth +3.0 on
+            # one task here and -19.5 on another, and the full menu emits
+            # count/sum/mean/std/min/max/nunique per value column per window -- 150 columns
+            # on rel-trial, against a base measured at max_columns=2. `keep_stats` selects
+            # suffixes so the neighbourhood can be tested at a width the model can carry.
+            block = block[[c for c in block.columns
+                           if any(c.endswith(s) for s in keep_stats)]]
         out.update({c: block[c].to_numpy() for c in block.columns})
     return pd.DataFrame(out, index=entity.index)
 

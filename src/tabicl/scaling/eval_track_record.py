@@ -554,6 +554,12 @@ def main() -> None:
                     help="how many grouping columns --self-join may use, chosen by non-null "
                          "coverage among columns that are neither near-unique nor "
                          "near-constant.")
+    ap.add_argument("--self-join-narrow", action="store_true",
+                    help="emit only neighbourhood COUNT and MEAN, all-history, no windows. "
+                         "The full menu is 150 columns on rel-trial against a base measured "
+                         "at --max-columns 2, and width is not free here: the same budget "
+                         "is worth +3.0 on one task and -19.5 on another. Use this to test "
+                         "the neighbourhood rather than the column count.")
     ap.add_argument("--drop-stale-arms", action="store_true",
                     help="exclude history-dependent arms when the shared-key block's "
                          "COVERAGE collapses between validation and test. Label-free: reads "
@@ -1239,8 +1245,10 @@ def main() -> None:
                      and not pd.api.types.is_bool_dtype(pool[c])]
             print(f"  --self-join: grouping on {gcols}, aggregating {len(vcols)} numeric "
                   f"columns over {len(pool):,} rows", flush=True)
-            blk = neighbour_aggregates(pool, tcol, gcols, value_columns=vcols,
-                                       windows=WINDOWS)
+            blk = neighbour_aggregates(
+                pool, tcol, gcols, value_columns=vcols,
+                windows=None if args.self_join_narrow else WINDOWS,
+                keep_stats=("__count", "__mean") if args.self_join_narrow else None)
             nfa_tr = blk[pool["__split"] == 0].reset_index(drop=True)
             nfa_te = blk[pool["__split"] == 1].reset_index(drop=True)
             nfa_va = blk[pool["__split"] == 2].reset_index(drop=True)
