@@ -424,6 +424,58 @@ MQA KV cache is 8x smaller at `nhead=8`, exactly as the arithmetic predicts.
 
 Test-time compute: +0.006 log-loss for ~4.6x compute.
 
+## What we know about the backbone itself (2026-08-10)
+
+Five papers were read for leads and four of the resulting experiments failed. The failures
+were informative in a way the successes were not: they characterise **TabICL v2**, which is
+the checkpoint this runner loads, rather than any feature of ours.
+
+**1. Width is the most expensive resource in this pipeline.** Adding 150 columns to
+rel-trial cost **−3.36**; the same block at 18 columns cost **−0.10**. That is why
+`--max-columns` runs at 2 on three of four databases — not a tuning preference but a rescue.
+
+**2. You cannot compress your way out of it.** Replacing raw columns with PCA components at
+*equal width* lost **3 to 6 points on ten of ten arm-task pairs** — including rel-trial at
+134 columns against 128, where width is essentially unchanged. **A principal component is
+not a column**: it has no stable identity to attend over across rows, no marginal
+distribution the pretraining prior recognises, no semantics. Coverage-ranked raw columns
+keep all of that; a rotation destroys it.
+
+**3. That is a property of this model's prior, not a law of tabular ICL.** TabH2O (arXiv
+2605.18383) lists *"noise-aware pretraining — synthetic datasets include explicit noise
+dimensions to teach the model robustness to irrelevant features"* as a deliberate departure
+from the TabICL architecture it builds on. So width-sensitivity is something TabICL v2 was
+not trained against. **"Keep the feature set narrow" is advice about this backbone**, and a
+future one may not need it.
+
+**4. TabICL v2 is the strongest openly available option we have.** On TALENT's 300 datasets
+TabH2O reports average rank **TabICL v2 2.12**, TabH2O 2.55, TabPFN v2.6 2.74, tuned
+CatBoost 4.07. A backbone swap to TabH2O would be a downgrade by its authors' own numbers,
+and its stated envelope (≤500k rows, ≤100 features) excludes our tasks anyway. The remaining
+backbone lever is TabPFN-3, which is licence-gated.
+
+**5. Retrieval helps the model, but only where the model is already fine.** kNN context
+selection is real on fixed arms (+0.57, t = 2.68) and worth **+0.20** after selection.
+Thomas et al. (arXiv 2406.05207) ablate retrieval at **20–1000 neighbours** and get their
+headline gain only when retrieval is *combined with fine-tuning*; we run 10,000 and cannot
+fine-tune.
+
+### A tighter instrument is the one thing that keeps working
+
+Two independent interventions are now measured as **accuracy-neutral and variance-halving**:
+
+| change | accuracy | seed-to-seed sd |
+|---|---|---|
+| single context instead of a 3-point grid | −0.19 (null) | 1.20 → **0.59** |
+| kNN context selection | +0.20 (null) | 0.38 → **0.18** on user-clicks |
+
+Neither moves a number, and on a benchmark where every real effect sits near the ±0.6 floor
+that is not nothing: **the binding constraint on this project has been the ability to
+resolve small effects at all.** Nine of the eleven refutations were decided against that
+floor. An instrument two to three times tighter would let a +0.3 effect be distinguished
+from zero, which is currently impossible — and both changes are free, one of them 3× cheaper
+than the status quo. Whether they compose has not been measured.
+
 ## Compiled backend
 
 `_wcoj_native.cpp` implements the Umbra hash worst-case-optimal join (Freitag et al.,
