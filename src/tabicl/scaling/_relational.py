@@ -1185,6 +1185,103 @@ def _extremes(out, label, columns, df, order, hi_idx, lo_idx) -> None:
         out[f"{label}__{col}__max"] = maxs
 
 
+
+def nfa_columns(df: pd.DataFrame, exclude: Sequence[str] = (), max_share: float = 0.5,
+                min_group: float = 5.0, max_columns: int = 4) -> list[str]:
+    """Pick grouping columns for :func:`neighbour_aggregates`, using no labels.
+
+    A column is usable when its groups are neither everything nor nothing: at least two
+    distinct values, no single value covering more than ``max_share`` of rows (a
+    near-constant column makes one global group and the aggregate degenerates to a dataset
+    mean), and a mean group size of at least ``min_group`` (a near-unique column makes every
+    row its own group and the aggregate is empty).
+
+    Ranked by non-null coverage, descending, ties broken by name -- the same target-free,
+    deterministic rule ``max_columns`` already uses on the join path, so it cannot leak and
+    two runs cannot disagree.
+    """
+    exclude = set(exclude)
+    scored = []
+    for col in df.columns:
+        if col in exclude or pd.api.types.is_datetime64_any_dtype(df[col]):
+            continue
+        s = df[col]
+        if pd.api.types.is_float_dtype(s):
+            continue                        # continuous values do not group
+        counts = s.value_counts(dropna=True)
+        if len(counts) < 2:
+            continue
+        n = int(s.notna().sum())
+        if not n or counts.iloc[0] / n > max_share or n / len(counts) < min_group:
+            continue
+        scored.append((s.notna().mean(), col))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [c for _, c in scored[:max_columns]]
+
+
+def neighbour_aggregates(
+    entity: pd.DataFrame,
+    time_column: str,
+    group_columns: Sequence[str],
+    value_columns: Optional[Sequence[str]] = None,
+    windows: Optional[Sequence[pd.Timedelta]] = None,
+) -> pd.DataFrame:
+    """Time-aware Neighbourhood Feature Aggregation: aggregate over rows sharing a value.
+
+    Every traversal this package builds -- entity to child, to grandchild, to parent's
+    sibling, fact by dimension -- leaves the entity table through a foreign key. This one
+    does not. Two entity rows are neighbours when they **share a value in some column**,
+    which is the incidence graph of Cucumides & Geerts, *Grables: Tabular Learning Beyond
+    Independent Rows* (arXiv 2602.03945), and aggregating over that neighbourhood is their
+    NFA constructor after Bazhenov et al. (2025). The graph is then discarded: the output is
+    ordinary columns, and the downstream learner stays purely tabular.
+
+    Their measurement is the reason this is worth building. On ``relbench-trial``, fixed
+    aggregations over *within-table* structure (``Tab+NFA(T)``, test-AUC 0.7254) beat
+    row-local LightGBM (0.7009), every GNN baseline (0.6860, 0.6861), a relational
+    foundation model (0.7079, 0.7116 finetuned), **and** learned message passing over the
+    *cross-table* structure this package already builds (``Tab+GNN(DB)``, 0.7180). The two
+    sources compose: 0.7486 together.
+
+    The implementation is a reduction rather than a new algorithm. For a single column,
+    "rows sharing value *a*" is a GROUP BY on that column, so the neighbourhood aggregate is
+    an as-of aggregation of the entity table **onto itself**, keyed by that column. That
+    reuses :func:`asof_statistics` whole, including its windows and its O(n log n) scan.
+
+    **Causality holds by construction, not by check.** An entity row's cutoff is its own
+    timestamp, and the as-of scan counts rows strictly earlier (``side="left"``), so a row
+    is never its own neighbour and never sees a contemporaneous one. This package prefers a
+    leak made impossible to a leak tested for, and this is the former.
+    """
+    if time_column not in entity.columns:
+        raise ValueError(f"entity frame has no time column {time_column!r}")
+    if value_columns is None:
+        value_columns = [c for c in entity.columns
+                         if c not in set(group_columns) | {time_column}
+                         and pd.api.types.is_numeric_dtype(entity[c])
+                         and not pd.api.types.is_bool_dtype(entity[c])]
+    cutoffs = entity[time_column].to_numpy()
+    out = {}
+    for col in group_columns:
+        keys = entity[col].to_numpy(dtype=object).copy()
+        # Rows with no value for this column share nothing. Give them a sentinel that
+        # appears in no child row, so they resolve to an empty block and zero neighbours --
+        # rather than all joining each other, which would make "missing" a category.
+        missing = pd.isna(entity[col]).to_numpy()
+        keys[missing] = "__nfa_missing_sentinel__"
+        child_df = entity.loc[~missing, [col, time_column, *value_columns]]
+        if child_df.empty:
+            continue
+        # `windows=[]`, never None: `asof_statistics` iterates `child.windows` directly and
+        # None is not iterable. All-history statistics are produced either way.
+        tbl = Table(child_df, foreign_key=col, name=f"nfa_{col}", time_column=time_column,
+                    windows=list(windows) if windows else [])
+        block = asof_statistics(tbl, keys, cutoffs)
+        # `asof_statistics` already prefixes with the table name (`nfa_<col>`), so do
+        # not prefix again -- `nfa_country__nfa_country__count` helps nobody.
+        out.update({c: block[c].to_numpy() for c in block.columns})
+    return pd.DataFrame(out, index=entity.index)
+
 def two_hop_table(
     grandchild: pd.DataFrame,
     grandchild_fk: str,

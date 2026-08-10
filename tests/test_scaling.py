@@ -3778,3 +3778,83 @@ def test_the_twelve_task_average_reproduces_the_published_column():
     got = averages(list(FIELD))
     for method, expected in published.items():
         assert got[method] == pytest.approx(expected, abs=0.005), method
+
+
+# --- NFA: the one traversal shape this package never had -------------------------------
+# Every existing traversal leaves the entity table through a foreign key. This one links
+# entity rows to EACH OTHER by shared attribute values -- the incidence graph of Cucumides &
+# Geerts, "Grables: Tabular Learning Beyond Independent Rows" (arXiv 2602.03945). On
+# relbench-trial their fixed within-table aggregations (0.7254) beat row-local LightGBM
+# (0.7009), every GNN baseline (0.6860, 0.6861) and learned message passing over the
+# cross-table structure we already build (0.7180).
+
+def _nfa_frame(n=200, seed=0):
+    import numpy as np
+    import pandas as pd
+    rng = np.random.default_rng(seed)
+    return pd.DataFrame({
+        "sponsor": rng.choice([f"s{i}" for i in range(10)], n),
+        "unique_id": [f"u{i}" for i in range(n)],
+        "constant": ["x"] * n,
+        "ts": pd.to_datetime("2020-01-01") + pd.to_timedelta(rng.integers(0, 300, n), "D"),
+        "value": rng.normal(50.0, 10.0, n),
+    })
+
+
+def test_nfa_columns_rejects_near_unique_and_near_constant():
+    from tabicl.scaling._relational import nfa_columns
+    # A near-unique column gives every row its own group and aggregates over nothing; a
+    # near-constant one gives a single global group and the aggregate degenerates to a
+    # dataset mean. Both are useless and both are cheap to exclude without labels.
+    cols = nfa_columns(_nfa_frame(), exclude=["ts"])
+    assert "sponsor" in cols
+    assert "unique_id" not in cols and "constant" not in cols
+
+
+def test_nfa_never_lets_a_row_see_itself_or_its_present():
+    import numpy as np
+    from tabicl.scaling._relational import neighbour_aggregates
+    # Causality by construction, not by check: an entity row's cutoff IS its timestamp and
+    # the as-of scan counts strictly earlier rows, so the earliest row in every group must
+    # see zero neighbours. No control can be fooled because there is nothing to fool.
+    df = _nfa_frame()
+    out = neighbour_aggregates(df, "ts", ["sponsor"], value_columns=["value"])
+    cnt = next(c for c in out.columns if c.endswith("__count"))
+    earliest = df.groupby("sponsor")["ts"].idxmin()
+    assert (out.loc[earliest, cnt].to_numpy() == 0).all()
+
+
+def test_nfa_aggregates_only_over_rows_sharing_the_value():
+    import numpy as np
+    import pandas as pd
+    from tabicl.scaling._relational import neighbour_aggregates
+    # Two groups with deliberately different values: each row's neighbour mean must come
+    # from its OWN group. A join that crossed groups would land between 10 and 100.
+    df = pd.DataFrame({
+        "g": ["a", "a", "a", "b", "b", "b"],
+        "ts": pd.to_datetime(["2020-01-01", "2020-01-02", "2020-01-03"] * 2),
+        "v": [10.0, 10.0, 10.0, 100.0, 100.0, 100.0],
+    })
+    out = neighbour_aggregates(df, "ts", ["g"], value_columns=["v"])
+    mean = next(c for c in out.columns if c.endswith("v__mean"))
+    assert out[mean].iloc[2] == pytest.approx(10.0)     # third 'a' row sees two 'a' rows
+    assert out[mean].iloc[5] == pytest.approx(100.0)    # third 'b' row sees two 'b' rows
+
+
+def test_nfa_missing_values_do_not_become_a_category():
+    import numpy as np
+    import pandas as pd
+    from tabicl.scaling._relational import neighbour_aggregates
+    # Rows missing the grouping value share nothing. Treating NaN as a value would make
+    # "missing" a category and join every incomplete row to every other -- a large, entirely
+    # spurious neighbourhood.
+    df = pd.DataFrame({
+        "g": [None, None, None, "a", "a"],
+        "ts": pd.to_datetime(["2020-01-01", "2020-01-02", "2020-01-03",
+                              "2020-01-01", "2020-01-02"]),
+        "v": [1.0, 2.0, 3.0, 4.0, 5.0],
+    })
+    out = neighbour_aggregates(df, "ts", ["g"], value_columns=["v"])
+    cnt = next(c for c in out.columns if c.endswith("__count"))
+    assert (out[cnt].iloc[:3].to_numpy() == 0).all()    # the NaN rows see nobody
+    assert out[cnt].iloc[4] == 1                        # the second 'a' row sees the first
