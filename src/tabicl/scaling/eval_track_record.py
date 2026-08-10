@@ -211,6 +211,46 @@ def _numeric(df: pd.DataFrame, fit: bool = False, tag: str = "") -> np.ndarray:
     return np.nan_to_num(out.to_numpy(dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
 
 
+_COMPRESSORS: dict = {}
+
+
+def compress_fit_apply(name: str, X: np.ndarray, k: int, fit: bool) -> np.ndarray:
+    """Narrow a feature matrix by COMPRESSION instead of by SELECTION.
+
+    ``--max-columns`` reaches a workable width by deleting source columns, ranked by
+    coverage. That is target-free and cheap, and it throws information away: on three of
+    four databases the standing configuration runs at ``max_columns=2``, so most of each
+    child table never reaches the model at all.
+
+    The alternative, from GOTabPFN (arXiv 2606.05441), is to keep every column and project
+    to the same width. Their setting is high-dimensional low-sample biomedical data and
+    their headline numbers do not transfer, but the mechanism is ours: a PCA-style
+    compression in front of a **frozen** backbone, no retraining. And the problem is one
+    this project measured directly -- 150 extra columns cost -3.36 on rel-trial while the
+    same block at 18 columns cost -0.10, so width is expensive and the budget is paying for
+    it by deletion.
+
+    **Fitted on TRAIN ONLY and reused**, keyed by arm. Fitting per split would let test rows
+    choose their own projection, which is the same leak the text block avoids by fitting its
+    vectoriser on train alone -- and it would make the val arm mean something different from
+    the test arm, the failure this project traced its val/test inversion to.
+    """
+    from sklearn.decomposition import PCA
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    if X.shape[1] <= k:
+        return X
+    if fit:
+        pipe = make_pipeline(StandardScaler(), PCA(n_components=k, random_state=0))
+        pipe.fit(X)
+        _COMPRESSORS[name] = pipe
+    pipe = _COMPRESSORS.get(name)
+    if pipe is None:
+        return X
+    return pipe.transform(X)
+
+
 def abstention_choice(split_val: dict) -> tuple[tuple | None, tuple | None, bool]:
     """Keep the tuned pick only if its validation ranking survives a time gap.
 
@@ -560,6 +600,12 @@ def main() -> None:
                          "at --max-columns 2, and width is not free here: the same budget "
                          "is worth +3.0 on one task and -19.5 on another. Use this to test "
                          "the neighbourhood rather than the column count.")
+    ap.add_argument("--compress-to", type=int, default=0,
+                    help="project each arm to N components (StandardScaler + PCA, fitted on "
+                         "TRAIN only, reused for val and test) instead of reaching a "
+                         "workable width by deleting columns. 0 disables it. Pair with "
+                         "--max-columns none: the comparison worth making is selection vs "
+                         "compression AT EQUAL WIDTH, not narrow vs wide.")
     ap.add_argument("--drop-stale-arms", action="store_true",
                     help="exclude history-dependent arms when the shared-key block's "
                          "COVERAGE collapses between validation and test. Label-free: reads "
@@ -1599,6 +1645,16 @@ def main() -> None:
     # An arm whose own controls failed is not offered to validation at all. Selection
     # cannot be allowed to pick a leaking arm and have the protocol launder it.
     arms = {k: v for k, v in arms.items() if ok.get(k, True)}
+    if args.compress_to:
+        # Fit on TRAIN, apply to eval. Each arm gets its own projection because the arms
+        # carry different columns; sharing one would mean the components describe a feature
+        # set the arm does not have.
+        before = {k: v[0].shape[1] for k, v in arms.items()}
+        arms = {k: (compress_fit_apply(k, v[0], args.compress_to, fit=True),
+                    compress_fit_apply(k, v[1], args.compress_to, fit=False))
+                for k, v in arms.items()}
+        print("compressed: " + ", ".join(
+            f"{k} {before[k]}->{v[0].shape[1]}" for k, v in arms.items()), flush=True)
     # Cheap insurance on the runner that produces the standing table. It drops the target
     # correctly today; `eval_depth2` did not, and scored AUC 100.00 in both arms of a
     # paired comparison whose difference read as a clean +0.00. A regression here would be
@@ -1677,6 +1733,12 @@ def main() -> None:
             "+rate": stack(b_va, t_va, rate_cols),
             "+history": stack(b_va, t_va),
         }.items() if k in arms}
+        if args.compress_to:
+            # fit=False: reuse the TRAIN projection. Fitting here would let validation pick
+            # its own components, so the arm validation SELECTS on would not be the arm test
+            # is judged on -- the exact shape of this project's val/test inversion.
+            val_arms = {k: compress_fit_apply(k, v, args.compress_to, fit=False)
+                        for k, v in val_arms.items()}
         def cv_score(name, size, seed):
             """Selection criterion from k-fold CV over train, instead of one small split.
 

@@ -3858,3 +3858,41 @@ def test_nfa_missing_values_do_not_become_a_category():
     cnt = next(c for c in out.columns if c.endswith("__count"))
     assert (out[cnt].iloc[:3].to_numpy() == 0).all()    # the NaN rows see nobody
     assert out[cnt].iloc[4] == 1                        # the second 'a' row sees the first
+
+
+def test_compression_fits_on_train_and_reuses_the_projection():
+    import numpy as np
+    from tabicl.scaling.eval_track_record import compress_fit_apply
+    # Fitting per split would let validation and test each choose their own components, so
+    # the arm validation SELECTS on would not be the arm test is judged on. That is the
+    # exact shape of this project's val/test inversion, and it is why fit=False everywhere
+    # but train.
+    rng = np.random.default_rng(0)
+    Xtr, Xva = rng.normal(size=(400, 40)), rng.normal(size=(120, 40))
+    compress_fit_apply("arm", Xtr, 6, fit=True)
+    a = compress_fit_apply("arm", Xva, 6, fit=False)
+    b = compress_fit_apply("arm", Xva, 6, fit=False)
+    assert a.shape == (120, 6)
+    assert np.allclose(a, b)                       # deterministic, same projection twice
+
+
+def test_compression_is_a_noop_when_the_arm_is_already_narrow():
+    import numpy as np
+    from tabicl.scaling.eval_track_record import compress_fit_apply
+    # base at --max-columns 2 is already narrow; asking for more components than columns
+    # must not error or invent dimensions.
+    X = np.random.default_rng(0).normal(size=(50, 4))
+    assert compress_fit_apply("narrow", X, 16, fit=True).shape == (50, 4)
+
+
+def test_each_arm_gets_its_own_projection():
+    import numpy as np
+    from tabicl.scaling.eval_track_record import compress_fit_apply
+    # Arms carry different columns. One shared projection would describe a feature set the
+    # arm does not have.
+    rng = np.random.default_rng(1)
+    a_tr, b_tr = rng.normal(size=(200, 30)), rng.normal(size=(200, 50))
+    compress_fit_apply("a", a_tr, 5, fit=True)
+    compress_fit_apply("b", b_tr, 5, fit=True)
+    ev = rng.normal(size=(20, 30))
+    assert compress_fit_apply("a", ev, 5, fit=False).shape == (20, 5)
