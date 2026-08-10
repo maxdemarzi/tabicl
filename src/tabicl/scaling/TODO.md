@@ -77,6 +77,28 @@ parameter, so there is nothing that could have been tuned on test.
   entity novelty, novelty matching, entity time deltas, ensembling over configurations
   (twice, the second time properly powered).
 
+## OPEN OBSERVATION — disk offload can exhaust the disk it just checked (2026-08-10)
+
+`--offload disk` failed rel-amazon/user-churn with `OSError: [Errno 5] Input/output error`
+in `memmap.flush()`, having filled the pod's volume. `_resolve_offload_mode` **does** consult
+`get_available_disk_space` first, so the estimate is optimistic somewhere.
+
+The likely mechanism, from reading rather than measurement, and therefore stated as a lead
+rather than a diagnosis: the check is `output_mb <= safe_disk_mb` for **one call's** output,
+while the manager is invoked repeatedly (per stage, per batch, per estimator) and each call
+writes its own memmap. Cleanup is a `weakref.finalize`, so files are released when the
+tensor is garbage collected — eventual, not deterministic. Several offloaded tensors can
+therefore be live at once while every individual check passes.
+
+A fix would need live-byte accounting across `DiskTensor` instances — a class-level counter
+incremented on creation and decremented in the finalizer, subtracted from available space in
+the decision. Not attempted here: it is more invasive than the cgroup fix and touches a
+subsystem I have only partly read, and a speculative PR into someone else's memory manager
+is worth less than a clear report.
+
+**Reproduction:** rel-amazon/user-churn, seven arms, 4,708,383 train rows, `--offload disk`
+with a 60 GB volume, dies partway through seed 0's validation sweep.
+
 ## DECISIONS WAITING ON THE MAINTAINER (2026-08-07)
 
 Four items where the measurement is done and the call is someone else's. Each says what the

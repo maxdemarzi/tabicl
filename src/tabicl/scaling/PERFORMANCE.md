@@ -384,9 +384,53 @@ trustworthy because the entry that overturned them is still visible above the co
 But chronology is a poor way to *find* anything, so this section states what survived, with
 the evidence, and nothing else.
 
-**The headline number did not move this session, and that is the honest summary.** Eight
-candidate improvements were refuted, two defaults changed, one rule confirmed and then
-withheld. The table at the top is unchanged from where it started.
+**The honest summary, as of 2026-08-10: nothing here improved the model, and the work
+established that the number this project published was wrong in its own favour by three
+places.**
+
+| | was | is |
+|---|---|---|
+| tasks measured | 7 of 12 | **12 of 12** |
+| average | 73.46 | **75.10** |
+| rank among the field | 6 of 10 | **9 of 10** |
+| median rank | 7 | **8** |
+
+The five tasks added placed **8th, 8th, 8th, 9th and 9th** — every one at or below the
+published median. They were run because they were missing, not because they looked winnable,
+and that alone was worth three places. **Nine candidate improvements were refuted**, two
+defaults changed, one rule confirmed and withheld, and one control bug fixed that turned out
+to be worth nothing measurable.
+
+**Watch the average and the rank move in opposite directions**: 73.46 → 75.10 while the rank
+fell 6th → 9th. Every rival gains more from the easier added tasks than we do, so a rising
+number recorded a falling position. A reader seeing only the mean would conclude we improved.
+
+**Three claims in this file were retracted after being stated confidently**, and each
+correction is kept in place rather than edited away: the grid-noise block counts (parsed
+from merged blocks), the rel-stack OOM diagnosis (blamed on the GPU, was a container RAM
+cap), and a "missed leak in a published task" (the gate I fixed is never called by the
+runner). The pattern is worth more than any single finding: **every one was caught by
+checking a number that looked impossible, and none by re-reading the reasoning.**
+
+### 0. What actually produced value
+
+Not features. Eight feature ideas were refuted before this session and a ninth during it.
+What moved the work was **auditing what the code does, against what it was believed to do**:
+
+* the benchmark reported 7 of 12 tasks and the missing 5 were worse — **3 places**
+* `eval_track_record` never used the package's own scaling features, so the benchmark
+  demonstrating scaling was not scaling
+* CPU memory detection ignored cgroup limits and reported **450.8 GB against 102.4 GB real**,
+  which killed two multi-hour runs with no traceback — now upstream as PR #145
+* two leakage gates compared raw scores where they should have compared information, one
+  too strict and one too permissive
+* the as-of aggregation scanned every child row for keys never queried, which is what
+  blocked the twelfth task through five attempts
+* three pods billed unnoticed because teardown matched on a name they never had
+
+**The transferable rule: a check that can pass without doing its work is worse than no
+check**, because it converts an unknown into a false negative. Every failure above had that
+shape.
 
 ### 1. Selection is the binding constraint, not features
 
