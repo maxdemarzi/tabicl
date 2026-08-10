@@ -3944,3 +3944,38 @@ def test_knn_context_never_reads_labels():
     # feature geometry is public at inference time; their labels are not.
     params = set(inspect.signature(knn_context_indices).parameters)
     assert not (params & {"y", "y_train", "y_test", "labels", "truth"})
+
+
+def test_mmd_context_is_more_diverse_than_knn():
+    import numpy as np
+    from tabicl.scaling.eval_track_record import mmd_context_indices, knn_context_indices
+    # The redundancy penalty is the ENTIRE difference from kNN, which is pure proximity.
+    # Both should find the query mode; only MMD should spread out within it.
+    rng = np.random.default_rng(0)
+    X = np.vstack([rng.normal(0, 1, (2000, 8)), rng.normal(4, 1, (2000, 8))])
+    Xe = rng.normal(4, 1, (300, 8))
+    mmd = mmd_context_indices(X, Xe, 300, seed=0)
+    knn = knn_context_indices(X, Xe, 300, seed=0)
+    assert (mmd >= 2000).mean() > 0.9 and (knn >= 2000).mean() > 0.9   # both find the mode
+    spread = lambda idx: np.linalg.norm(
+        X[idx][:150, None] - X[idx][None, :150], axis=-1).mean()
+    assert spread(mmd) > spread(knn)                                    # only MMD spreads
+
+
+def test_mmd_context_holds_length_fixed_and_is_unique():
+    import numpy as np
+    from tabicl.scaling.eval_track_record import mmd_context_indices
+    # No early stopping here. The paper's adaptive variant halts when MMD stops improving,
+    # which saves inference cost and would silently turn this into the context-SIZE
+    # experiment; the comparison must vary selection alone.
+    rng = np.random.default_rng(0)
+    X, Xe = rng.normal(size=(3000, 10)), rng.normal(size=(200, 10))
+    idx = mmd_context_indices(X, Xe, 500, seed=0)
+    assert len(idx) == 500 and len(set(idx.tolist())) == 500
+
+
+def test_mmd_context_never_reads_labels():
+    import inspect
+    from tabicl.scaling.eval_track_record import mmd_context_indices
+    params = set(inspect.signature(mmd_context_indices).parameters)
+    assert not (params & {"y", "y_train", "y_test", "labels", "truth"})

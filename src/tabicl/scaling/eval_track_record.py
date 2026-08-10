@@ -297,6 +297,77 @@ def knn_context_indices(X: np.ndarray, Xe: np.ndarray, n_context: int, seed: int
     return np.concatenate([order[:retrieved], extra])
 
 
+def mmd_context_indices(X: np.ndarray, Xe: np.ndarray, n_context: int, seed: int,
+                        n_features: int = 256, max_queries: int = 5000) -> np.ndarray:
+    """Context chosen to MATCH THE QUERY DISTRIBUTION, not to sit nearest the queries.
+
+    CRUMB, Heredge et al., *Efficient Prior Fitted Network Inference via Distributionally
+    Matched Context Batching* (arXiv 2606.11473), at ``K = 1`` -- one shared context for all
+    queries, which the paper names explicitly and which drops into the same slot as a random
+    draw. Greedily minimises
+
+        MMD^2 = (1/n^2) SS k(xi,xi')  -  (2/n|C|) SS k(xi,xj*)
+
+    where the first term **penalises redundancy among the chosen rows** and the second
+    rewards proximity to the queries. That first term is the entire difference from kNN
+    selection, which is pure proximity, and it is why the paper reports MMD beating
+    kNN-style strategies. It matters here for a specific reason: this project measured its
+    val/test gap as a *population* problem -- validation entities appear in train 81.2% of
+    the time against test's 58.6% -- and MMD minimisation aligns the context distribution to
+    the queries rather than merely hugging them.
+
+    Directly relevant rather than adjacent: CRUMB is architecture-agnostic, needs **no
+    retraining**, and its reported evaluation includes **TabICLv2**, which is the checkpoint
+    this runner loads.
+
+    Random Fourier features make the greedy step a matrix-vector product: with
+    ``k(x,y) = phi(x).phi(y)``, the redundancy term is ``||sum phi(xi)||^2`` and the
+    proximity term is ``sum phi(xi) . mean phi(xj*)``, so each candidate is scored in one
+    pass instead of recomputing a kernel matrix.
+
+    Exactly ``n_context`` rows are returned, with no early stopping. The paper's adaptive
+    variant halts when MMD stops improving, which is right for saving inference cost and
+    wrong here: a shorter context would make this the context-SIZE experiment again, and the
+    comparison must vary selection alone.
+    """
+    n = len(X)
+    if n_context >= n:
+        return np.arange(n)
+    rng = np.random.default_rng(seed)
+    q = Xe if len(Xe) <= max_queries else Xe[rng.choice(len(Xe), max_queries, replace=False)]
+
+    mu, sigma = X.mean(axis=0), X.std(axis=0)
+    sigma[sigma == 0] = 1.0
+    Xs, qs = (X - mu) / sigma, (q - mu) / sigma
+
+    # RBF via random Fourier features. Bandwidth by the median heuristic on a subsample.
+    sub = Xs[rng.choice(n, size=min(1000, n), replace=False)]
+    d2 = np.sum((sub[:, None, :] - sub[None, :, :]) ** 2, axis=-1)
+    gamma = 1.0 / max(np.median(d2[d2 > 0]), 1e-9)
+    W = rng.normal(scale=np.sqrt(2 * gamma), size=(Xs.shape[1], n_features))
+    b = rng.uniform(0, 2 * np.pi, size=n_features)
+    scale = np.sqrt(2.0 / n_features)
+    Phi = scale * np.cos(Xs @ W + b)
+    mu_q = (scale * np.cos(qs @ W + b)).mean(axis=0)
+
+    norms = np.einsum("ij,ij->i", Phi, Phi)
+    prox = Phi @ mu_q
+    s = np.zeros(n_features)
+    a = np.zeros(n)
+    chosen = np.empty(n_context, dtype=np.int64)
+    taken = np.zeros(n, dtype=bool)
+    for m in range(n_context):
+        # argmin over candidates of (2 a_c + ||phi_c||^2)/(m+1) - 2 prox_c; the dropped
+        # terms are constant across candidates at this step.
+        score = (2.0 * a + norms) / (m + 1) - 2.0 * prox
+        score[taken] = np.inf
+        c = int(np.argmin(score))
+        chosen[m], taken[c] = c, True
+        s += Phi[c]
+        a += Phi @ Phi[c]
+    return chosen
+
+
 def abstention_choice(split_val: dict) -> tuple[tuple | None, tuple | None, bool]:
     """Keep the tuned pick only if its validation ranking survives a time gap.
 
@@ -652,12 +723,13 @@ def main() -> None:
                          "workable width by deleting columns. 0 disables it. Pair with "
                          "--max-columns none: the comparison worth making is selection vs "
                          "compression AT EQUAL WIDTH, not narrow vs wide.")
-    ap.add_argument("--context-select", choices=["random", "knn"], default="random",
+    ap.add_argument("--context-select", choices=["random", "knn", "mmd"], default="random",
                     help="how the context rows are CHOSEN, as opposed to how many "
                          "(--context-grid) or in what order (--context-orders). 'knn' takes "
                          "the rows nearest the queries, ranked by how many queries retrieve "
-                         "them; label-free. Content has never been tested here, and it is "
-                         "the axis two independent measurements point at.")
+                         "them; label-free. 'mmd' is CRUMB (arXiv 2606.11473) at K=1: greedily "
+                         "minimise maximum mean discrepancy to the queries, which adds a "
+                         "REDUNDANCY penalty kNN lacks. Content has never been tested here.")
     ap.add_argument("--drop-stale-arms", action="store_true",
                     help="exclude history-dependent arms when the shared-key block's "
                          "COVERAGE collapses between validation and test. Label-free: reads "
@@ -1740,8 +1812,12 @@ def main() -> None:
             # Draw d=0 is exactly the unresampled behaviour, so --resample 1 reproduces
             # every earlier number and the comparison stays single-variable.
             if d == 0:
-                take = (knn_context_indices(X, Xe, len(rows), seed)
-                        if args.context_select == "knn" else rows)
+                if args.context_select == "knn":
+                    take = knn_context_indices(X, Xe, len(rows), seed)
+                elif args.context_select == "mmd":
+                    take = mmd_context_indices(X, Xe, len(rows), seed)
+                else:
+                    take = rows
             elif args.stratify_context:
                 # Draw each class in proportion to its share of the training set. A uniform
                 # draw lets class balance wander between draws, which is noise added to the
