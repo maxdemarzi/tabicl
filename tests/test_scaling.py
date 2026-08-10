@@ -3896,3 +3896,51 @@ def test_each_arm_gets_its_own_projection():
     compress_fit_apply("b", b_tr, 5, fit=True)
     ev = rng.normal(size=(20, 30))
     assert compress_fit_apply("a", ev, 5, fit=False).shape == (20, 5)
+
+
+# --- context CONTENT: the axis never tested here ---------------------------------------
+# Every context experiment in this project varied SIZE (--context-grid) or ORDER (random vs
+# recent). Two independent measurements point at content instead: fixing the size axis cost
+# no accuracy and halved the variance, and KernelICL (arXiv 2602.02162) measures a tabular
+# ICL prediction as relying on only 11-29% of its context.
+
+def test_knn_context_holds_length_fixed():
+    import numpy as np
+    from tabicl.scaling.eval_track_record import knn_context_indices
+    # The comparison against a random draw must vary SELECTION and hold LENGTH fixed,
+    # otherwise it is the context-size experiment again wearing a different name.
+    rng = np.random.default_rng(0)
+    X, Xe = rng.normal(size=(2000, 12)), rng.normal(size=(200, 12))
+    idx = knn_context_indices(X, Xe, 300, seed=0)
+    assert len(idx) == 300 and len(set(idx.tolist())) == 300
+
+
+def test_knn_context_actually_retrieves_near_the_queries():
+    import numpy as np
+    from tabicl.scaling.eval_track_record import knn_context_indices
+    # Queries are displaced from the pool centre; selected rows must sit closer to them
+    # than the pool average, or the selection is not doing what it claims.
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(3000, 10))
+    Xe = rng.normal(size=(200, 10)) + 3.0
+    idx = knn_context_indices(X, Xe, 400, seed=0)
+    centre = Xe.mean(axis=0)
+    assert (np.linalg.norm(X[idx] - centre, axis=1).mean()
+            < np.linalg.norm(X - centre, axis=1).mean())
+
+
+def test_knn_context_is_a_noop_when_the_pool_fits():
+    import numpy as np
+    from tabicl.scaling.eval_track_record import knn_context_indices
+    rng = np.random.default_rng(0)
+    X, Xe = rng.normal(size=(500, 8)), rng.normal(size=(50, 8))
+    assert len(knn_context_indices(X, Xe, 5000, seed=0)) == 500
+
+
+def test_knn_context_never_reads_labels():
+    import inspect
+    from tabicl.scaling.eval_track_record import knn_context_indices
+    # Label-free by signature: there is no y parameter to leak through. The queries'
+    # feature geometry is public at inference time; their labels are not.
+    params = set(inspect.signature(knn_context_indices).parameters)
+    assert not (params & {"y", "y_train", "y_test", "labels", "truth"})

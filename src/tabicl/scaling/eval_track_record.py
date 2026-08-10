@@ -251,6 +251,52 @@ def compress_fit_apply(name: str, X: np.ndarray, k: int, fit: bool) -> np.ndarra
     return pipe.transform(X)
 
 
+def knn_context_indices(X: np.ndarray, Xe: np.ndarray, n_context: int, seed: int,
+                        per_query: int = 8, max_queries: int = 5000) -> np.ndarray:
+    """Rows to put in the context, chosen by proximity to the queries rather than at random.
+
+    Every context experiment in this project has varied context SIZE (`--context-grid`) or
+    ORDER (`random` vs `recent`). Content has never been tested, and two independent
+    measurements say content is where the signal should be: fixing the size axis cost no
+    accuracy and halved the variance here, and KernelICL (arXiv 2602.02162) measures a
+    tabular ICL prediction as relying on only 11-29% of its context.
+
+    **Expect this to underperform, and the reason is worth stating in advance.** That same
+    paper measures retrieval in a *learned embedding* space at ~5 points above retrieval in
+    raw input space, and these are raw features. This is the cheap version of the idea, and
+    the paper predicts the cheap version is the weak one.
+
+    Label-free: only ``Xe``'s feature geometry is consulted, never its labels. Queries are
+    subsampled to ``max_queries`` because the neighbour search is |queries| x |pool| and
+    rel-avito would otherwise pair 100k queries against 86k pool rows -- and the queries are
+    only being used to locate a region, which a sample locates as well as the whole set.
+    """
+    from sklearn.neighbors import NearestNeighbors
+
+    n = len(X)
+    if n_context >= n:
+        return np.arange(n)
+    rng = np.random.default_rng(seed)
+    q = Xe if len(Xe) <= max_queries else Xe[rng.choice(len(Xe), max_queries, replace=False)]
+
+    mu, sigma = X.mean(axis=0), X.std(axis=0)
+    sigma[sigma == 0] = 1.0
+    nn = NearestNeighbors(n_neighbors=min(per_query, n)).fit((X - mu) / sigma)
+    hits = nn.kneighbors((q - mu) / sigma, return_distance=False)
+
+    # A row retrieved by many queries serves more of the query distribution than one
+    # retrieved by a single query, so rank the union by retrieval frequency.
+    counts = np.bincount(hits.ravel(), minlength=n)
+    order = np.argsort(-counts, kind="stable")
+    retrieved = int((counts > 0).sum())
+    if retrieved >= n_context:
+        return order[:n_context]
+    # Top up at random rather than returning a shorter context, so the comparison against a
+    # random draw varies selection and holds context LENGTH fixed.
+    extra = rng.permutation(order[retrieved:])[: n_context - retrieved]
+    return np.concatenate([order[:retrieved], extra])
+
+
 def abstention_choice(split_val: dict) -> tuple[tuple | None, tuple | None, bool]:
     """Keep the tuned pick only if its validation ranking survives a time gap.
 
@@ -606,6 +652,12 @@ def main() -> None:
                          "workable width by deleting columns. 0 disables it. Pair with "
                          "--max-columns none: the comparison worth making is selection vs "
                          "compression AT EQUAL WIDTH, not narrow vs wide.")
+    ap.add_argument("--context-select", choices=["random", "knn"], default="random",
+                    help="how the context rows are CHOSEN, as opposed to how many "
+                         "(--context-grid) or in what order (--context-orders). 'knn' takes "
+                         "the rows nearest the queries, ranked by how many queries retrieve "
+                         "them; label-free. Content has never been tested here, and it is "
+                         "the axis two independent measurements point at.")
     ap.add_argument("--drop-stale-arms", action="store_true",
                     help="exclude history-dependent arms when the shared-key block's "
                          "COVERAGE collapses between validation and test. Label-free: reads "
@@ -1688,7 +1740,8 @@ def main() -> None:
             # Draw d=0 is exactly the unresampled behaviour, so --resample 1 reproduces
             # every earlier number and the comparison stays single-variable.
             if d == 0:
-                take = rows
+                take = (knn_context_indices(X, Xe, len(rows), seed)
+                        if args.context_select == "knn" else rows)
             elif args.stratify_context:
                 # Draw each class in proportion to its share of the training set. A uniform
                 # draw lets class balance wander between draws, which is noise added to the
