@@ -4317,6 +4317,46 @@ declines to fire costs a pod cycle, and the host has 503 GB).
 methods inside 1.36 points means rank on that task is close to a coin toss, and this
 project's central finding is that validation and test disagree.
 
+### 2026-08-10 — the model wants a REPRESENTATIVE context, not a LOCAL one
+
+**The retrieval intuition is backwards for this model, and the smaller the context the more
+backwards it gets.** rel-avito/user-visits, 12 seeds, fixed arms, `base`:
+
+| context | random | kNN | kNN − random |
+|---|---:|---:|---:|
+| 10,000 | 66.04 | 66.60 | **+0.56** |
+| 2,500 | — | 62.97 | — |
+| 1,000 | **64.46** | **59.72** | **−4.74** |
+| 500 | — | 53.96 | — |
+
+The `random @ 1000` control is what makes this readable: shrinking the context alone costs
+**−1.58** (66.04 → 64.46), while shrinking it *and* retrieving costs **−6.32**. So retrieval
+contributes **−4.74 of its own** at that size, and the penalty grows as the context shrinks.
+
+**Why, and it is a fact about in-context models rather than about our features.** A retrieved
+context is a *biased sample*: it over-represents the query region and distorts the label
+distribution the model calibrates its in-context prior against. At 10,000 rows that bias is
+diluted and the relevance gain wins slightly. At 500 the bias dominates and the model is
+predicting from a sample that does not resemble the population. **Representativeness is what
+the context is for.**
+
+**This was tested because two sources said it should work.** Thomas et al. (arXiv 2406.05207)
+ablate retrieval at **20–1000 neighbours** and report gains — but their gains come from
+retrieval *combined with fine-tuning*, which adapts the model to the biased sample. We cannot
+fine-tune, so we get the bias without the adaptation. And this project's own rel-event result
+— recency worth **+7.50 at context 1,000** — is a *different* mechanism: a recency filter
+keeps a representative sample of a **more relevant time period**, whereas kNN keeps an
+unrepresentative sample of the whole period.
+
+**One detail worth keeping.** `+struct` barely degrades across the whole sweep — 65.35,
+65.12, 64.89 at 2,500/1,000/500 — while `base` falls 62.97 → 59.72 → 53.96. **When the
+features carry the signal, the model needs far fewer context rows.** That is the clearest
+statement yet of what our featurisation is actually buying.
+
+**Closes the context-content axis.** Size is not the lever (measured: fixing it is free and
+halves variance). Content is not the lever either: retrieval is worth +0.20 calibrated at
+full context and is catastrophic below it. What remains is the *backbone*.
+
 ### 2026-08-10 — kNN context selection: real on fixed arms, gone after selection (tenth time)
 
 **The axis had never been tested.** Every context experiment here varied SIZE
