@@ -4306,11 +4306,31 @@ it is reported as a null rather than dressed up.
 believe it** — a correction that only ever opened gates in our favour would be motivated
 reasoning. But only the temporal fix reaches any number in this table.
 
-**What the fix was worth, measured rather than assumed.** On the two tasks where it freed
-one arm: rel-trial 72.26 → **72.55** (+0.29) and rel-event/user-repeat 77.89 → **77.62**
-(−0.27). Both inside the ±0.6 floor, and user-repeat's sd of 1.81 puts its SE alone at
-±0.64. **The control fix did not meaningfully change our best tasks.** rel-amazon, which
-lost five arms rather than one, is the outstanding test.
+**What the fix was worth, measured rather than assumed: nothing.**
+
+| task | arms freed | standing | fixed control | Δ |
+|---|---:|---:|---:|---:|
+| rel-trial / study-outcome | 1 | 72.26 | 72.55 | +0.29 |
+| rel-event / user-repeat | 1 | 77.89 | 77.62 | −0.27 |
+| rel-amazon / item-churn | **5** | 80.20 | 80.08 ⁴ | −0.12 |
+
+**Three of three inside the ±0.6 floor**, including the task that had lost *five of seven*
+arms and was the outstanding test. user-repeat's sd of 1.81 puts its SE alone at ±0.64.
+
+**The control was genuinely broken and fixing it changed no result.** Both halves of that
+sentence matter. The logic was wrong — it inverted the verdict on any block below chance —
+and correcting it is right whether or not it pays. It did not pay: validation does not pick
+the arms it freed, which is the same finding this project has reached eight other ways.
+`+struct` and the history family were available on rel-amazon for the first time, and the
+calibrated result moved −0.12.
+
+rel-amazon/user-churn could not be re-measured: freeing five arms pushed it from one
+52-column arm to seven and it died `rc=137` without `--train-pool`, which had been withheld
+to keep the comparison single-variable. That is a planning error rather than a new defect.
+
+⁴ Four replicates, salvaged from a run the 4-hour ceiling killed. The table keeps the
+complete 5-replicate 80.20; the difference is inside the floor and swapping a complete
+measurement for a partial one over noise would be the wrong trade.
 
 **`permutation_test` was audited and deliberately left alone.** It is one-sided by design —
 a usefulness question, not a leak question — and shares the blind spot in principle: an
