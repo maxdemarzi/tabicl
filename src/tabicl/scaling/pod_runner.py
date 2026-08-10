@@ -317,27 +317,35 @@ def main() -> int:
         raise SystemExit(f"no usable host after 12 attempts; rejected {sorted(bad_hosts)}")
 
     if args.action == "sweep":
-        # Terminate pods this harness cannot see by name, and ONLY those.
+        # REPORT ONLY. This action used to TERMINATE every pod whose name lacked the
+        # `tabicl-` prefix, and it was wired into the teardown of every cycle script.
         #
-        # `find_pod` matches on NAME, so a pod that never received ours is invisible to
-        # every other code path here -- including the teardown in `cycle.ps1`'s finally.
-        # That is not hypothetical: `create` swallows exceptions from `create_pod` to try
-        # the next GPU/cloud combination, and when the call fails AFTER RunPod has already
-        # created the machine, the id is never returned to us. One such pod
-        # (`black-swan-l40s`) billed unnoticed on 2026-08-09 through a full round, while
-        # the round's own teardown correctly reported terminating a different pod.
+        # On 2026-08-10 it destroyed `bs-sft6`, a running pod belonging to someone else on
+        # this account. That was not a near miss or a cost issue -- it was somebody's work,
+        # and no amount of orphan-cleanup convenience justifies it.
         #
-        # Matching on the `tabicl-` prefix rather than on an exact name is what makes this
-        # safe to run while another lane is working: lanes are `tabicl-bench` and
-        # `tabicl-bench-b`, so a concurrent run is never touched, while an auto-named
-        # orphan always is.
-        others = [x for x in runpod.get_pods()
-                  if not (x.get("name") or "").startswith("tabicl-")]
-        for x in others:
-            print(f"SWEEP terminating untracked pod {x['id']} ({x.get('name')})")
-            runpod.terminate_pod(x["id"])
-        left = [(x["id"], x.get("name")) for x in runpod.get_pods()]
-        print(f"swept {len(others)} untracked pod(s); pods now: {left or 'none'}")
+        # The reasoning that produced it was wrong in a specific way worth naming: I inferred
+        # "not named tabicl-*" implies "an orphan of mine" from three consecutive orphans
+        # that happened to be mine. The account is not mine, the inference never held, and a
+        # destructive default should never rest on an inference of that kind. Untracked pods
+        # cost money; other people's pods cost their work, and those are not comparable.
+        #
+        # It now lists and explains. Terminating anything is a human decision, made with the
+        # ids below, by someone who knows what they belong to.
+        pods = runpod.get_pods()
+        mine = [x for x in pods if (x.get("name") or "").startswith("tabicl-")]
+        other = [x for x in pods if not (x.get("name") or "").startswith("tabicl-")]
+        print(f"pods on this account: {len(pods)}")
+        for x in mine:
+            print(f"  OURS      {x['id']}  {x.get('name')}  {x.get('desiredStatus')}")
+        for x in other:
+            print(f"  NOT OURS  {x['id']}  {x.get('name')}  {x.get('desiredStatus')}"
+                  f"   <- do not terminate without checking who owns it")
+        if other:
+            print("")
+            print(f"{len(other)} pod(s) this harness does not recognise. They may be "
+                  f"orphans from a failed create, or they may be someone else's work. "
+                  f"Terminate by id, deliberately, after checking.")
         return 0
 
     pod = find_pod()
