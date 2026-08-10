@@ -110,8 +110,24 @@ def main() -> None:
     if args.tabfm:
         from tabfm import TabFMClassifier
         from tabfm import tabfm_v1_0_0_pytorch as tabfm_v1_0_0
-        tabfm_model = tabfm_v1_0_0.load()
-        print("tabfm 1.0.0 loaded", flush=True)
+        # `device` is a KEYWORD on load() and defaults to None, which lands on CPU. The
+        # classifier has no device argument at all -- only `keep_cache_on_device` -- so
+        # passing it here is the only way to reach the GPU, and omitting it is silent: the
+        # run works, produces correct AUCs, and takes roughly thirty times as long. Measured
+        # on this pod: 680% CPU across cores, 0% GPU utilisation, 247 minutes of CPU time
+        # before it was killed.
+        tabfm_model = tabfm_v1_0_0.load(device=args.device)
+        # Structural, not intentional. This project's standing rule is never to fit on CPU
+        # when CUDA is present, and it has been broken twice by different mechanisms. A rule
+        # enforced by remembering is a rule that gets broken; this one now stops the run.
+        if torch.cuda.is_available():
+            where = {p.device.type for p in tabfm_model.parameters()}                 if hasattr(tabfm_model, "parameters") else {args.device}
+            if where and where != {"cuda"}:
+                raise SystemExit(
+                    f"TabFM loaded onto {where} while CUDA is available. Refusing: a CPU fit "
+                    f"here is ~30x slower and silently produces a timing comparison that "
+                    f"means nothing.")
+        print(f"tabfm 1.0.0 loaded on {args.device}", flush=True)
 
     db = get_dataset(args.dataset, download=True).get_db()
     task = get_task(args.dataset, args.task, download=True)
