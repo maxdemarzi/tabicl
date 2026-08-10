@@ -545,6 +545,15 @@ def main() -> None:
                          "inference buffers land on top. 0 disables it, which is every "
                          "standing number. Refuses non-random --context-orders, where a "
                          "uniform subsample would change what recency means.")
+    ap.add_argument("--self-join", action="store_true",
+                    help="add NFA neighbourhood features: aggregate over OTHER task rows "
+                         "sharing a categorical value, as of the cutoff. The one traversal "
+                         "shape this package lacked -- every other leaves the entity table "
+                         "through a foreign key. Causal by construction, label-free.")
+    ap.add_argument("--self-join-columns", type=int, default=3,
+                    help="how many grouping columns --self-join may use, chosen by non-null "
+                         "coverage among columns that are neither near-unique nor "
+                         "near-constant.")
     ap.add_argument("--drop-stale-arms", action="store_true",
                     help="exclude history-dependent arms when the shared-key block's "
                          "COVERAGE collapses between validation and test. Label-free: reads "
@@ -1187,6 +1196,56 @@ def main() -> None:
     b_tr = build_base(train)
     b_te = build_base(test, "test").reindex(columns=b_tr.columns, fill_value=np.nan)
 
+    # --- NFA: inter-row structure WITHIN the table (--self-join) --------------------------
+    # Every other traversal here leaves the entity table through a foreign key. This one
+    # links task rows to each other by SHARED ATTRIBUTE VALUES -- the incidence graph of
+    # Cucumides & Geerts (arXiv 2602.03945), whose measurement on relbench-trial is the
+    # reason to try it: fixed within-table aggregations (0.7254) beat row-local LightGBM
+    # (0.7009), both GNN baselines (0.6860, 0.6861), a relational foundation model (0.7116
+    # finetuned) AND learned message passing over the cross-table structure we already build
+    # (0.7180). No retraining, which is our constraint.
+    #
+    # Neighbours are drawn from train + test rows together, and that is label-free by
+    # construction: only ATTRIBUTES are aggregated, never a label or a target. Restricting
+    # neighbours to train would make a test row's neighbourhood systematically older than a
+    # train row's, which is the population mismatch this project has already measured as the
+    # cause of its val/test inversion.
+    #
+    # Causality needs no control: a row's cutoff IS its timestamp and the as-of scan counts
+    # strictly earlier rows, so no row is ever its own neighbour or sees a contemporaneous
+    # one.
+    nfa_tr = nfa_te = nfa_va = None
+    if args.self_join:
+        from tabicl.scaling._relational import nfa_columns, neighbour_aggregates
+        # All three splits in one pool. The calibrated path selects on validation, so a
+        # `+nfa` train/test pair without a matching validation arm would KeyError during
+        # selection -- and building validation's neighbourhoods from a different pool than
+        # test's would change what the feature MEANS between the split that chooses it and
+        # the split it is judged on, which is the exact failure this project traced its
+        # val/test inversion to.
+        _val_nfa = task.get_table("val", mask_input_cols=False).df
+        pool = pd.concat([train.assign(__split=0), _val_nfa.assign(__split=2),
+                          test.assign(__split=1)], ignore_index=True)
+        pool = pool.merge(ent_df, left_on=key, right_on=pk, how="left")
+        gcols = nfa_columns(pool, exclude={target, key, pk, tcol, "__split"},
+                            max_columns=args.self_join_columns)
+        if not gcols:
+            print("  --self-join: no column groups rows usefully (every candidate is "
+                  "near-unique or near-constant); skipping", flush=True)
+        else:
+            vcols = [c for c in pool.columns
+                     if c not in {target, key, pk, tcol, "__split", *gcols}
+                     and pd.api.types.is_numeric_dtype(pool[c])
+                     and not pd.api.types.is_bool_dtype(pool[c])]
+            print(f"  --self-join: grouping on {gcols}, aggregating {len(vcols)} numeric "
+                  f"columns over {len(pool):,} rows", flush=True)
+            blk = neighbour_aggregates(pool, tcol, gcols, value_columns=vcols,
+                                       windows=WINDOWS)
+            nfa_tr = blk[pool["__split"] == 0].reset_index(drop=True)
+            nfa_te = blk[pool["__split"] == 1].reset_index(drop=True)
+            nfa_va = blk[pool["__split"] == 2].reset_index(drop=True)
+            print(f"  --self-join: {blk.shape[1]} neighbourhood columns", flush=True)
+
     # --- text block (RESEARCH 6f) --------------------------------------------------------
     # Fitted on TRAIN ONLY and applied to val/test. Fitting the vectoriser on all splits
     # would let test vocabulary and IDF weights inform the representation -- a leak that
@@ -1466,6 +1525,10 @@ def main() -> None:
         print(f"shared-key coverage: val {v_cov:.1%} -> test {t_cov:.1%} ({ratio:.2f}x)"
               f"{'   ** STALE -- history arms excluded **' if stale else ''}", flush=True)
     ok = {"base": True, "+text": True,
+          # NFA aggregates ATTRIBUTES of earlier rows, never a label, so the label controls
+          # that gate the history arms do not apply to it -- exactly as for `+text`. Its
+          # causality is structural: a row's cutoff is its own timestamp.
+          "+nfa": True,
           "+text+rate": perm.passed and temporal_ok and temporal_counts.passed and not stale,
           "+struct": temporal_struct.passed and not stale,
           "+counts": temporal_counts.passed and not stale,
@@ -1519,6 +1582,8 @@ def main() -> None:
                            stack(pd.concat([b_te.reset_index(drop=True),
                                             x_te.reset_index(drop=True)], axis=1),
                                  t_te, rate_cols))} if text_cols else {}),
+        **({"+nfa": (stack(b_tr, nfa_tr, fit=True, tag="nfa"),
+                     stack(b_te, nfa_te, tag="nfa"))} if nfa_tr is not None else {}),
         "+counts": (stack(b_tr, t_tr, count_cols), stack(b_te, t_te, count_cols)),
         "+rate": (stack(b_tr, t_tr, rate_cols), stack(b_te, t_te, rate_cols)),
         "+history": (stack(b_tr, t_tr), stack(b_te, t_te)),
@@ -1599,6 +1664,7 @@ def main() -> None:
                                            x_va.reset_index(drop=True)], axis=1),
                                 t_va, rate_cols),
             "+struct": stack(b_va, t_va, struct_cols),
+            **({"+nfa": stack(b_va, nfa_va, tag="nfa")} if nfa_va is not None else {}),
             "+counts": stack(b_va, t_va, count_cols),
             "+rate": stack(b_va, t_va, rate_cols),
             "+history": stack(b_va, t_va),
