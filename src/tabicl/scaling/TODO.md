@@ -4,29 +4,42 @@ Written on stopping, so this can be picked up cold. `STATUS.md` is the current s
 `DESIGN.md` the history log. Nothing here is blocking — the branch is committed, tested
 (235 passed, 1 skipped) and pushed.
 
-## THE ONE THING TO DO NEXT (2026-08-08, later still)
+## THE ONE THING TO DO NEXT (2026-08-10)
 
-**Finish the benchmark. Four of twelve tasks are still unmeasured, and the eighth just cost
-us a place — so our published position is not yet the honest one.**
+**Measure the three selection-under-shift interventions. They are wired, audited and
+running; nothing about them has been measured yet.**
 
-rel-hm/user-churn came in at **66.75, rank 9/10**, beaten by eight of nine methods. Average
-73.46 → 72.62, our standing 6th → 7th. It was run *because* it was missing, not because it
-looked winnable, and that is exactly why it was worth running. The four outstanding tasks
-are **rel-stack/user-engagement, rel-stack/user-badge, rel-amazon/user-churn** and
-**rel-amazon/item-churn**, and on the published field two of them sit at 82–91 — a band we
-have never measured ourselves in.
+The benchmark itself is **finished** — all twelve tasks, median rank 8 of 10, average 75.10
+against RelGNN's 78.06. (The section that stood here said four tasks were outstanding; they
+were run on 2026-08-09 and the standing table in `STATUS.md` is the current one. Our average
+rose 73.46 → 75.10 while our rank *fell* three places, because every rival gained more from
+the added tasks than we did.)
 
-**The blocker is understood and a fix is under test.** Both rel-stack tasks died on the
-query side, and user-engagement said so precisely: it completed its **entire** validation
-sweep (all 15 candidates, val 87.94–89.53) and died at the **test** prediction. Validation
-queries fit, test queries did not, same process, minutes apart. Out of the box
-`COL_CONFIG.offload` is `"auto"` while `ICL_CONFIG.offload` is `False`, so the in-context
-stage holds query outputs on the GPU; `--offload cpu` reaches exactly that. `--row-chunk`
-does not and never could — it shrinks activations, not outputs.
+So the binding constraint is where it has been since 2026-08-07: **the selection rule, not
+the features.** `RESEARCH.md`'s literature review (2026-08-10) named four candidates in order
+of expected value per pod-hour, and the three cheapest are now wired:
 
-**Set no expectation for the four.** Do not read user-engagement's val 89.5 as a test
-prediction: nine methods lie inside 1.36 points there, so rank is near a coin toss, and the
-central finding of this project is that validation and test disagree.
+1. `--random-val-split` — arXiv 2502.20260 reports random splits selecting *better* under
+   temporal shift. This project assumed the opposite, measured `--gap-validation` (more
+   separation) as worse, and **never tested less**.
+2. `--select-lexi` — HyperTime's lexicographic pick, aimed at the measured regime where the
+   winning margin (0.35) is half the validation noise (0.69).
+3. `--drift-tabpfn` — a backbone whose prior contains non-stationarity.
+
+**All three were audited before running and two were broken** in ways that would have
+produced confident wrong numbers; see `DESIGN.md`, "Auditing three wired interventions".
+That audit is the reason to read the results at all.
+
+**Read the pre-registered budget before the numbers.** Calibrated arms do not pair (r = −0.03
+to +0.34), so the honest SE at 12 replicates is ≈ 0.49 and a single task resolves about
+**±1.0 at 2 SE**. If the random split recovers user-clicks' full −1.29 tuning loss it will
+show; if it recovers half, this budget cannot tell that from zero. A null means *not resolved
+here*, not *no effect*.
+
+**A result on the shifted tasks alone is not actionable.** A selector that gains on
+user-clicks and loses on rel-trial is not adoptable at any mean, because choosing which
+selector to apply per task is itself a selection problem on the same biased signal. The
+controls are half the result, which is why they get their own lane.
 
 ## DECIDED, AWAITING A MAINTAINER CALL — the grid's context axis (2026-08-08)
 

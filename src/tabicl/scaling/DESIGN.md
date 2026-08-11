@@ -1346,6 +1346,99 @@ rule this out. Low priority until something suggests depth pays at all.
 * **Greedy block selection over relations.** Parked, per the rel-trial result above.
 * **Sketches for as-of categoricals.** Superseded by item 1, except for true `nunique`.
 
+## Auditing three wired interventions before measuring them (2026-08-10)
+
+`RESEARCH.md`'s model-selection-under-shift review named four things to run in order of
+expected value per pod-hour, and the three cheapest were wired in three commits the same
+evening. None had been run. Reading them before spending a pod hour found that **two of the
+three would not have measured what they claimed, and the third would have misreported a
+partial failure as a result.** All three failures share a shape: the run completes, prints a
+plausible number, and raises nothing.
+
+### `--select-lexi` was inert, and its unit tests all passed
+
+`lexi_select` takes the sweep's candidates plus `split_val`, the per-fold validation scores,
+and breaks ties among near-optimal configurations by best worst fold. It was correct, and it
+had four passing tests.
+
+`split_val` was only ever populated inside a branch gated on `bool(args.abstain)`. Run with
+`--select-lexi` alone, `lexi_select` found the dict empty, took its documented fallback to
+the plain argmax, and the run printed a lexicographic selection line while selecting exactly
+what it always had. The A/B would have come back **+0.00 with zero variance** — which on this
+benchmark means a broken experiment, not a negative result.
+
+**The generalisable point is about where the tests were.** The function had complete unit
+coverage; nothing tested that the runner ever handed it data. A unit test on a mechanism does
+not test that the mechanism is reachable, and the reachable-ness is what was broken. The
+gating is now a module-level `fold_plan` with its own tests, and the abstention *veto* is
+gated on `args.abstain` separately, so enabling the folds for lexi cannot smuggle a second
+intervention into the arm.
+
+Worth recording that enabling the folds does **not** change what the argmax listens to: the
+fold branch takes `return_probs=True` and computes the full-validation AUC from the same
+probabilities the ordinary path scores, so the two are numerically identical and the
+comparison stays single-variable. That was checked rather than assumed.
+
+### `--random-val-split` drew one slice for the whole run
+
+The draw sat outside the seed loop, from a hardcoded `default_rng(12345)`. Every replicate
+therefore selected on the *same* held-out rows: the spread across seeds covered context draws
+and model randomness and **excluded the split itself**, which is the one source of variance
+the claim is about. arXiv 2502.20260's claim is that *a random split* selects better than a
+temporal one — a statement about the family of draws — and a single fixed draw cannot address
+it at any replicate count. A lucky slice would have been indistinguishable from a working
+method, and the tight spread would have read as confirmation.
+
+Now `random_val_indices(n_train, n_val, seed)`, module-level and redrawn per replicate.
+
+A third defect fell out of fixing the first two: `va_early`/`va_late` were built by ordering
+the official `val` table, but the random slice has length `min(len(val), n_train // 3)`, so
+combining the two flags indexed one frame's positions into another's. The folds are now built
+from the rows actually validated on, ordered by their own train timestamps.
+
+**What is not a confound, having been checked:** the treatment removes the held-out rows from
+the *selection* context pool, which is necessary or the same rows would be fitted and scored.
+The final test fit calls `draw()` without a pool and therefore draws from the full training
+set in both arms. Only what selection listened to differs.
+
+### The drift-resilient backbone arm would have misreported partial failure
+
+Two problems, neither fatal on its own. It searched a candidate list for the *class* — the
+right instinct, and the reason it exists — and then **guessed the constructor**, passing
+`device=` and `random_state=`. That is the same mistake one level down from the one that cost
+a cycle on TabFM, where the loader name was right by luck and its device argument was not.
+
+More consequential: the per-seed failure path records `nan` and continues, which is correct,
+but the summary then used `nanmean` over the survivors while dividing the standard error and
+the sign count by the number of *attempts*. An arm that raised on eight of twelve seeds would
+have printed a confident mean, an SE with the wrong denominator, and "3/12 positive" from
+four comparisons. Partial failure is not random here — the seeds that fail are the ones with
+awkward context draws — so the surviving subset is biased. It now reports `n=ok/total`, flags
+`PARTIAL`, and pairs only seeds where both arms produced a number.
+
+### The pod harness, promoted out of the scratchpad
+
+Every previous version of the round driver was written into a session scratchpad, fixed
+there, and lost with the session — the notes record four consecutive rounds that shipped
+nothing, and this session rediscovered three more distinct failures before a round started:
+a CRLF `_pod_setup.sh` (bash read `set -euo pipefail\r` and reported "invalid option name",
+which reads like the wrong shell rather than the wrong file), a payload missing `LICENSE`
+which `pyproject` declares, and `pip ... | tail -3` truncating its own diagnosis.
+
+It now lives at `scaling/cycle.py` with `_pod_remote.sh`, and each failure is pinned by a
+test. Two more were found by running it:
+
+* **Logs were fetched on the happy path**, so the setup failure that actually occurred raised
+  straight past the fetch and terminated the host with `setup.log` still on it. The run that
+  most needed its log was the one guaranteed to lose it. Fetching is now in the `finally`.
+* **The poller read a dead host as a finished round.** A community L40S was reclaimed nine
+  minutes into a five-hour round; `ssh` printed "Connection refused"; that text contains none
+  of the probe's three `---` separators, so `partition` put all of it in the `done` slot and
+  the poller announced `WORK_DONE`. `parse_probe` now requires a zero return code and the
+  separators, and three unanswered polls end the round as **lost, not done**. `TABICL_CLOUD`
+  lets a long round demand SECURE, which is a better bet than community capacity for
+  something measured in hours.
+
 ## Status
 
 | # | Feature | Status |

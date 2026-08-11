@@ -582,6 +582,43 @@ first.
    Adding early-validation rows helps predict late-validation rows because they are
    adjacent, and that does not transfer.
 
+**Two more were imported from the literature on 2026-08-10 and both failed** (arXiv 2502.20260
+and 2305.18421; see `PERFORMANCE.md`). What makes them worth more than another two entries on
+the list is that **both demonstrably fired** — the repaired flags changed the selected
+configuration on 5 to 12 of every 12 seeds — and still moved nothing:
+
+| rule | user-clicks | user-visits | rel-trial | rel-event |
+|---|---:|---:|---:|---:|
+| `--random-val-split` | +0.02 | −0.16 | −0.12 | −0.21 |
+| `--select-lexi` | +0.02 ⁱ | — | −0.13 | **−0.73** |
+
+ⁱ fired on only 1 of 12 seeds here, so that cell is *uninformative*, not evidence.
+
+**A THIRD was built from scratch the same day and is also refuted** — `--select-extrapolate`,
+which scores each candidate at several train→query distances and reads the fitted line where
+test sits. It is the only instrument here that changes *what quantity is estimated* rather
+than how the same ranking is read, and it fails for reasons worth keeping:
+
+| task | result |
+|---|---|
+| rel-avito/user-clicks | **cannot run** — 2/3/4-day gaps select an identical pool, leaving two points and no verifiable slope |
+| rel-trial | rule **+0.03**, but its precondition (capping context to the 6,483 rows the pools hold) costs **−0.58** |
+| rel-event | **−1.84**, 7/8 seeds worse, variance nearly doubled, one seed −8.38 |
+
+**Its eight rel-event slopes were four positive and four negative** — the sign is a coin flip
+across seeds, so there is no stable temporal decay to estimate, and changing the pick on 6 of
+8 seeds injected that noise into selection. Applicability is bounded by the label stream's
+temporal **resolution**, not its span: 36,741 rel-avito rows precede a 2-day cutoff and the
+same 36,741 precede a 4-day one.
+
+**THE SHARPER FINDING, AND IT REFRAMES THE WHOLE THREAD.** On user-clicks the pick changed on
+7 of 12 seeds and test moved 0.02, so **the candidates the selector chooses among are
+near-equivalent on test** — yet tuning costs 1.29 there. Both are only true if the tuned
+candidates are collectively worse than the untuned `base` arm and shuffling among them is
+irrelevant. Every instrument in the list above reshuffles the pick. **They attack the wrong
+quantity**, which is what eleven failures in a row look like. The lever is whether to select
+at all, or to change *what quantity* is estimated — not which candidate wins.
+
 **What this is not.** It is not a claim that these effects would generalise — an effect
 visible only on test is exactly what a held-out split exists to distrust. It is a claim
 that *this benchmark's split geometry* systematically misprices anything whose value grows

@@ -4839,6 +4839,198 @@ to tune on test. Worst case it is neutral on accuracy and still cuts the grid ~3
 
 ---
 
+### 2026-08-10 — two selection fixes from the literature, both refuted while demonstrably firing
+
+**What changed since the previous entry:** nothing about the model or the features. This
+round changes only *how a configuration is chosen* from a sweep that is otherwise identical,
+so `*_base` (temporal validation + plain argmax) is the correct control for both arms and was
+run once to serve both. Calibrated protocol, 12 replicates, AMP off, standing flags per task,
+selection and scoring at the same `n_estimators`. Four secure pods, three lanes.
+
+**Read the audit first (`DESIGN.md`, "Auditing three wired interventions").** Both flags were
+broken when written and would have produced confident wrong numbers: `--select-lexi` never
+received the folds it selects on and silently ran a plain argmax, and `--random-val-split`
+drew ONE validation slice for the whole run, so the spread across seeds excluded the split
+itself. Neither defect would have raised. The results below are from the repaired versions,
+and the repair is why they can be read as refutations rather than as no-ops.
+
+#### Baselines reproduce, with a caveat that limits what may be quoted
+
+| baseline | this round | sd | standing | Δ |
+|---|---:|---:|---:|---:|
+| rel-avito/user-clicks | 65.61 | 0.38 | 65.89 | −0.28 |
+| rel-avito/user-visits | 65.68 | 0.24 | 65.54 | +0.14 |
+| rel-trial/study-outcome | 72.92 | 0.62 | 72.26 | +0.66 |
+| rel-event/user-ignore | 81.98 | 1.93 | 80.98 | +1.00 |
+
+The deviations do not share a sign, so this is not a uniform environmental shift — a wrong
+payload or a bad host moves everything one way. It is the ordinary cross-run variation this
+file has recorded before (rel-f1's baseline moved 0.44 between replicate counts alone), plus
+the fact that the standing values carry their own unquoted uncertainty.
+
+**Consequence, and it is a real limit: DELTAS from this round are quotable, ABSOLUTE LEVELS
+are not.** None of the four numbers above may be merged into the standing table without a
+dedicated re-measurement.
+
+#### `--random-val-split` (arXiv 2502.20260): refuted
+
+| task | role | delta | SE | picks changed | spread |
+|---|---|---:|---:|---:|---|
+| user-clicks | the prediction | **+0.02** | 0.04 | 7/12 | 0.38 → 0.41 |
+| user-visits | the prediction | **−0.16** (t −3.77) | 0.04 | **12/12** | 0.24 → 0.31 |
+| rel-trial | control | −0.12 | 0.15 | 5/12 | 0.62 → 0.69 |
+| rel-event | control | −0.21 | 0.38 | 8/12 | 1.93 → 1.43 |
+
+**This is a refutation, not a null from an instrument that never fired.** The rule changed the
+selected configuration on 5 to 8 of 12 seeds on every task, and moved test by nothing. On
+user-clicks — where the val→test entity overlap drop is largest (34.0) and where tuning
+currently costs **−1.29** — selecting on a random slice of train recovers **none** of it, at a
+standard error of 0.04.
+
+**The pre-registered prediction was wrong, and there is a structural reason worth keeping.** A
+random slice of TRAIN has, by construction, *higher* entity overlap with the remaining
+training rows than a temporal slice does. The diagnosed mechanism here is that validation
+overrates history-leaning arms *because* its entities appear in train 81.2% of the time
+against test's 58.6%. A random split makes that mismatch worse. arXiv 2502.20260's argument is
+about variance, not population — importing it was importing a fix for a different problem, and
+that was visible before the round rather than only after it.
+
+**Do not read rel-event's 1.93 → 1.43 as variance reduction.** Spread rose on the other two
+tasks and rel-event's worst seed did not move (78.65 → 78.65). One reduction against two
+increases is noise, and reporting it alone would be the cherry-pick this file exists to catch.
+
+#### `--select-lexi` (HyperTime, arXiv 2305.18421): no gain anywhere, and not adoptable
+
+| task | role | delta | SE | picks changed | reading |
+|---|---|---:|---:|---:|---|
+| user-clicks | the prediction | +0.02 | 0.02 | **1/12** | inert here — says little about the rule |
+| user-visits | the prediction | +0.00 | 0.00 | **1/12** | inert here too |
+| rel-trial | control | −0.13 | 0.18 | 8/12 | fires often, does nothing — refuted |
+| rel-event | control | **−0.73** | 0.40 | 7/12 | loss, above the floor (shrunk −0.44) |
+
+The rule is not broken: it fires on 7–8 of 12 seeds on both controls, which is the direct
+evidence that the fold-gating repair took effect — before it, every seed was bit-identical to
+the argmax by construction.
+
+**But the two tasks separate into different findings and must not be merged.** On rel-trial it
+intervenes constantly and changes nothing: a refutation. On user-clicks it intervenes **once in
+twelve** — the near-optimal band rarely contains a candidate whose worst fold beats the
+argmax's — so that task is uninformative about the rule's value rather than evidence against
+it. "Not applicable here" and "measured at no effect" are different findings.
+
+**The pre-registered criterion decides it anyway.** A loss on either control that exceeds the
+gain on the prediction task makes a selector unusable at any mean, because choosing which
+selector to apply per task is itself a selection problem on the same biased signal. Lexi gains
++0.02 where it was meant to help and loses 0.73 on a control. **Not adoptable.**
+
+Stated with its own uncertainty, because the temptation is to report the biggest number: the
+rel-event loss is t = −1.81, not conventionally significant, and shrinks to −0.44 — back
+inside the floor. The defensible claim is "no gain anywhere, with a suggestive loss on
+rel-event", not "lexi costs 0.73".
+
+#### A methodological correction to the pre-registration
+
+The reading was pre-registered before any number existed, and one part of it was wrong. It
+claimed pairing buys nothing because calibrated arms correlate at r = −0.03 to +0.34.
+Measured here: **r = +0.71 to +0.94**, and pairing gained 1.8× to 4.0×. A selection-rule A/B
+is *well* paired precisely when the rule often picks the same thing, so the low-correlation
+warning applies when selection **diverges**, not as a blanket property of calibrated
+comparisons. The practical effect was large and in our favour: realised delta SEs were 0.04 to
+0.38 against the 0.49 budgeted, so this round resolved roughly **±0.1 to ±0.8** per task
+rather than the ±1.0 predicted.
+
+#### What this closes
+
+Items 1 and 2 of the model-selection-under-shift review are measured and neither helps. With
+`--gap-validation`, `--decide-fit-pool`, `--abstain`, `--ensemble-configs`, `--match-novelty`,
+the validation-noise fallback and both of today's, **nine instruments built on this validation
+signal have now failed**, two of them imported from the literature specifically for this
+failure mode.
+
+**And today's numbers say why, more sharply than the earlier ones could.** On user-clicks the
+pick changed on 7 of 12 seeds and test moved 0.02: the candidates the selector chooses among
+are *near-equivalent on test*. Yet tuning costs 1.29 there. Both are only true if the tuned
+candidates are collectively worse than the untuned `base` arm and shuffling among them is
+irrelevant. **The lever was never which configuration validation picks — it is whether to
+select at all.** Every instrument in the list above attacks the wrong quantity, which is what
+nine failures in a row look like.
+
+#### `--select-extrapolate` (built today): the precondition costs more than the rule returns
+
+Score each candidate at several train→query distances inside train, fit the slope, read the
+line where test sits. **Its feasibility, not its effect size, is the finding.**
+
+| task | what the data supports | consequence |
+|---|---|---|
+| rel-trial | 366/731/1096 d at 6,483-row pools | target sits **inside** the bracket → slope term zero by construction → this is **gap-matched selection** |
+| rel-avito/user-clicks | 2/3/4 d select an **identical pool**; only 5 d differs | **two** distinct points, a line with no residual → **refused** |
+| rel-event | 4/8/16 d at full 10,000-row pools, target 15 d inside the range | the only genuine case; slope **−0.0024 AUC/day**, adjustment **−0.01** |
+
+**rel-trial, decomposed — and the decomposition is the result.** Gap-matched selection first
+measured −0.55, but that comparison had two variables: the stale pools only hold 6,483 rows,
+so the arm's context grid was capped there while the baseline ranged to 10,000. Running the
+ordinary selector at the *same* cap separates them:
+
+| comparison | delta | SE | t | what it isolates |
+|---|---:|---:|---:|---|
+| uncapped base → capped base | **−0.58** | 0.21 | −2.72 | the price of the cap |
+| capped base → gap-matched | **+0.03** | 0.18 | +0.18 | the selection rule |
+
+So the apparent −0.55 was **almost entirely the cap**. Given a fair test — the one its
+pool-size confound denied it — `--gap-validation`'s idea does *nothing*: +0.03.
+
+**And the cap is not optional.** Any form of this method must restrict the context grid to
+what its stale pools can serve, because otherwise `draw` clamps and the distance axis becomes
+a pool-size axis. On rel-trial that precondition costs **0.58** while the rule returns
+**+0.03**. The machinery cannot pay for itself, independently of whether the idea is right.
+
+**rel-event, the only genuine case, and the rule is HARMFUL there — with a mechanism.**
+8 replicates, same pod, one variable:
+
+| | delta | SE | t | picks changed | spread | worst seed |
+|---|---:|---:|---:|---:|---|---:|
+| `--select-extrapolate` | **−1.84** | 1.03 | −1.79 | 7/8 | 1.81 → **3.06** | 78.65 → **74.13** |
+
+Per-seed: `[-0.73, 0.0, -0.77, -0.88, -2.5, -2.59, -8.38, +1.13]`. Stated with its own
+uncertainty: t = −1.79 is not significant at 2 SE and shrinkage pulls it to −0.35, so the
+claim is "harmful, driven by occasional catastrophic picks", not "costs 1.84". Seven of eight
+seeds negative is the more persuasive number, together with the near-doubled variance.
+
+**THE MECHANISM, and it is the reason this direction cannot work here.** The eight fitted
+slopes were:
+
+```
++0.0305  +0.0462  +0.0463  +0.1155   -0.0024  -0.0196  -0.0238  -0.0424
+```
+
+**Four positive, four negative — the sign is a coin flip across seeds.** There is no stable
+temporal decay to estimate. Each individual 3-point fit looks locally tidy, so the shrinkage
+does not suppress it, and the rule then moved the pick on 6 of 8 seeds — injecting that noise
+straight into selection. The premise requires candidates to decay at *different but stable*
+rates with distance; measured where it can be measured, the rate is not stable in sign even
+for one candidate set.
+
+That also explains the variance: a noisy slope occasionally reorders the ranking onto a badly
+wrong candidate, which is exactly what a −8.38 seed against a −0.73 median looks like.
+
+**What bounds this is temporal RESOLUTION, not span**, and the distinction matters because
+"use a longer history" does not fix it: 36,741 rel-avito rows precede a 2-day cutoff and the
+same 36,741 precede a 4-day one. The label stream has holes wider than the distinctions the
+method needs.
+
+#### Six defects that only appeared by running it
+
+The selector had 9 passing unit tests before its first pod-hour and still carried: a pool
+sized from the dataset rather than the scarcest gap (nothing buildable); an uncapped context
+grid (the confound above, silently); `int(3.5)` truncating a 3.5-day gap to 3 while the
+regression kept 3.5 as its abscissa; distinct gaps selecting identical pools (a duplicated
+point that shrinks the residual and disarms the shrinkage); a two-point fit trusted *because*
+its error was unmeasurable; and a diagnostic blaming shrinkage for a zero that was structural.
+All are now pinned by tests. None was reachable without real data — which is the argument for
+smoking a new instrument on the cheapest task before spending a window on it.
+
+---
+
 ## Environment checklist
 
 Run this before trusting any number from a new machine, container or pod. It has caught

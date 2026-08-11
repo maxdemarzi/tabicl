@@ -649,9 +649,131 @@ with measured drift.
 
 ### What to run, in order of expected value per pod-hour
 
-1. **Random validation split.** One flag, one round, and it directly tests a standing
-   conclusion this project got backwards.
-2. **HyperTime lexicographic selection.** Machinery mostly exists; targets the measured
-   tie-breaking regime.
-3. **Drift-Resilient TabPFN as a backbone**, alongside TabFM.
+1. ~~**Random validation split.**~~ **RUN 2026-08-10 — REFUTED.** +0.02 (SE 0.04) on
+   user-clicks, −0.12 on rel-trial, −0.21 on rel-event, 12 replicates each. It changed the
+   selected configuration on **5 to 8 of every 12 seeds** and moved test by nothing, so this
+   is a refutation of an active intervention, not a null from one that never fired.
+   **The mechanism was wrong on inspection, and that was visible beforehand:** a random slice
+   of TRAIN has *higher* entity overlap with the remaining training rows than a temporal
+   slice does, and the diagnosed failure here is that validation overrates history-leaning
+   arms *because* its entities appear in train 81.2% of the time against test's 58.6%. A
+   random split makes that mismatch worse. arXiv 2502.20260 argues from variance, not
+   population — importing it was importing a fix for a different problem.
+2. ~~**HyperTime lexicographic selection.**~~ **RUN 2026-08-10 — NOT ADOPTABLE.** −0.13 on
+   rel-trial (fires 8/12, does nothing), **−0.73 on rel-event** (fires 7/12), +0.02 on
+   user-clicks where it fires **1/12** and is therefore uninformative rather than tested.
+   No gain anywhere and a suggestive loss on a control; the loss shrinks to −0.44, so the
+   defensible claim is "no gain, with a possible cost", not "it costs 0.73".
+3. **Drift-Resilient TabPFN as a backbone**, alongside TabFM. **Not measured — the
+   integration is the obstacle, and here is the map so nobody rediscovers it.** Three
+   attempts on 2026-08-10, each failing differently and each narrowing it:
+
+   | install | outcome |
+   |---|---|
+   | plain `pip install git+…` | resolves **numpy 2.x** under a torch built against 1.x. Torch then imports with "Failed to initialize NumPy: _ARRAY_API not found" — a *warning* — so the gate passed and the round ran with every tensor↔array conversion dead |
+   | `numpy<2` pinned | bridge fine, but pip dragged **torch 2.4.1 → 2.1.2**, below the 2.2 this model needs (`Tensor.all(dim=tuple)` raises beneath it, inside the forward pass) |
+   | `--no-deps` | torch and numpy untouched; import dies at `NameError: KDITransformer is not defined` — the fork uses it at class-definition time and its dependency was excluded |
+   | `--no-deps` **+ `kditransform`** | **same `NameError`.** Adding the package under
+     `--no-deps` does not satisfy it — either the flag also starved `kditransform` itself, or
+     the fork expects a different provider of that symbol |
+
+   **CLOSED AT FOUR ATTEMPTS, deliberately.** This is a *screen*: `eval_backbone` is a
+   fixed-configuration test-side comparison, and its own footer says a gain there is not
+   table-eligible until the calibrated protocol picks it — the step that has killed nine real
+   effects on this benchmark. Four pod cycles on dependency resolution for a result that could
+   not be reported anyway is already past the point where it earns its keep. The next person
+   should start by resolving `KDITransformer` in a scratch environment, not on a pod.
+
+   Two guards were added because of this and are worth keeping
+   regardless of whether the backbone is ever adopted: `_pod_setup.sh` now exercises the
+   numpy↔torch bridge in both directions *and* re-checks the torch floor after any extra
+   install, because "the package installed" and "the environment still works" turned out to
+   be two different questions, twice.
+
+   The class is `tabpfn.TabPFNDistShiftClassifier` — learned only because the arm was written
+   to print the module's real exports on failure instead of guessing. All four of the names
+   guessed up front were wrong.
 4. **IWCV** last, and only if 1–3 fail: highest variance, and the crude version already lost.
+
+### What 1 and 2 together establish, which neither shows alone
+
+On user-clicks the pick changed on 7 of 12 seeds and test moved 0.02. So **the candidates the
+selector chooses among are near-equivalent on test** — yet tuning costs 1.29 there. Both are
+only true if the tuned candidates are collectively worse than the untuned `base` arm and
+shuffling among them is irrelevant. Every instrument this project has built reshuffles the
+pick, which is why nine of them have failed: **they attack the wrong quantity.** The lever is
+not which configuration validation picks; it is whether to select at all, or to change what
+quantity is being estimated — which is directions 5 and 6 below.
+
+### 6. Temporal-distance extrapolation — BUILT AND REFUTED, 2026-08-10 (`--select-extrapolate`)
+
+**Verdict first: it cannot pay for itself, and where it runs it is harmful.** Three tasks,
+three different reasons, none of them fixable with more replicates:
+
+| task | delta | what happened |
+|---|---:|---|
+| rel-avito/user-clicks | — | **cannot run.** 2/3/4-day gaps select an identical pool; two points, no verifiable slope |
+| rel-trial | **+0.03** (SE 0.18) | target inside the bracket → reduces to gap-matched selection → does nothing. But its **precondition costs −0.58**: the pools only hold 6,483 rows, so the context grid must be capped, and that cap is what the naive −0.55 was measuring |
+| rel-event | **−1.84** (SE 1.03, 7/8 seeds worse) | the only genuine case, and it *hurts*; variance nearly doubles and one seed loses 8.38 |
+
+**The mechanism is the useful part.** rel-event's eight fitted slopes were `+0.031 +0.046
++0.046 +0.116 / −0.002 −0.020 −0.024 −0.042` — **four positive, four negative.** The sign is a
+coin flip across seeds, so there is no stable decay to estimate; each 3-point fit looks locally
+tidy enough to survive shrinkage, and the rule then changed the pick on 6 of 8 seeds. It
+injects noise into selection rather than correcting a bias.
+
+**And the precondition is structural.** Stale pools must be large enough to serve the context
+grid, or `draw` clamps and the distance axis silently becomes a pool-size axis. Capping the
+grid is therefore not optional — and on rel-trial that cap costs 0.58 against a rule worth
+0.03. The machinery cannot pay for itself even where the idea is sound.
+
+**What bounds applicability is temporal RESOLUTION, not span.** 36,741 rel-avito rows precede
+a 2-day cutoff and the same 36,741 precede a 4-day one: the label stream has holes wider than
+the distinctions the method needs. "Use a longer history" does not fix that.
+
+Kept in the tree, off by default, with its guards and 15 tests — the negative result is worth
+more than the code, and the guards (refuse under three distinct gaps, drop duplicate pools,
+discard an unverifiable two-point slope) are reusable.
+
+---
+
+#### Original design notes, retained for the reasoning
+
+The only remaining idea that changes *what is estimated* rather than how the same ranking is
+read. Score each candidate at several train→query distances inside train, fit the slope, and
+evaluate the line where test actually sits. Two properties earned from the failures above:
+
+* **It subsumes `--gap-validation` and fixes its confound.** That was this rule with one gap,
+  no slope, and a pool whose size shrank as the gap grew, so its "distance" effect was partly
+  a pool-size effect — and pool size is not a quantity that differs between validation and
+  test. Here every pool is the last *N* rows before its cutoff: same size, only staleness moves.
+* **It refuses rather than degrades.** Fewer than two usable gaps raises, instead of quietly
+  becoming ordinary validation at an odd cutoff — the failure mode `--select-lexi` shipped with.
+
+Aimed squarely at the measured shape of the problem: rel-event's context-recency effect is
+worth **+7.50** on test at a 1,000-row context and validation scores it *low*, because
+validation sits at a nearer period where more context helps and a small recent context does
+not. An effect whose value grows with distance from the training period is exactly what a
+slope can see and a single near-period ranking cannot.
+
+#### Measured feasibility, 2026-08-10 — and it is the binding constraint, not the idea
+
+The rule needs pools that are stale by the requested gap AND large enough to serve the
+context grid. Both benchmarks tested so far fail to give it room, for *different* structural
+reasons, and neither failure is fixable with more replicates:
+
+| task | train→test gap | what the data supports | consequence |
+|---|---:|---|---|
+| rel-trial | 731 d | all of 366/731/1096 d, pools 6,483 | target sits **inside** the bracket, so the slope term is zero by construction → this is **gap-matched selection**, not extrapolation |
+| rel-avito/user-clicks | 10 d | 2/3/4 d select an **identical pool** (no rows exist between them); only 5 d differs | **two** distinct points → a line with no residual → **refused** |
+
+**rel-avito's timestamps are the obstacle.** 36,741 rows precede a 2-day cutoff and the same
+36,741 precede a 4-day one: the label stream has holes wider than the gaps we need to
+distinguish. Temporal resolution, not span, is what bounds this method — a distinction worth
+keeping, because "use a longer history" does not fix it.
+
+So on the task the whole selection thread is about, this direction **cannot be run at all**.
+That is a stronger and cheaper answer than a null would have been, and it arrived from the
+rule's own diagnostics rather than from a result that needed interpreting. What remains is
+rel-event, whose 15-day gap against a 7-day validation gap is the widest ratio in the
+benchmark and the only place a genuine slope may be measurable.
