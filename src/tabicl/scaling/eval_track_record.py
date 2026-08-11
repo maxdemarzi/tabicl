@@ -764,6 +764,13 @@ def main() -> None:
                          "at +3.28/+1.58/+0.45/+0.27/-1.70 across five tasks (mean +0.78). "
                          "This flag exists so that can be put through the CALIBRATED "
                          "protocol, which is the only thing that moves a published cell.")
+    ap.add_argument("--random-val-split", action="store_true",
+                    help="select on a RANDOM slice of train rather than RelBench's temporal "
+                         "val slice. arXiv 2502.20260 reports random splits selecting better "
+                         "under temporal shift; this project assumed the opposite and "
+                         "measured --gap-validation (more separation) as worse, without ever "
+                         "testing less. Test is untouched; held-out rows leave the context "
+                         "pool.")
     ap.add_argument("--drop-stale-arms", action="store_true",
                     help="exclude history-dependent arms when the shared-key block's "
                          "COVERAGE collapses between validation and test. Label-free: reads "
@@ -1893,6 +1900,28 @@ def main() -> None:
         val = task.get_table("val", mask_input_cols=False).df
         y_va = val[target].to_numpy()
         b_va = build_base(val, "val").reindex(columns=b_tr.columns, fill_value=np.nan)
+        # --- random validation slice (arXiv 2502.20260) -----------------------------------
+        # RelBench's val is a TIME SLICE between train and test, and this project measured
+        # what that costs: validation entities appear in train 81.2% of the time against
+        # test's 58.6%, so validation overrates every arm built on an entity's own history.
+        # `--gap-validation` attacked that by widening the gap and made it worse. The
+        # literature says the opposite: a RANDOM split selects better under temporal shift.
+        #
+        # Held out from TRAIN, same size as the official val, and the held-out rows are
+        # removed from the context pool below so no row is both fitted and validated.
+        random_val_idx = None
+        if args.random_val_split:
+            n_tr = len(arms["base"][0])
+            k = min(len(val), n_tr // 3)
+            random_val_idx = np.sort(np.random.default_rng(12345).choice(n_tr, size=k,
+                                                                        replace=False))
+            keep_mask = np.ones(n_tr, dtype=bool)
+            keep_mask[random_val_idx] = False
+            pool_idx_rv = np.flatnonzero(keep_mask)
+            y_va = y[random_val_idx]
+            print(f"random-val-split: {k:,} validation rows drawn at random from the "
+                  f"{n_tr:,} train rows; {len(pool_idx_rv):,} remain in the context pool "
+                  f"(official temporal val had {len(val):,})", flush=True)
         t_va = track(val[key].to_numpy(), val[tcol].to_numpy(), y)
         x_va = text_block(val)
         val_arms = {k: v for k, v in {
@@ -1907,6 +1936,11 @@ def main() -> None:
             "+rate": stack(b_va, t_va, rate_cols),
             "+history": stack(b_va, t_va),
         }.items() if k in arms}
+        if random_val_idx is not None:
+            # Take the validation arm straight from each arm's own TRAIN matrix, so the
+            # validation rows are identical in construction to the rows being fitted --
+            # which is the point of a random split and is not true of the temporal one.
+            val_arms = {k: arms[k][0][random_val_idx] for k in val_arms}
         if args.compress_to:
             # fit=False: reuse the TRAIN projection. Fitting here would let validation pick
             # its own components, so the arm validation SELECTS on would not be the arm test
@@ -1969,6 +2003,15 @@ def main() -> None:
         # is fitted on and the rows it is judged on matches the gap between train and test.
         # Both are subsets of the same feature matrix, so this costs no extra build.
         pool_order, pseudo_val = time_order, None
+        if random_val_idx is not None:
+            # Remove the randomly held-out validation rows from the context pool. Without
+            # this the same rows would be fitted AND scored, and the selector would reward
+            # whichever configuration memorised them best -- a leak that produces a
+            # beautiful validation curve and a worthless choice.
+            _held = set(random_val_idx.tolist())
+            pool_order = np.array([i for i in time_order if i not in _held])
+            print(f"random-val-split: context pool is {len(pool_order):,} rows after "
+                  f"removing the held-out validation slice", flush=True)
         if args.gap_validation:
             t_train = train[tcol].to_numpy()
             gap = test[tcol].to_numpy().min() - t_train.max()
