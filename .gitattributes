@@ -1,0 +1,9 @@
+# Shell scripts MUST stay LF, whatever the checkout platform does.
+#
+# `core.autocrlf=true` on this machine rewrites them to CRLF on checkout, and a CRLF shell
+# script fails on a Linux host in a way that reads like the wrong shell rather than the wrong
+# file: bash parses line 2 of `_pod_setup.sh` as `set -euo pipefail\r` and reports
+# "pipefail: invalid option name". That cost a pod cycle on 2026-08-10. The round driver also
+# normalises scripts on upload, but that only protects the pods -- anyone running these
+# directly from a checkout needs the file itself to be right.
+*.sh text eol=lf

@@ -62,7 +62,16 @@ if _image_match:
 
 # Community capacity is erratic and some hosts have broken CUDA; secure costs more but
 # is far likelier to yield a usable machine.
-CLOUDS = ["COMMUNITY", "SECURE"]
+#
+# It is also likelier to STAY one. A community L40S was reclaimed nine minutes into a
+# five-hour round: ssh went to "Connection refused", the logs went with it, and the pod was
+# gone from the account before teardown could run. For a round measured in hours the price
+# difference is smaller than the cost of losing it, so a long round can demand SECURE with
+# TABICL_CLOUD rather than editing this list.
+_cloud = os.environ.get("TABICL_CLOUD", "").upper()
+if _cloud and _cloud not in ("COMMUNITY", "SECURE"):
+    raise SystemExit(f"TABICL_CLOUD={_cloud!r} is not COMMUNITY or SECURE")
+CLOUDS = [_cloud] if _cloud else ["COMMUNITY", "SECURE"]
 
 # A host that cannot pull data is as useless as one that cannot allocate CUDA, and it
 # fails far more expensively: one host managed 270 kB/s, so pip alone took 25 minutes and
@@ -121,9 +130,18 @@ def run_ssh(target, command: str, timeout: int = 3600) -> int:
 
 
 def run_ssh_capture(target, command: str, timeout: int = 600) -> tuple[int, str]:
-    """Same, but return stdout so a probe's *output* can be inspected, not just its code."""
+    """Same, but return stdout so a probe's *output* can be inspected, not just its code.
+
+    **Decoded as UTF-8 with replacement, not with the locale codec.** `text=True` alone uses
+    the Windows ANSI codepage, and a single non-ASCII byte in a remote log -- a progress bar,
+    a unicode minus, an accented author name -- raises UnicodeDecodeError inside subprocess's
+    reader thread. That is not a cosmetic failure: `cycle`'s poller runs through this
+    function, so one stray byte would crash a healthy lane's driver, which then tears the pod
+    down in its `finally`. A log that cannot be decoded must never be able to end a round.
+    """
     done = subprocess.run(_ssh_argv(target, command), timeout=timeout,
-                          capture_output=True, text=True)
+                          capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
     return done.returncode, (done.stdout or "") + (done.stderr or "")
 
 
