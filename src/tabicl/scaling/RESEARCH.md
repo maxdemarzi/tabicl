@@ -551,3 +551,107 @@ Nothing here should start before `TODO.md` item 1 closes. That question — whet
 setting's verdict flips with `n_estimators` — is currently capable of inverting any
 comparison made on these tasks, which would silently corrupt the evaluation of any
 direction above.
+
+## Model selection under distribution shift — literature review (2026-08-10)
+
+**Why this review and not another tabular-model one.** Six papers on tabular foundation
+models produced one usable lead. But the binding constraint here is not the model: it is
+that **eleven interventions were real on fixed arms and about zero after selection**, and
+the diagnosis is precise — validation entities appear in train **81.2%** of the time against
+test's **58.6%**, so validation overrates exactly the arms that lean on history. That is a
+*model selection under covariate shift* problem, and this project had never read that
+literature.
+
+### What we had already tried, and the pattern in it
+
+| attempt | what it changed | result |
+|---|---|---|
+| `--gap-validation` | more temporal separation val→test | **worse** (78.71 vs 80.25) |
+| `--decide-fit-pool` | which rows are fitted on | failed |
+| `--abstain` | veto if ranking fails on a later val half | refuted |
+| `--ensemble-configs` | average top-k instead of argmax | refuted twice |
+| `--match-novelty` | resample val to test's seen/unseen mix | **widened** the gap |
+| validation-noise fallback | fall back to `base` inside the noise band | 2 of 6, worse than chance |
+| `--drop-stale-arms` | remove arms whose features degrade | **+0.65 / +0.49, only survivor** |
+
+**Four of the six failures tried to read a better answer out of the same validation scores.**
+The two that changed something structural — who is scored, what is eligible — are the only
+ones that produced anything, and one of them works.
+
+### 1. Random validation splits beat temporal ones — and we assumed the opposite
+
+**"Understanding the Limits of Deep Tabular Methods with Temporal Shift"**
+([arXiv 2502.20260](https://arxiv.org/abs/2502.20260)): *"While existing approaches use
+temporal ordering for splitting validation set, they show that **even a random split can
+significantly improve model performance**."*
+
+**This project went the other way.** `--gap-validation` widened the val→test time gap and
+measured **worse** (78.71 against 80.25); the entry concluded the instrument was faulty. The
+literature says the sign was wrong: the fix is *less* temporal separation, not more. **The
+opposite direction was never tested.**
+
+It is also consistent with our own measurement that selection is noise-dominated — margin
+**0.35** against validation noise **0.69**, with margin < noise in **35 of 41 blocks**. A
+random split yields a larger, lower-variance validation signal; trading a little bias for a
+lot of variance is exactly the trade a noise-dominated selector wants.
+
+**Cheapest experiment available, and directly contradicts a standing conclusion.**
+
+### 2. HyperTime — lexicographic (average, worst-case) over chronological folds
+
+**"HyperTime: Hyperparameter Optimization for Combating Temporal Distribution Shifts"**
+([arXiv 2305.18421](https://arxiv.org/abs/2305.18421)). Split validation into chronological
+folds; compute `L_avg` and `L_worst`; select **lexicographically with a tolerance band** —
+keep configs within κ of the best average, then among those take the best worst-case.
+
+**Fits our measured situation unusually well.** Because margin < noise in 35 of 41 blocks,
+there are many configs statistically tied on average validation. HyperTime breaks those ties
+by *temporal robustness* rather than by noise.
+
+**Distinct from `--abstain`, which we refuted.** That used the later validation half as a
+**veto**; this uses folds as a **tiebreak among near-optimal configs**. `split_val` already
+computes early/late halves per configuration, so most of the machinery exists.
+
+### 3. Rolling window + tournament
+
+**"Model Assessment and Selection under Temporal Distribution Shift"**
+([arXiv 2402.08672](https://arxiv.org/abs/2402.08672), ICML 2024). An adaptive rolling
+window over current *and historical* epochs to estimate generalisation error, with pairwise
+comparisons folded into a single-elimination tournament. Theoretically grounded and heavier
+than the above; the rolling window needs multiple historical validation epochs, which our
+train span could supply.
+
+### 4. Importance-weighted cross-validation — the classical answer, and we already failed a crude version
+
+**Sugiyama et al., "Covariate Shift Adaptation by Importance Weighted Cross Validation"**
+(JMLR 2007). Weight each validation row by the density ratio `p_test(x) / p_val(x)`; the
+weighted risk is an almost unbiased estimator of the target risk. **Unbiased but with
+unbounded variance**, and the density ratio must itself be estimated — hard in our
+130–360-column frames.
+
+**`--match-novelty` was a one-variable version of this** (matching only the seen/unseen
+entity mix) and it *widened* the gap. That is weak evidence against the family, not strong:
+a single binary covariate is a poor stand-in for a density ratio. But given the variance
+warning and our already noise-dominated selector, this is the least attractive of the four.
+
+### 5. A drift-aware backbone, which joins this thread to the TabFM one
+
+**"Drift-Resilient TabPFN"** ([arXiv 2411.10634](https://arxiv.org/abs/2411.10634), NeurIPS
+2024, code at `automl/Drift-Resilient_TabPFN`). A PFN pretrained on synthetic datasets from
+**evolving structural causal models**, so non-stationarity is in the prior. Reports accuracy
+0.688 → **0.744** and ROC AUC 0.786 → **0.832** against the strongest baselines across 18
+synthetic and real datasets, beating XGB, CatBoost, TabPFN and the Wild-Time methods. Frozen,
+no hyperparameter tuning, "small to moderately sized datasets" — and our context is 10,000
+rows, which may sit inside that.
+
+**Our setting is exactly what it was built for**: train → validation → test in time order
+with measured drift.
+
+### What to run, in order of expected value per pod-hour
+
+1. **Random validation split.** One flag, one round, and it directly tests a standing
+   conclusion this project got backwards.
+2. **HyperTime lexicographic selection.** Machinery mostly exists; targets the measured
+   tie-breaking regime.
+3. **Drift-Resilient TabPFN as a backbone**, alongside TabFM.
+4. **IWCV** last, and only if 1–3 fail: highest variance, and the crude version already lost.
