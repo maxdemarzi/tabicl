@@ -395,6 +395,236 @@ def _tabfm(device: str):
     return _TABFM
 
 
+def extrapolation_pool_size(t_train, gaps, query_size: int, cap: int):
+    """Largest pool size EVERY requested gap can serve, plus the per-gap availability.
+
+    Sizing the pool at `min(--context, n_train)` looks reasonable and is wrong: the query
+    slice consumes rows too, and the staler gaps consume more, so the binding constraint is
+    the *scarcest* gap and not the dataset. On rel-trial (11,994 rows, 2,000-row query) that
+    mistake asked for 10,000-row pools when the widest gap could offer 6,483 and the narrowest
+    9,773 -- every gap unbuildable, at any staleness.
+
+    Returned so the caller can also CAP THE CONTEXT GRID to it. If the grid may request more
+    context than a pool holds, `draw` clamps, the wider candidates quietly become the same
+    candidate, and the axis being measured is pool size again.
+    """
+    t = np.asarray(t_train)
+    order = np.argsort(t, kind="stable")
+    query_idx = order[-query_size:] if query_size < len(order) else order
+    q_start = t[query_idx].min()
+    avail = []
+    for g in gaps:
+        # HOURS, not days: `np.timedelta64(int(g), "D")` truncates, so a requested 3.5-day gap
+        # was applied as 3 days while the regression still used 3.5 as its x-coordinate. A
+        # slope fitted against the wrong abscissa is wrong by exactly that ratio.
+        cutoff = (q_start - np.timedelta64(int(round(g * 24)), "h")
+                  if np.issubdtype(t.dtype, np.datetime64) else q_start - g)
+        avail.append((float(g), int((t[order] <= cutoff).sum())))
+    return min([cap] + [n for _, n in avail]), avail
+
+
+def extrapolation_pools(t_train, gaps, pool_size: int, query_size: int):
+    """Build ``(gap, pool_idx, query_idx)`` for each usable gap: ONE query slice, pools at
+    increasing staleness.
+
+    The construction mirrors what test actually is. Test is a block of rows sitting some
+    distance *after* everything the model was fitted on, so the analogue inside train is a
+    FIXED query slice -- the most recent `query_size` rows -- scored from fitting pools that
+    end further and further before it. Varying the pool's recency against a fixed query is
+    the same axis test differs on, and it means every gap scores the *same rows*, so a
+    difference between gaps cannot be a difference between query populations.
+
+    **Pool size is held constant, and that is the point.** `--gap-validation` carved its pool
+    by a time cutoff and let the size fall out, so it selected on 11,522 rows against a
+    19,239-row final fit -- and any slope measured that way is partly a slope in pool size,
+    which is a quantity that does *not* differ between validation and test. Here each pool is
+    the last `pool_size` rows before its cutoff: same size, same construction, only staleness
+    moves.
+
+    Gaps that cannot be built are dropped and returned in ``unusable`` rather than silently
+    shortening the lever arm: a caller that thinks it fitted three points and fitted two is
+    the "not applicable here" / "measured at no effect" confusion again.
+    """
+    t = np.asarray(t_train)
+    order = np.argsort(t, kind="stable")
+    query_idx = order[-query_size:] if query_size < len(order) else order
+    q_start = t[query_idx].min()
+    built, unusable, seen = [], [], {}
+    for g in gaps:
+        # HOURS, not days: `np.timedelta64(int(g), "D")` truncates, so a requested 3.5-day gap
+        # was applied as 3 days while the regression still used 3.5 as its x-coordinate. A
+        # slope fitted against the wrong abscissa is wrong by exactly that ratio.
+        cutoff = (q_start - np.timedelta64(int(round(g * 24)), "h")
+                  if np.issubdtype(t.dtype, np.datetime64) else q_start - g)
+        eligible = order[t[order] <= cutoff]
+        if len(eligible) < pool_size:
+            unusable.append((float(g), len(eligible)))
+            continue
+        pool = eligible[-pool_size:]
+        # DISTINCT GAPS THAT SELECT THE SAME POOL ARE ONE MEASUREMENT, NOT TWO. Timestamps
+        # here are coarse -- on rel-avito the 2-day and 3.5-day cutoffs fall between the same
+        # pair of dates and yield an identical pool. Keeping both fits the slope through a
+        # DUPLICATED point: the residual shrinks, the slope's standard error is understated,
+        # and the shrinkage that exists to distrust a noisy slope stops working exactly where
+        # it is needed. This project already refuses to score two identical feature sets; the
+        # same rule belongs here, one level down.
+        key = pool.tobytes()
+        if key in seen:
+            unusable.append((float(g), -1))     # -1 marks "same pool as an earlier gap"
+            continue
+        seen[key] = g
+        built.append((float(g), pool, query_idx))
+    return built, unusable
+
+
+EXTRAP_PRIOR_SD = 0.5
+
+
+def extrapolate_select(by_gap: dict, gap_test: float, shrink_slope: bool = True):
+    """Rank candidates by their score EXTRAPOLATED to the train->test gap.
+
+    ``by_gap`` maps a candidate key to a list of ``(gap_days, score)`` measured at several
+    train->query distances. Returns ``(choice, reason, diag)``.
+
+    **Why this and not another instrument.** Every previous attempt read a better answer out
+    of the validation *ranking* -- `--gap-validation`, `--decide-fit-pool`, `--abstain`,
+    `--ensemble-configs`, `--match-novelty`, `--random-val-split`, `--select-lexi` -- and all
+    of them failed. The measured reason is that validation sits at a *shorter* train->query
+    distance than test on every task in this benchmark (7 days against 15 on rel-event, 4
+    against 10 on rel-avito, 365 against 731 on rel-trial, 150 against 1,976 on rel-f1), so
+    it estimates the right quantity at the wrong point. This models that: measure each
+    candidate at several distances, take the SLOPE, and evaluate the line where test actually
+    sits. It does not need any single pseudo-split to be calibrated -- only the slope to
+    carry information -- which is exactly what `--gap-validation` needed and did not have.
+
+    **The least-squares line passes through the centroid**, so the extrapolated score is
+    ``mean(score) + slope * (gap_test - mean(gap))``. The second term is the whole
+    intervention, in AUC units, which is what makes it shrinkable.
+
+    **Shrinkage is on by default and is not decoration.** A slope from three or four noisy
+    points overfits, and this project has measured its own winner's curse repeatedly
+    (+0.66 -> +0.39, +0.60 -> +0.09). The adjustment is pulled toward zero by its own
+    standard error under a N(0, 0.5) prior, so a slope the data cannot support degenerates
+    this rule back to ordinary mean-score ranking rather than to confident nonsense.
+
+    **What this CANNOT fix, stated here because it is the likeliest failure.** The lever arm
+    is short: validation spans days where the extrapolation target is further out still, so
+    `gap_test` usually sits outside the measured range. `diag["lever"]` reports how far
+    outside, in units of the measured span. A large lever with a noisy slope is precisely
+    where a linear extrapolation invents a number, and the caller should say so rather than
+    quietly select on it.
+
+    **The confound this design exists to avoid** lives in the caller, not here: if the fitting
+    pool shrinks as the gap grows -- which is what `--gap-validation` did, selecting on 11,522
+    rows against a 19,239-row final fit -- then the slope measures pool size, not distance.
+    Every gap must be scored from a fit pool of the SAME size.
+    """
+    if not by_gap:
+        return None, "no candidates", {}
+    rows = []
+    for key, pairs in by_gap.items():
+        g = np.array([p[0] for p in pairs], float)
+        s = np.array([p[1] for p in pairs], float)
+        if len(g) < 2 or np.allclose(g, g[0]):
+            # Nothing to extrapolate along: fall back to the mean, and let the caller see it.
+            rows.append((float(s.mean()), 0.0, float("nan"), 0.0, key))
+            continue
+        slope, intercept = np.polyfit(g, s, 1)
+        resid = s - (intercept + slope * g)
+        dof = len(g) - 2
+        var_g = float(((g - g.mean()) ** 2).sum())
+        se_slope = (float(np.sqrt((resid @ resid / dof) / var_g))
+                    if dof > 0 and var_g > 0 else float("nan"))
+        lever = float(gap_test - g.mean())
+        adj = float(slope * lever)
+        se_adj = float(se_slope * abs(lever)) if se_slope == se_slope else float("nan")
+        if shrink_slope:
+            if se_adj != se_adj:
+                # dof == 0: TWO points fit a line exactly and leave no residual, so there is
+                # no evidence the slope is anything but noise. Trusting it because it happens
+                # to be unmeasurable is the wrong way round -- an unverifiable adjustment is
+                # discarded, and the rule falls back to mean-score ranking.
+                adj = 0.0
+            elif se_adj > 0:
+                adj *= EXTRAP_PRIOR_SD ** 2 / (EXTRAP_PRIOR_SD ** 2 + se_adj ** 2)
+        rows.append((float(s.mean()) + adj, float(slope), se_slope, adj, key))
+
+    rows.sort(key=lambda r: -r[0])
+    best = rows[0]
+    spans = [max(p[0] for p in v) - min(p[0] for p in v) for v in by_gap.values() if len(v) > 1]
+    span = max(spans) if spans else 0.0
+    gmax = max((max(p[0] for p in v) for v in by_gap.values()), default=0.0)
+    diag = {
+        "span": span,
+        # How far past the measured range the answer is being read, in units of that range.
+        # 0 means interpolation; 2 means the line is trusted twice as far as it was fitted.
+        "lever": (gap_test - gmax) / span if span > 0 else float("inf"),
+        "adjustments": {r[4]: r[3] for r in rows},
+        "max_abs_adjustment": max((abs(r[3]) for r in rows), default=0.0),
+    }
+    centroids = [float(np.mean([p[0] for p in v])) for v in by_gap.values() if v]
+    at_centroid = bool(centroids) and abs(gap_test - max(centroids)) < 1e-9
+    if at_centroid:
+        # NOT a shrinkage failure, and the distinction matters to whoever reads this next.
+        # A least-squares line passes through the centroid of its points, so when the target
+        # gap sits exactly there -- which the default 0.5x/1.0x/1.5x bracket guarantees --
+        # the slope term is zero identically, whatever the slope is. That is the CORRECT
+        # behaviour: if you can measure AT the test distance you do not need to extrapolate
+        # to it, and this becomes gap-matched selection over a fixed-size pool, smoothed
+        # across the bracket. The slope only has work to do when the target gap cannot be
+        # built at all.
+        reason = (f"target gap {gap_test:.0f}d sits at the centre of the measured bracket, so "
+                  f"the slope term is zero by construction: this is GAP-MATCHED selection "
+                  f"(fixed-size pools), not an extrapolation")
+    elif diag["max_abs_adjustment"] < 1e-9:
+        reason = ("every slope shrank to nothing -- this is ordinary mean-score ranking, "
+                  "not an extrapolation")
+    else:
+        reason = (f"extrapolated to a {gap_test:.0f}-day gap from a {span:.0f}-day measured "
+                  f"span (lever {diag['lever']:.1f}x); winning adjustment {best[3]:+.2f} "
+                  f"from slope {best[1]:+.4f}/day")
+    return best[4], reason, diag
+
+
+def fold_plan(abstain: bool, select_lexi: bool, cv_folds, gap_validation) -> bool:
+    """Whether the sweep should compute per-fold validation scores.
+
+    BOTH --abstain and --select-lexi read the folds; only --abstain then uses them as a
+    veto. Gating the computation on --abstain alone left --select-lexi finding `split_val`
+    empty, falling back to the plain argmax, and printing a lexicographic line while
+    selecting exactly what it always had -- a null with no variance, which on this benchmark
+    means a broken experiment rather than a negative result.
+
+    Raises rather than silently degrading when the folds are impossible, for the same reason
+    the abstention guard does.
+    """
+    wanted = bool(abstain) or bool(select_lexi)
+    possible = not cv_folds and not gap_validation
+    if wanted and not possible:
+        raise SystemExit(
+            "--abstain / --select-lexi need the ordinary validation column and cannot be "
+            "combined with --cv-folds or --gap-validation. Silently ignoring them would "
+            "report an abstention run that never abstained, or a lexicographic run that was "
+            "a plain argmax."
+        )
+    return wanted
+
+
+def random_val_indices(n_train: int, n_val: int, seed: int) -> np.ndarray:
+    """Train rows held out to select on, for --random-val-split (arXiv 2502.20260).
+
+    Sized to the official temporal validation split so the two selectors listen to the same
+    number of rows, and capped at a third of train so the context pool is never gutted.
+
+    **Seeded on the replicate.** The claim under test is about the family of random draws,
+    so a fixed draw would let one slice stand in for the family and hide the split's own
+    variance inside a spread that looks reassuringly tight.
+    """
+    k = min(n_val, n_train // 3)
+    return np.sort(np.random.default_rng(90_000 + seed).choice(n_train, size=k,
+                                                               replace=False))
+
+
 def lexi_select(candidates, split_val, tolerance: float = 0.01):
     """HyperTime's lexicographic pick: best worst-fold score among the near-best on average.
 
@@ -808,6 +1038,19 @@ def main() -> None:
                          "the best WORST fold among them. Aimed at the measured regime here, "
                          "where the winning margin (0.35) is half the validation noise "
                          "(0.69) and 35 of 41 blocks cannot distinguish their top candidates.")
+    ap.add_argument("--select-extrapolate", action="store_true",
+                    help="select on each candidate's score EXTRAPOLATED to the train->test "
+                         "gap, rather than on its validation score. Validation sits at a "
+                         "shorter train->query distance than test on every task here (7d vs "
+                         "15d on rel-event, 4 vs 10 on rel-avito, 365 vs 731 on rel-trial, "
+                         "150 vs 1976 on rel-f1), so it measures the right quantity at the "
+                         "wrong point. Costs one sweep per gap.")
+    ap.add_argument("--extrap-gaps", default="",
+                    help="comma-separated train->query gaps in days. Default brackets the "
+                         "train->test gap at 0.5x/1.0x/1.5x, so the answer is interpolated "
+                         "wherever the train span allows it.")
+    ap.add_argument("--extrap-query", type=int, default=2000,
+                    help="rows in the fixed query slice each gap is scored on")
     ap.add_argument("--lexi-tolerance", type=float, default=0.01,
                     help="width of the near-optimal band as a fraction of the best score. "
                          "0.01 on a 70-point AUC is about 0.7, which is this benchmark's "
@@ -1950,19 +2193,25 @@ def main() -> None:
         #
         # Held out from TRAIN, same size as the official val, and the held-out rows are
         # removed from the context pool below so no row is both fitted and validated.
-        random_val_idx = None
-        if args.random_val_split:
-            n_tr = len(arms["base"][0])
-            k = min(len(val), n_tr // 3)
-            random_val_idx = np.sort(np.random.default_rng(12345).choice(n_tr, size=k,
-                                                                        replace=False))
-            keep_mask = np.ones(n_tr, dtype=bool)
-            keep_mask[random_val_idx] = False
-            pool_idx_rv = np.flatnonzero(keep_mask)
-            y_va = y[random_val_idx]
-            print(f"random-val-split: {k:,} validation rows drawn at random from the "
-                  f"{n_tr:,} train rows; {len(pool_idx_rv):,} remain in the context pool "
-                  f"(official temporal val had {len(val):,})", flush=True)
+        if args.random_val_split and args.match_novelty:
+            raise SystemExit(
+                "--random-val-split and --match-novelty both redefine which rows are "
+                "validated on. Combined, the novelty match would resample the temporal val "
+                "rows this run does not use, and report having matched a population it "
+                "never selected on.")
+
+        def random_val_draw(seed):
+            """Hold out a random slice of TRAIN to select on -- REDRAWN EVERY REPLICATE.
+
+            The claim under test (arXiv 2502.20260) is that *a random split* selects better
+            than the temporal one, and that is a statement about the family of draws. This
+            was first written to draw once, outside the seed loop, from a hardcoded
+            `default_rng(12345)`: every replicate then shared one slice, so the spread across
+            seeds covered context draws and model randomness but **not** the split -- the one
+            source of variance the claim is about. A lucky slice would have been
+            indistinguishable from a working method at any number of replicates.
+            """
+            return random_val_indices(len(arms["base"][0]), len(val), seed)
         t_va = track(val[key].to_numpy(), val[tcol].to_numpy(), y)
         x_va = text_block(val)
         val_arms = {k: v for k, v in {
@@ -1977,11 +2226,7 @@ def main() -> None:
             "+rate": stack(b_va, t_va, rate_cols),
             "+history": stack(b_va, t_va),
         }.items() if k in arms}
-        if random_val_idx is not None:
-            # Take the validation arm straight from each arm's own TRAIN matrix, so the
-            # validation rows are identical in construction to the rows being fitted --
-            # which is the point of a random split and is not true of the temporal one.
-            val_arms = {k: arms[k][0][random_val_idx] for k in val_arms}
+        val_arm_names = list(val_arms)
         if args.compress_to:
             # fit=False: reuse the TRAIN projection. Fitting here would let validation pick
             # its own components, so the arm validation SELECTS on would not be the arm test
@@ -2044,15 +2289,34 @@ def main() -> None:
         # is fitted on and the rows it is judged on matches the gap between train and test.
         # Both are subsets of the same feature matrix, so this costs no extra build.
         pool_order, pseudo_val = time_order, None
-        if random_val_idx is not None:
-            # Remove the randomly held-out validation rows from the context pool. Without
-            # this the same rows would be fitted AND scored, and the selector would reward
-            # whichever configuration memorised them best -- a leak that produces a
-            # beautiful validation curve and a worthless choice.
-            _held = set(random_val_idx.tolist())
-            pool_order = np.array([i for i in time_order if i not in _held])
-            print(f"random-val-split: context pool is {len(pool_order):,} rows after "
-                  f"removing the held-out validation slice", flush=True)
+
+        def random_val_view(seed):
+            """Everything the selector needs for one replicate's draw.
+
+            Returns ``(y_va, val_arms, pool_order, va_early, va_late)``.
+            """
+            idx = random_val_draw(seed)
+            # Take the validation arm straight from each arm's own TRAIN matrix, so the
+            # validation rows are identical in construction to the rows being fitted --
+            # which is the point of a random split and is not true of the temporal one.
+            va = {k_: arms[k_][0][idx] for k_ in val_arm_names}
+            if args.compress_to:
+                va = {k_: compress_fit_apply(k_, v_, args.compress_to, fit=False)
+                      for k_, v_ in va.items()}
+            # Remove the held-out rows from the context pool. Without this the same rows
+            # would be fitted AND scored, and the selector would reward whichever
+            # configuration memorised them best -- a leak that produces a beautiful
+            # validation curve and a worthless choice.
+            held = set(idx.tolist())
+            pool = np.array([i for i in time_order if i not in held])
+            # Folds for --select-lexi, ordered by the held-out rows' OWN train timestamps.
+            # The temporal path orders the `val` TABLE; those positions index a frame of a
+            # different length than this slice (k = min(len(val), n_train // 3)), so reusing
+            # them would misalign every fold -- or raise, on the tasks where it happens to
+            # be caught.
+            o = np.argsort(train[tcol].to_numpy()[idx], kind="stable")
+            cut = max(1, int(0.6 * len(o)))
+            return y[idx], va, pool, o[:cut], o[cut:]
         if args.gap_validation:
             t_train = train[tcol].to_numpy()
             gap = test[tcol].to_numpy().min() - t_train.max()
@@ -2127,15 +2391,72 @@ def main() -> None:
         # train folds and `--gap-validation` on a pseudo-validation set carved out of train,
         # so neither produces the val predictions this reads -- and gap-validation is
         # refuted anyway.
-        split_halves = bool(args.abstain) and not args.cv_folds and not args.gap_validation
-        if args.abstain and not split_halves:
-            raise SystemExit(
-                "--abstain needs the ordinary validation column and cannot be combined with "
-                "--cv-folds or --gap-validation. Silently ignoring it would report an "
-                "abstention run that never abstained."
-            )
+        split_halves = fold_plan(args.abstain, args.select_lexi,
+                                 args.cv_folds, args.gap_validation)
+
+        # --- temporal-distance extrapolation ------------------------------------------------
+        # Validation sits at a SHORTER train->query distance than test on every task here, so
+        # it estimates the right quantity at the wrong point. Rather than trusting its ranking
+        # (which nine instruments have now failed to repair), measure each candidate at several
+        # distances inside train and read the line where test actually sits.
+        #
+        # Note what this makes of `--gap-validation`: that was this rule with ONE gap, no
+        # slope, and a pool whose size shrank with the gap. When train is long enough to build
+        # a pool at the full test gap the lever is 0 and this interpolates rather than
+        # extrapolates, which is strictly the better case.
+        extrap_pools, gap_test_days, extrap_cap = [], 0.0, None
+        if args.select_extrapolate:
+            t_tr = train[tcol].to_numpy()
+            day = np.timedelta64(1, "D")
+            gap_test_days = float((test[tcol].to_numpy().min() - t_tr.max()) / day)
+            if args.extrap_gaps:
+                gaps = [float(g) for g in args.extrap_gaps.split(",")]
+            else:
+                # Bracket the target rather than only approaching it: measuring at and beyond
+                # `gap_test` where the data allows is what keeps the lever at 0.
+                gaps = [gap_test_days * f for f in (0.5, 1.0, 1.5)]
+            # The pool must serve the widest context in the grid, or `draw` clamps and the
+            # "distance" axis quietly becomes a pool-size axis again. Size it from what the
+            # SCARCEST gap can actually offer, not from the dataset: the query slice consumes
+            # rows and the staler gaps consume more.
+            query_size = min(args.extrap_query, len(arms["base"][0]) // 4)
+            pool_size, avail = extrapolation_pool_size(t_tr, gaps, query_size, args.context)
+            print(f"\nextrapolate: rows available per gap {[(f'{g:.0f}d', n) for g, n in avail]}"
+                  f" -> pool {pool_size:,}", flush=True)
+            if pool_size < 500:
+                raise SystemExit(
+                    f"--select-extrapolate can only build {pool_size}-row pools on this task "
+                    f"({[(f'{g:.0f}d', n) for g, n in avail]}). Its train span is too short "
+                    f"for these gaps; pass narrower --extrap-gaps or a smaller --extrap-query.")
+            # Everything the sweep may request must fit in a pool, so the grid is capped here
+            # and the cap is announced -- selection then happens over a narrower context range
+            # than the default protocol, which is a real difference and not a detail.
+            extrap_cap = pool_size
+            extrap_pools, unusable = extrapolation_pools(t_tr, gaps, pool_size, query_size)
+            print(f"\nextrapolate: train->test gap {gap_test_days:.0f}d; "
+                  f"pools at {[f'{g:.0f}d' for g, _, _ in extrap_pools]} "
+                  f"(pool {pool_size:,} rows, query {query_size:,} rows)", flush=True)
+            for g, n in unusable:
+                if n < 0:
+                    print(f"  DROPPED gap {g:g}d: selects the SAME pool as a narrower gap "
+                          f"(timestamps too coarse to separate them) -- keeping it would fit "
+                          f"the slope through a duplicated point", flush=True)
+                else:
+                    print(f"  UNBUILDABLE gap {g:g}d: only {n:,} rows precede the cutoff, "
+                          f"pool needs {pool_size:,}", flush=True)
+            if len(extrap_pools) < 3:
+                raise SystemExit(
+                    f"--select-extrapolate needs at least THREE distinct usable gaps and has "
+                    f"{len(extrap_pools)}. Two points fit a line exactly and leave no residual, "
+                    f"so there is no evidence the slope is anything but noise -- and the rule "
+                    f"would then extrapolate confidently off an unverifiable line. One point "
+                    f"is not a slope at all. Either this task's train span cannot support the "
+                    f"requested gaps, or gaps collapsed onto the same pool; the lines above "
+                    f"say which.")
         if split_halves:
-            print(f"\nabstention: validation split by time into {len(va_early)} early / "
+            who = " + ".join(n for n, on in (("abstention", args.abstain),
+                                             ("lexi", args.select_lexi)) if on)
+            print(f"\n{who}: validation split by time into {len(va_early)} early / "
                   f"{len(va_late)} late rows", flush=True)
 
         results = []
@@ -2143,13 +2464,24 @@ def main() -> None:
             best = None
             candidates: list = []
             split_val: dict = {}
+            extrap_by_gap: dict = {}
             criterion = f"{args.cv_folds}-fold CV over train" if args.cv_folds \
                 else "validation only"
             print(f"\n-- seed {seed}: selection ({criterion}) --", flush=True)
+            if args.random_val_split:
+                # Redrawn here, per replicate, so the reported spread includes the split.
+                y_va, val_arms, pool_order, va_early, va_late = random_val_view(seed)
+                print(f"   random-val-split: {len(y_va):,} rows held out of "
+                      f"{len(arms['base'][0]):,} train rows (official temporal val had "
+                      f"{len(val):,}); {len(pool_order):,} left in the context pool",
+                      flush=True)
             # Capped at --context, not at the training-set size: rel-avito has 86,619 rows
             # and a grid scaled to that asks for contexts an L40S will not fit, so the run
             # dies rather than reporting a smaller honest number.
             cap = min(len(arms["base"][0]), args.context)
+            if extrap_cap is not None:
+                # No candidate may ask for more context than a pseudo-pool holds.
+                cap = min(cap, extrap_cap)
             if args.context_grid:
                 grid = sorted({min(int(s), cap) for s in args.context_grid.split(",")})
             else:
@@ -2173,7 +2505,21 @@ def main() -> None:
                         if order != "random" and min(size, n) >= n:
                             continue
                         rows = draw(order, seed, n, size, pool_order)
-                        if args.cv_folds:
+                        if extrap_pools:
+                            # Score this candidate at every train->query distance the data
+                            # supports. The criterion is the line evaluated where TEST sits,
+                            # not any single split's level -- so no pseudo-split needs to be
+                            # calibrated, which is the assumption --gap-validation needed and
+                            # did not have.
+                            pairs = []
+                            for g_days, pool_i, query_i in extrap_pools:
+                                rows_g = draw(order, seed, n, size, pool_i)
+                                pairs.append((g_days, score(arms[name][0],
+                                                            arms[name][0][query_i], rows_g,
+                                                            seed, truth=y[query_i])))
+                            extrap_by_gap[(name, size, order)] = pairs
+                            v = float(np.mean([p[1] for p in pairs]))
+                        elif args.cv_folds:
                             v = cv_score(name, size, seed)
                         elif pseudo_val is not None:
                             # Judged on the latest train rows, having been fitted only on
@@ -2202,6 +2548,23 @@ def main() -> None:
                         candidates.append((v, name, size, order))
                         if best is None or v > best[0]:
                             best = (v, name, size, order)
+            if extrap_by_gap:
+                _pick, _why, _diag = extrapolate_select(extrap_by_gap, gap_test_days)
+                print(f"  EXTRAP: {_why}", flush=True)
+                if _diag.get("lever", 0) > 1.0:
+                    # Saying it rather than hiding it: past this the line is trusted further
+                    # than it was fitted, which is where a linear extrapolation starts
+                    # inventing numbers.
+                    print(f"  EXTRAP WARNING: reading {_diag['lever']:.1f}x past the measured "
+                          f"span -- treat this pick as weakly supported", flush=True)
+                if _pick is not None and _pick != (best[1], best[2], best[3]):
+                    # Both sides printed as (arm, context, order). The earlier version sliced
+                    # a 4-tuple candidate and a 3-tuple key with the same [1:], so the "after"
+                    # side silently lost its arm name -- the one field you most want to read.
+                    print(f"  EXTRAP changed the pick: {(best[1], best[2], best[3])} -> "
+                          f"{_pick}", flush=True)
+                    best = next(c for c in candidates
+                                if (c[1], c[2], c[3]) == _pick)
             if args.select_lexi:
                 _pick, _n, _why = lexi_select(candidates, split_val, args.lexi_tolerance)
                 if _pick is not None and _pick != best:
@@ -2211,7 +2574,10 @@ def main() -> None:
                     print(f"  LEXI: {_why} -- same as the argmax", flush=True)
             val_auc, name, size, order = best
 
-            if split_halves and split_val:
+            # Gated on `args.abstain`, NOT on `split_halves` -- --select-lexi now populates
+            # the same folds, and running the veto off the back of that would ship two
+            # interventions in one arm.
+            if args.abstain and split_val:
                 # Pick on the EARLY half, then ask whether that pick survives on the LATE
                 # half against the untuned arm. A winner that cannot beat `base` out of
                 # sample is a winner the ranking invented, and taking it is how user-clicks

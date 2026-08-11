@@ -4024,3 +4024,405 @@ def test_lexi_handles_no_candidates():
     from tabicl.scaling.eval_track_record import lexi_select
     pick, n, _ = lexi_select([], {}, 0.01)
     assert pick is None and n == 0
+
+
+# --- the folds lexi reads have to actually be computed ----------------------------------
+# `lexi_select` was tested and correct while the runner never fed it anything: the folds
+# were gated on --abstain, so --select-lexi fell back to the plain argmax and reported a
+# selection it had not made. The unit under test was never the one that was broken.
+
+
+def test_select_lexi_alone_requests_the_folds():
+    from tabicl.scaling.eval_track_record import fold_plan
+    assert fold_plan(abstain=False, select_lexi=True,
+                     cv_folds=0, gap_validation=False) is True
+
+
+def test_abstain_alone_still_requests_the_folds():
+    from tabicl.scaling.eval_track_record import fold_plan
+    assert fold_plan(abstain=True, select_lexi=False,
+                     cv_folds=0, gap_validation=False) is True
+
+
+def test_neither_flag_leaves_the_folds_off():
+    from tabicl.scaling.eval_track_record import fold_plan
+    assert fold_plan(abstain=False, select_lexi=False,
+                     cv_folds=0, gap_validation=False) is False
+
+
+@pytest.mark.parametrize("cv_folds,gap", [(5, False), (0, True)])
+def test_lexi_refuses_the_criteria_that_produce_no_folds(cv_folds, gap):
+    from tabicl.scaling.eval_track_record import fold_plan
+    with pytest.raises(SystemExit):
+        fold_plan(abstain=False, select_lexi=True,
+                  cv_folds=cv_folds, gap_validation=gap)
+
+
+# --- the random validation slice must be redrawn every replicate ------------------------
+
+
+def test_random_val_draw_varies_with_the_seed():
+    """The defect this pins: one hardcoded draw shared by every replicate, so the reported
+    spread covered context and model randomness but not the split itself."""
+    from tabicl.scaling.eval_track_record import random_val_indices
+    draws = [random_val_indices(9000, 1000, s) for s in range(5)]
+    assert all(len(d) == 1000 for d in draws)
+    assert len({d.tobytes() for d in draws}) == 5
+    # and they must genuinely differ, not merely be unequal at one position
+    assert len(set(draws[0].tolist()) & set(draws[1].tolist())) < 400
+
+
+def test_random_val_draw_is_reproducible_for_a_given_seed():
+    from tabicl.scaling.eval_track_record import random_val_indices
+    a = random_val_indices(9000, 1000, 3)
+    b = random_val_indices(9000, 1000, 3)
+    assert np.array_equal(a, b)
+
+
+def test_random_val_draw_never_takes_more_than_a_third_of_train():
+    from tabicl.scaling.eval_track_record import random_val_indices
+    idx = random_val_indices(900, 1000, 0)      # val is larger than train//3
+    assert len(idx) == 300
+
+
+def test_random_val_draw_is_sorted_unique_and_in_range():
+    from tabicl.scaling.eval_track_record import random_val_indices
+    idx = random_val_indices(5000, 400, 7)
+    assert np.array_equal(idx, np.sort(idx))
+    assert len(np.unique(idx)) == len(idx)
+    assert idx.min() >= 0 and idx.max() < 5000
+
+
+# --- the pod harness ---------------------------------------------------------------------
+# Each of these pins a failure that cost a pod cycle. The harness used to live in a session
+# scratchpad, so every one of them was rediscovered rather than remembered.
+
+
+def test_payload_carries_the_runner_and_the_licence(tmp_path):
+    """LICENSE is not optional -- pyproject declares `license = {file = "LICENSE"}`, so
+    hatchling fails the build without it and the payload had never shipped it."""
+    from tabicl.scaling import cycle
+    out = tmp_path / "payload.tar.gz"
+    cycle.build_payload(cycle.REPO, out)
+    import tarfile
+    with tarfile.open(out) as tar:
+        names = set(tar.getnames())
+    assert "LICENSE" in names
+    assert "pyproject.toml" in names
+    assert cycle.RUNNER in names
+    cycle.verify_payload(cycle.REPO, out)          # must not raise
+
+
+def test_payload_verification_catches_a_stale_archive(tmp_path):
+    """The failure that cost four rounds was an archive that EXISTED and was stale, so the
+    check has to compare content, not presence."""
+    from tabicl.scaling import cycle
+    out = tmp_path / "payload.tar.gz"
+    fake = tmp_path / "repo"
+    (fake / "src/tabicl/scaling").mkdir(parents=True)
+    (fake / cycle.RUNNER).write_bytes(b"# current\n")
+    cycle.build_payload(fake, out, parts=("src",))
+    cycle.verify_payload(fake, out)                # matches
+    (fake / cycle.RUNNER).write_bytes(b"# edited after the archive was built\n")
+    with pytest.raises(SystemExit):
+        cycle.verify_payload(fake, out)
+
+
+def test_payload_verification_catches_a_missing_runner(tmp_path):
+    from tabicl.scaling import cycle
+    out = tmp_path / "payload.tar.gz"
+    fake = tmp_path / "repo"
+    (fake / "src").mkdir(parents=True)
+    (fake / "src/unrelated.py").write_bytes(b"x\n")
+    cycle.build_payload(fake, out, parts=("src",))
+    with pytest.raises(SystemExit):
+        cycle.verify_payload(fake, out)
+
+
+def test_shell_scripts_are_normalised_to_lf():
+    """A CRLF `_pod_setup.sh` made bash read `set -euo pipefail\\r` and report
+    "pipefail: invalid option name", which reads like the wrong shell rather than the wrong
+    file."""
+    from tabicl.scaling import cycle
+    assert cycle.lf_bytes(b"set -e\r\nexit 0\r\n") == b"set -e\nexit 0\n"
+    assert cycle.lf_bytes(b"already\nlf\n") == b"already\nlf\n"
+
+
+@pytest.mark.parametrize("name", ["_pod_setup.sh", "_pod_remote.sh"])
+def test_shipped_scripts_have_no_carriage_returns_in_the_repo(name):
+    import pathlib
+    from tabicl.scaling import cycle
+    p = pathlib.Path(cycle.__file__).with_name(name)
+    assert b"\r" not in p.read_bytes(), f"{name} is CRLF and will fail on the host"
+
+
+def test_setup_does_not_truncate_pip_output():
+    """`pip ... | tail -3` delivered "note: This is an issue with the package mentioned
+    above" with the package, and the reason, cut off. Output filters have eaten results on
+    this project five times."""
+    import pathlib
+    from tabicl.scaling import cycle
+    setup = pathlib.Path(cycle.__file__).with_name("_pod_setup.sh").read_text()
+    for line in setup.splitlines():
+        if line.strip().startswith("pip install"):
+            assert "tail" not in line, f"pip output is truncated: {line!r}"
+
+
+# --- temporal-distance extrapolation -----------------------------------------------------
+
+
+def test_extrapolation_prefers_the_candidate_that_holds_up_with_distance():
+    """The whole point: a candidate that scores best nearby and decays, against one that is
+    slightly worse nearby and flat. Validation only ever sees the nearby end."""
+    from tabicl.scaling.eval_track_record import extrapolate_select
+    decays = [(4.0, 70.0), (8.0, 68.0), (12.0, 66.0)]      # -0.5/day
+    flat = [(4.0, 69.0), (8.0, 69.0), (12.0, 69.0)]        # 0.0/day
+    by_gap = {"decays": decays, "flat": flat}
+    # Ordinary validation, sitting at the near end, would take "decays" (70.0 vs 69.0).
+    assert max(by_gap, key=lambda k: by_gap[k][0][1]) == "decays"
+    pick, reason, diag = extrapolate_select(by_gap, gap_test=24.0, shrink_slope=False)
+    assert pick == "flat"
+    assert diag["lever"] > 0          # test sits beyond the measured range
+
+
+def test_extrapolation_says_when_the_target_sits_at_the_centre_of_its_bracket():
+    """The default 0.5x/1.0x/1.5x bracket puts the target exactly at the centroid, and a
+    least-squares line passes through its centroid -- so the slope term is zero identically,
+    whatever the slope. That is correct behaviour (measuring AT the target beats extrapolating
+    to it) but it must not be reported as a shrinkage failure."""
+    from tabicl.scaling.eval_track_record import extrapolate_select
+    steep = {"a": [(10.0, 60.0), (20.0, 70.0), (30.0, 80.0)]}     # a very large slope
+    pick, reason, diag = extrapolate_select(steep, gap_test=20.0)
+    assert diag["adjustments"]["a"] == pytest.approx(0.0)
+    assert "GAP-MATCHED" in reason and "zero by construction" in reason
+    assert "shrank" not in reason
+
+
+def test_extrapolation_shrinks_a_slope_its_own_points_cannot_support():
+    """A slope fitted through noise must not be trusted at a long lever arm; this project's
+    screened estimates regress hard (+0.66 -> +0.39, +0.60 -> +0.09)."""
+    from tabicl.scaling.eval_track_record import extrapolate_select
+    noisy = {"a": [(4.0, 70.0), (8.0, 62.0), (12.0, 74.0)]}     # wild residuals
+    _, _, diag = extrapolate_select(noisy, gap_test=100.0, shrink_slope=True)
+    shrunk = abs(diag["adjustments"]["a"])
+    _, _, diag_raw = extrapolate_select(noisy, gap_test=100.0, shrink_slope=False)
+    assert shrunk < abs(diag_raw["adjustments"]["a"]) / 10
+
+
+def test_extrapolation_discards_a_slope_from_only_two_points():
+    """Two points fit a line exactly and leave no residual, so nothing about the slope is
+    verifiable. Trusting it *because* its error is unmeasurable is precisely backwards."""
+    from tabicl.scaling.eval_track_record import extrapolate_select
+    two = {"steep": [(2.0, 60.0), (5.0, 75.0)], "flat": [(2.0, 66.0), (5.0, 66.0)]}
+    pick, reason, diag = extrapolate_select(two, gap_test=10.0)
+    # A 5-points-per-day slope would swamp everything if it were trusted; it is discarded.
+    assert diag["adjustments"]["steep"] == 0.0
+    assert diag["max_abs_adjustment"] == 0.0
+    # With every adjustment zero the ranking is by mean alone: steep 67.5 beats flat 66.0.
+    assert pick == "steep"
+    assert "not an extrapolation" in reason
+
+
+def test_extrapolation_degenerates_to_mean_ranking_when_it_must_say_so():
+    from tabicl.scaling.eval_track_record import extrapolate_select
+    one_point = {"a": [(4.0, 70.0)], "b": [(4.0, 71.0)]}
+    pick, reason, _ = extrapolate_select(one_point, gap_test=24.0)
+    assert pick == "b"
+    assert "not an extrapolation" in reason
+
+
+def test_extrapolation_reports_how_far_past_its_data_it_is_reading():
+    """`lever` is the honest health warning: 2.0 means the line is trusted twice as far as it
+    was fitted, which is where a linear extrapolation starts inventing numbers."""
+    from tabicl.scaling.eval_track_record import extrapolate_select
+    by_gap = {"a": [(10.0, 70.0), (20.0, 69.0)]}
+    _, _, diag = extrapolate_select(by_gap, gap_test=40.0)
+    assert diag["span"] == 10.0
+    assert diag["lever"] == pytest.approx(2.0)
+
+
+def test_extrapolation_pools_hold_their_size_constant():
+    """The confound that killed --gap-validation: it carved pools by a time cutoff and let
+    the size fall out, selecting on 11,522 rows against a 19,239-row final fit. A slope
+    measured that way is partly a slope in pool size, which is not a quantity that differs
+    between validation and test."""
+    from tabicl.scaling.eval_track_record import extrapolation_pools
+    t = np.arange(1000, dtype=float)                      # one row per unit time
+    built, unusable = extrapolation_pools(t, gaps=[10, 50, 100], pool_size=200, query_size=100)
+    assert len(built) == 3 and not unusable
+    assert {len(p) for _, p, _ in built} == {200}
+
+
+def test_extrapolation_pools_score_the_same_query_rows_at_every_gap():
+    """Every gap must score the SAME rows, or a difference between gaps could be a difference
+    between query populations."""
+    from tabicl.scaling.eval_track_record import extrapolation_pools
+    t = np.arange(1000, dtype=float)
+    built, _ = extrapolation_pools(t, gaps=[10, 50, 100], pool_size=200, query_size=100)
+    queries = [tuple(sorted(q.tolist())) for _, _, q in built]
+    assert len(set(queries)) == 1
+
+
+def test_extrapolation_pools_grow_staler_and_never_touch_the_query():
+    from tabicl.scaling.eval_track_record import extrapolation_pools
+    t = np.arange(1000, dtype=float)
+    built, _ = extrapolation_pools(t, gaps=[10, 50, 100], pool_size=200, query_size=100)
+    q = set(built[0][2].tolist())
+    last_end = None
+    for g, pool, _ in built:
+        assert not (set(pool.tolist()) & q)              # a row is never fitted and queried
+        end = t[pool].max()
+        if last_end is not None:
+            assert end < last_end                        # bigger gap => staler pool
+        last_end = end
+
+
+def test_extrapolation_pool_size_is_set_by_the_scarcest_gap_not_the_dataset():
+    """Sizing the pool at min(--context, n_train) looks reasonable and is wrong: the query
+    slice consumes rows and staler gaps consume more, so the binding constraint is the
+    scarcest gap. On rel-trial that mistake asked for 10,000-row pools where the widest gap
+    could offer 6,483 -- every gap unbuildable, at any staleness."""
+    from tabicl.scaling.eval_track_record import extrapolation_pool_size, extrapolation_pools
+    t = np.arange(12000, dtype=float)
+    size, avail = extrapolation_pool_size(t, gaps=[366, 731, 1096], query_size=2000, cap=10000)
+    assert dict(avail)[1096.0] == size          # the scarcest gap sets it
+    assert size < 10000
+    # and at that size every gap is buildable, which is the whole point
+    built, unusable = extrapolation_pools(t, [366, 731, 1096], size, 2000)
+    assert len(built) == 3 and not unusable
+
+
+def test_extrapolation_pool_size_respects_the_context_cap():
+    from tabicl.scaling.eval_track_record import extrapolation_pool_size
+    t = np.arange(500000, dtype=float)          # plenty of rows; the cap should bind instead
+    size, _ = extrapolation_pool_size(t, gaps=[10, 20], query_size=2000, cap=10000)
+    assert size == 10000
+
+
+def test_extrapolation_pools_drop_gaps_that_select_an_identical_pool():
+    """rel-avito's timestamps are coarse enough that its 2-day and 3.5-day cutoffs fall
+    between the same pair of dates and yield the SAME pool. Fitting the slope through that
+    duplicated point shrinks the residual, understates the slope's standard error, and
+    disarms the shrinkage precisely where it is needed."""
+    from tabicl.scaling.eval_track_record import extrapolation_pools
+    # daily granularity: every row shares one of 40 timestamps
+    t = (np.arange(4000, dtype=float) // 100)        # 40 distinct timestamps, 100 rows each
+    # 2.2 and 2.4 both land between the same pair of timestamps, so both cutoffs admit
+    # exactly the rows at t <= 35 -- one measurement wearing two labels.
+    built, unusable = extrapolation_pools(t, gaps=[2.2, 2.4, 8.0], pool_size=500, query_size=200)
+    gaps_kept = [g for g, _, _ in built]
+    assert 2.2 in gaps_kept and 8.0 in gaps_kept
+    assert 2.4 not in gaps_kept                      # same pool as the 2.2 gap
+    assert (2.4, -1) in unusable                     # reported as a duplicate, not a build failure
+    pools = [p.tobytes() for _, p, _ in built]
+    assert len(set(pools)) == len(pools)             # no two retained gaps share a pool
+
+
+def test_extrapolation_gap_is_applied_at_hour_resolution():
+    """`int(3.5)` truncated a 3.5-day request to 3 days while the regression kept using 3.5
+    as the abscissa -- a slope wrong by exactly that ratio."""
+    from tabicl.scaling.eval_track_record import extrapolation_pools
+    t0 = np.datetime64("2024-01-01T00:00:00")
+    t = t0 + np.arange(4000) * np.timedelta64(1, "h")       # hourly, 166 days
+    built, _ = extrapolation_pools(t, gaps=[3.0, 3.5], pool_size=200, query_size=200)
+    assert [g for g, _, _ in built] == [3.0, 3.5]           # a half day is a real difference
+    ends = [t[p].max() for _, p, _ in built]
+    assert (ends[0] - ends[1]) == np.timedelta64(12, "h")   # exactly half a day apart
+
+
+def test_extrapolation_pools_report_gaps_they_could_not_build():
+    """Dropping a gap silently would shorten the lever arm without saying so -- the same
+    'not applicable' vs 'measured at no effect' confusion this project keeps hitting."""
+    from tabicl.scaling.eval_track_record import extrapolation_pools
+    t = np.arange(300, dtype=float)
+    built, unusable = extrapolation_pools(t, gaps=[10, 250], pool_size=100, query_size=50)
+    assert [g for g, _, _ in built] == [10.0]
+    assert unusable and unusable[0][0] == 250.0
+
+
+def test_extrapolation_handles_no_candidates():
+    from tabicl.scaling.eval_track_record import extrapolate_select
+    pick, reason, diag = extrapolate_select({}, gap_test=10.0)
+    assert pick is None and diag == {}
+
+
+def test_extra_pip_is_followed_by_a_numpy_torch_bridge_check():
+    """Drift-Resilient TabPFN installed cleanly and pulled numpy 2.x under a torch compiled
+    against 1.x. Torch then imported with "Failed to initialize NumPy: _ARRAY_API not found"
+    -- a warning, not an exception -- so the import gate passed and the round started with
+    every tensor<->array conversion dead. An import that succeeds is not a working env."""
+    import pathlib
+    from tabicl.scaling import cycle
+    setup = pathlib.Path(cycle.__file__).with_name("_pod_setup.sh").read_text()
+    extra = setup.split("TABICL_EXTRA_PIP", 1)[1]
+    assert "from_numpy" in extra and ".numpy()" in extra, \
+        "an extra install must be followed by a check that torch and numpy still interoperate"
+
+
+def test_poller_does_not_read_a_dead_host_as_a_finished_round():
+    """A community host was reclaimed nine minutes into a five-hour round. ssh printed
+    "Connection refused", that text was partitioned as if it were a probe reply, and the
+    poller announced WORK_DONE and tore the round down."""
+    from tabicl.scaling.cycle import parse_probe
+    assert parse_probe(255, "ssh: connect to host 1.2.3.4 port 22: Connection refused") is None
+    assert parse_probe(0, "") is None
+    assert parse_probe(0, "WORK_DONE 2026-08-10") is None          # no separators: not a reply
+
+
+def test_probe_process_count_cannot_match_itself():
+    """`pgrep -f eval_track_record` matched the probe's own ssh command line, so the count was
+    never below one on a healthy host and the "nothing running" break could never fire. A lane
+    whose work had been stopped polled to its deadline, billing the whole way."""
+    from tabicl.scaling.cycle import PROBE
+    assert "pgrep -fc '[e]val_track_rec'" in PROBE
+    assert "pgrep -f eval_track_record" not in PROBE
+
+
+def test_poller_parses_a_real_probe_reply():
+    from tabicl.scaling.cycle import parse_probe
+    out = ("WORK_DONE 2026-08-10T22:00:00Z\n---\nclicks_base rc=0\nclicks_rvs rc=0\n"
+           "---\n0\n---\n############ clicks_rvs rc=0 ############\n")
+    done, finished, running, tail = parse_probe(0, out)
+    assert "WORK_DONE" in done
+    assert finished == ["clicks_base", "rc=0", "clicks_rvs", "rc=0"]
+    assert running == "0"
+    assert "clicks_rvs" in tail
+
+
+def test_poller_reports_a_round_still_running():
+    from tabicl.scaling.cycle import parse_probe
+    done, finished, running, _ = parse_probe(0, "\n---\n\n---\n2\n---\nbase  val=63.46\n")
+    assert done == "" and finished == [] and running == "2"
+
+
+def test_supported_kwargs_drops_what_a_constructor_does_not_take():
+    """Discovering a class and then guessing its constructor is the same mistake one level
+    down; it cost a pod cycle on TabFM."""
+    from tabicl.scaling.eval_backbone import supported_kwargs
+
+    class TakesNeither:
+        def __init__(self, n_estimators=1): ...
+
+    class TakesDevice:
+        def __init__(self, device=None, n_estimators=1): ...
+
+    class TakesAnything:
+        def __init__(self, **kw): ...
+
+    assert supported_kwargs(TakesNeither, device="cuda:0", random_state=3) == {}
+    assert supported_kwargs(TakesDevice, device="cuda:0", random_state=3) == {"device": "cuda:0"}
+    # **kwargs means we cannot tell -- pass through rather than silently dropping the device
+    assert supported_kwargs(TakesAnything, device="cuda:0") == {"device": "cuda:0"}
+
+
+def test_setup_gate_runs_the_entry_point_not_a_version_banner():
+    """A version banner aborted setup under `set -e`; diagnostics may not fail a build, so
+    the real gate is the entry point the round actually calls."""
+    import pathlib
+    from tabicl.scaling import cycle
+    setup = pathlib.Path(cycle.__file__).with_name("_pod_setup.sh").read_text()
+    assert "eval_track_record --help" in setup
+    # SETUP_OK must be the LAST thing emitted: the gate on the host greps for it, so a line
+    # printed before the real check would announce a setup that had not happened yet.
+    last = [ln for ln in setup.splitlines() if ln.strip()][-1]
+    assert "SETUP_OK" in last, f"SETUP_OK is not the final line; got {last!r}"

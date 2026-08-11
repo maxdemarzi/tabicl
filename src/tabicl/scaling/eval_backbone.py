@@ -43,6 +43,29 @@ from tabicl import TabICLClassifier
 from tabicl.scaling import Table, asof_statistics
 from tabicl.scaling._guards import assert_no_perfect_feature
 
+
+def supported_kwargs(cls, **kwargs) -> dict:
+    """Keep only the keyword arguments ``cls`` actually accepts, and say what was dropped.
+
+    Third-party backbones here are forks with undocumented constructors. Guessing one is how
+    a run dies after provisioning, upload, install and a model download have all succeeded --
+    and passing an argument a class silently swallows via ``**kwargs`` is worse, because the
+    run then completes having ignored the device or the seed you thought you set.
+    """
+    import inspect
+    try:
+        params = inspect.signature(cls).parameters
+    except (TypeError, ValueError):
+        return kwargs                       # unintrospectable; the caller's guess is all we have
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return kwargs
+    keep = {k: v for k, v in kwargs.items() if k in params}
+    dropped = sorted(set(kwargs) - set(keep))
+    if dropped:
+        print(f"  {getattr(cls, '__name__', cls)} does not accept {dropped} -- omitted",
+              flush=True)
+    return keep
+
 NOAMP = {k: {"use_amp": False} for k in ("COL_CONFIG", "ROW_CONFIG", "ICL_CONFIG")}
 
 DEFAULT_WINDOWS = {
@@ -127,7 +150,12 @@ def main() -> None:
         # today (the TabFM loader name was right by luck; its device argument was not), so
         # this searches instead of assuming, and says what it found.
         import importlib
-        cands = [("tabpfn_extensions.dist_shift", "DistShiftClassifier"),
+        # `tabpfn.TabPFNDistShiftClassifier` is FIRST because it is the one that actually
+        # exists -- confirmed 2026-08-10 by this search failing and printing the module's real
+        # exports, which is the entire reason it prints them. The other four are guesses that
+        # were wrong; they stay only as fallbacks for other releases of the fork.
+        cands = [("tabpfn", "TabPFNDistShiftClassifier"),
+                 ("tabpfn_extensions.dist_shift", "DistShiftClassifier"),
                  ("tabpfn.dist_shift", "DistShiftClassifier"),
                  ("tabpfn", "DistShiftClassifier"),
                  ("tabpfn", "DriftResilientTabPFNClassifier")]
@@ -237,7 +265,11 @@ def main() -> None:
         arms.append((f"tabfm@{args.n_estimators}", lambda r, s: tabfm(r, s)))
 
     def drift(rows, seed):
-        m = DriftClf(device=args.device, random_state=seed)
+        # Discovering the CLASS and then guessing its CONSTRUCTOR is the same mistake one
+        # level down -- and it is the mistake that cost a cycle on TabFM, where the loader
+        # name was right by luck and its device argument was not. A fork may accept neither
+        # `device` nor `random_state`, so pass only what the signature actually takes.
+        m = DriftClf(**supported_kwargs(DriftClf, device=args.device, random_state=seed))
         return m.fit(X[rows], y[rows]).predict_proba(Xe)[:, 1]
 
     if args.drift_tabpfn:
@@ -264,13 +296,31 @@ def main() -> None:
     print(flush=True)
     for name, _ in arms:
         v = np.array(scores[name])
-        line = (f"BACKBONE\t{args.dataset}/{args.task}\t{name}\t{np.nanmean(v):.2f}\t"
-                f"{np.nanstd(v, ddof=1) if len(v) > 1 else 0:.2f}")
+        ok = int(np.isfinite(v).sum())
+        # AN ARM THAT FAILED ON SOME SEEDS MUST NOT REPORT AS IF IT HAD RUN ON ALL OF THEM.
+        # The failure path records NaN and continues, which is right -- one bad seed should
+        # not lose the round. But `nanmean` then averages the survivors while `len(d)` counts
+        # the attempts, so an arm that raised on 8 of 12 seeds printed a confident mean, an SE
+        # divided by the wrong n, and a sign count out of a denominator it never reached.
+        # Partial failure is not random: the seeds that fail are the ones with the awkward
+        # context draws.
+        line = (f"BACKBONE\t{args.dataset}/{args.task}\t{name}\t"
+                f"{np.nanmean(v) if ok else float('nan'):.2f}\t"
+                f"{np.nanstd(v, ddof=1) if ok > 1 else 0:.2f}\tn={ok}/{len(v)}")
+        if ok == 0:
+            line += "\tFAILED ON EVERY SEED"
+        elif ok < len(v):
+            line += f"\tPARTIAL ({len(v) - ok} seed(s) failed) -- not comparable to a full arm"
         if name != "tabicl":
             d = v - base
-            se = np.nanstd(d, ddof=1) / np.sqrt(len(d)) if len(d) > 1 else 0.0
-            line += (f"\tvs tabicl {np.nanmean(d):+.2f}\tSE {se:.2f}\t"
-                     f"{int(np.nansum(d > 0))}/{len(d)}")
+            m = np.isfinite(d)                       # pairs where BOTH arms produced a number
+            k = int(m.sum())
+            if k == 0:
+                line += "\tvs tabicl: no seed produced a comparable pair"
+            else:
+                se = d[m].std(ddof=1) / np.sqrt(k) if k > 1 else float("nan")
+                line += (f"\tvs tabicl {d[m].mean():+.2f}\tSE {se:.2f}\t"
+                         f"{int((d[m] > 0).sum())}/{k} paired")
         print(line, flush=True)
     print("\nOne variable: identical features, identical context rows, identical seeds. "
           "Test-side -- a gain is not table-eligible until the calibrated protocol picks "
