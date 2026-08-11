@@ -3979,3 +3979,48 @@ def test_mmd_context_never_reads_labels():
     from tabicl.scaling.eval_track_record import mmd_context_indices
     params = set(inspect.signature(mmd_context_indices).parameters)
     assert not (params & {"y", "y_train", "y_test", "labels", "truth"})
+
+
+# --- HyperTime lexicographic selection (arXiv 2305.18421) -------------------------------
+# Keep configurations within a tolerance of the best AVERAGE validation score, then take the
+# best WORST fold among them. Aimed at the measured regime: winning margin 0.35 against
+# validation noise 0.69, with margin < noise in 35 of 41 blocks -- the argmax is usually
+# choosing between candidates it cannot distinguish.
+
+def test_lexi_breaks_ties_by_worst_fold_not_by_average():
+    from tabicl.scaling.eval_track_record import lexi_select
+    # +struct wins on average by 0.3, which is inside the noise floor; base has the better
+    # worst fold. On rel-avito that is the correct direction -- validation prefers +struct
+    # and test prefers base.
+    cands = [(70.5, "+struct", 10000, "random"), (70.2, "base", 10000, "random")]
+    sv = {("+struct", 10000, "random"): (71.0, 69.9),
+          ("base", 10000, "random"): (70.4, 70.0)}
+    pick, n, why = lexi_select(cands, sv, 0.01)
+    assert pick[1] == "base" and n == 2
+    assert "best worst fold" in why
+
+
+def test_lexi_does_not_reach_outside_the_tolerance_band():
+    from tabicl.scaling.eval_track_record import lexi_select
+    # A configuration far below the best average must not win on worst-fold alone, or the
+    # rule stops being a tiebreak and becomes a different objective.
+    cands = [(70.5, "+struct", 10000, "random"), (60.0, "base", 10000, "random")]
+    sv = {("+struct", 10000, "random"): (71.0, 69.9),
+          ("base", 10000, "random"): (60.0, 60.0)}
+    pick, n, _ = lexi_select(cands, sv, 0.01)
+    assert pick[1] == "+struct" and n == 1
+
+
+def test_lexi_falls_back_to_argmax_without_folds():
+    from tabicl.scaling.eval_track_record import lexi_select
+    # A task with no fold scores must behave exactly as before rather than erroring or
+    # silently picking something arbitrary.
+    cands = [(70.5, "+struct", 10000, "random"), (70.2, "base", 10000, "random")]
+    pick, _, why = lexi_select(cands, {}, 0.01)
+    assert pick[1] == "+struct" and "argmax" in why
+
+
+def test_lexi_handles_no_candidates():
+    from tabicl.scaling.eval_track_record import lexi_select
+    pick, n, _ = lexi_select([], {}, 0.01)
+    assert pick is None and n == 0

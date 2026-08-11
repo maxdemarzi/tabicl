@@ -395,6 +395,37 @@ def _tabfm(device: str):
     return _TABFM
 
 
+def lexi_select(candidates, split_val, tolerance: float = 0.01):
+    """HyperTime's lexicographic pick: best worst-fold score among the near-best on average.
+
+    `candidates` is the list of ``(val_score, arm, size, order)`` the sweep already builds;
+    `split_val` maps ``(arm, size, order)`` to that configuration's per-fold scores.
+
+    Returns ``(choice, n_tied, reason)``. Falls back to the plain argmax whenever the folds
+    are unavailable, so a task without them behaves exactly as before.
+
+    `tolerance` is a FRACTION of the best average score, following the paper's
+    ``L <= L* * (1 + kappa)``. At 0.01 on a 70-point AUC the band is about 0.7 -- which is
+    this benchmark's measured noise floor, not a number chosen to make the rule fire.
+    """
+    if not candidates:
+        return None, 0, "no candidates"
+    best = max(candidates, key=lambda c: c[0])
+    if not split_val:
+        return best, 1, "no folds available; plain argmax"
+    band = best[0] * (1.0 - tolerance)
+    tied = [c for c in candidates if c[0] >= band]
+    scored = [(min(f for f in split_val[(c[1], c[2], c[3])] if f == f), c)
+              for c in tied if (c[1], c[2], c[3]) in split_val]
+    if not scored:
+        return best, len(tied), "folds missing for every tied candidate; plain argmax"
+    worst_best = max(scored, key=lambda s: s[0])
+    return (worst_best[1], len(tied),
+            f"{len(tied)} configurations within {tolerance:.0%} of the best average "
+            f"({best[0]:.2f}); took the one with the best worst fold "
+            f"({worst_best[0]:.2f})")
+
+
 def abstention_choice(split_val: dict) -> tuple[tuple | None, tuple | None, bool]:
     """Keep the tuned pick only if its validation ranking survives a time gap.
 
@@ -771,6 +802,16 @@ def main() -> None:
                          "measured --gap-validation (more separation) as worse, without ever "
                          "testing less. Test is untouched; held-out rows leave the context "
                          "pool.")
+    ap.add_argument("--select-lexi", action="store_true",
+                    help="HyperTime (arXiv 2305.18421) selection: keep configurations within "
+                         "--lexi-tolerance of the best AVERAGE validation score, then take "
+                         "the best WORST fold among them. Aimed at the measured regime here, "
+                         "where the winning margin (0.35) is half the validation noise "
+                         "(0.69) and 35 of 41 blocks cannot distinguish their top candidates.")
+    ap.add_argument("--lexi-tolerance", type=float, default=0.01,
+                    help="width of the near-optimal band as a fraction of the best score. "
+                         "0.01 on a 70-point AUC is about 0.7, which is this benchmark's "
+                         "measured floor rather than a tuned value.")
     ap.add_argument("--drop-stale-arms", action="store_true",
                     help="exclude history-dependent arms when the shared-key block's "
                          "COVERAGE collapses between validation and test. Label-free: reads "
@@ -2161,6 +2202,13 @@ def main() -> None:
                         candidates.append((v, name, size, order))
                         if best is None or v > best[0]:
                             best = (v, name, size, order)
+            if args.select_lexi:
+                _pick, _n, _why = lexi_select(candidates, split_val, args.lexi_tolerance)
+                if _pick is not None and _pick != best:
+                    print(f"  LEXI: {_why}", flush=True)
+                    best = _pick
+                elif _pick is not None:
+                    print(f"  LEXI: {_why} -- same as the argmax", flush=True)
             val_auc, name, size, order = best
 
             if split_halves and split_val:
