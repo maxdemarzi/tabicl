@@ -5103,6 +5103,61 @@ rel-amazon/user-churn, rel-amazon/item-churn) are the held-out set for exactly t
 
 ---
 
+### 2026-08-12 — defaults, phase 1: the +7.50 is recency, and none of it is size
+
+The nine "real on test but unselectable" effects were all measured through the CALIBRATED
+path, where a setting is one candidate among many and validation picks the winner. A default
+is a different object: one fixed configuration, no selection. Before building a twelve-task
+regret table, two questions had to be answered on one task — does the effect survive the
+change of path, and what is it actually made of?
+
+"Context recency at a 1,000-row context" moves TWO things against the shipped default: the
+order (random → most recent) and the size (10,000 → 1,000). Attributing the whole gain to
+recency without separating them is the error caught in the motif ablation, where a B → C
+comparison differed in three ways and attributed nothing. rel-event/user-ignore at its
+standing flags, fixed arm, 8 seeds, paired across runs:
+
+| run | order | size | base AUC | sd |
+|---|---|---:|---:|---:|
+| `ctl` | random | 10,000 | 80.65 | 1.60 |
+| `rand1k` | random | 1,000 | 80.79 | 2.64 |
+| `recent1k` | **recent** | 1,000 | **86.92** | **0.28** |
+| `cal` | random | 10,000 + `--calendar` | 83.67 | 1.04 |
+
+| contrast | isolates | gain | SE | t | seeds |
+|---|---|---:|---:|---:|---:|
+| `rand1k − ctl` | **size** | **+0.13** | 1.14 | 0.12 | 4/8 |
+| `recent1k − rand1k` | **recency** | **+6.14** | 0.89 | 6.93 | **8/8** |
+| `recent1k − ctl` | total | **+6.27** | 0.60 | 10.40 | **8/8** |
+| `cal − ctl` | calendar | **+3.02** | 0.47 | 6.40 | **8/8** |
+
+**Size contributes nothing — +0.13, four seeds of eight, t = 0.12.** The entire effect is the
+recency of the context, and a 10× smaller context costs nothing on its own. That is worth
+having as a fact in its own right: it means the cheap configuration and the good one are the
+same configuration.
+
+**Both candidates reproduce off the calibrated path.** +6.27 against the +7.50 recorded through
+selection, and the calendar block at +3.02 against its +3.00. Neither was an artefact of how it
+was measured.
+
+**86.92 is above RelGNN's 86.18** on this task, where our standing number is 80.98 and the best
+published is 86.18. On one task, as a fixed configuration, with the caveats below.
+
+**Three cautions, none of which the number above carries on its own.**
+
+1. **The recency draw is deterministic, so eight seeds are eight model fits of ONE context.**
+   Its sd of 0.28 against `ctl`'s 1.60 is not stability, it is a missing source of variance:
+   if that particular set of 1,000 rows is lucky, nothing here would reveal it. Phase 2 needs
+   a draw-level check — `recent-half`, or several nearby sizes — before the sd is believed.
+2. **rel-event's control 2 reports a leak, identically in all four runs** (observed 0.8179,
+   control 0.8192, to the digit). It is a property of the task's feature block and not of this
+   change, so it cancels in every contrast above; it is also still there, and a headline number
+   on this task inherits it.
+3. **One task.** The point of a default is what it does to the other eleven, and the effect
+   here is large enough that a symmetric loss elsewhere is entirely possible.
+
+---
+
 ## Environment checklist
 
 Run this before trusting any number from a new machine, container or pod. It has caught
