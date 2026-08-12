@@ -4560,3 +4560,15 @@ def test_setup_gate_runs_the_unit_tests_and_reads_pytests_exit_code():
     # measurement on unrelated breakage gets deleted, and then nothing is gated at all.
     assert "tests/test_scaling.py" in window, "the gate must scope to the harness suite"
     assert "pytest tests/ -q" not in window, "gating on the whole tree blocks rounds"
+
+
+def test_setup_banner_reads_relbench_version_from_metadata_not_the_module():
+    """`relbench.__version__` does not exist on any release this project has run, so the
+    banner printed "(no __version__)" every round and no recorded number can name the release
+    that produced it. Tolerable while the benchmark was a fixed twelve tasks; not once the
+    registry is read, since which datasets and tasks exist is a property of the release."""
+    import pathlib
+    from tabicl.scaling import cycle
+    setup = pathlib.Path(cycle.__file__).with_name("_pod_setup.sh").read_text()
+    assert "importlib.metadata" in setup
+    assert 'version("relbench")' in setup

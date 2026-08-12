@@ -81,7 +81,18 @@ print("torch", torch.__version__, "cuda", torch.cuda.is_available(), torch.cuda.
 print("pandas", pandas.__version__, "sklearn", sklearn.__version__)
 try:
     import relbench
-    print("relbench", getattr(relbench, "__version__", "(no __version__)"))
+    # `relbench.__version__` DOES NOT EXIST on any release this project has run, so the banner
+    # printed "(no __version__)" on every round and no number on record can say which release
+    # produced it. That mattered little while the benchmark was a fixed twelve tasks; it
+    # matters now that we read the registry, because which datasets and tasks exist is a
+    # property of the release. The package metadata carries the version even when the module
+    # does not -- it is what pip resolved, which is the thing actually installed.
+    from importlib.metadata import version, PackageNotFoundError
+    try:
+        v = version("relbench")
+    except PackageNotFoundError:
+        v = getattr(relbench, "__version__", "(not installed via pip?)")
+    print("relbench", v)
 except Exception as exc:
     print("relbench import failed:", exc)
 PY
