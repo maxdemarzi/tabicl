@@ -705,7 +705,73 @@ pick, which is why nine of them have failed: **they attack the wrong quantity.**
 not which configuration validation picks; it is whether to select at all, or to change what
 quantity is being estimated — which is directions 5 and 6 below.
 
-### 9. Context recency is a RULE, not a default — PRE-REGISTERED 2026-08-12, unrun
+### 9. Context recency is a RULE, not a default — REFUTED 2026-08-12, the same day
+
+**ρ = −0.203 against a threshold of −0.50 fixed before any run. The gap ratio does not order
+where recency pays.** And the flat reading the pre-registration named in advance is close to
+what happened: recency is not merely unordered across tasks, it is **negative on every one of
+the six**, most of them on all eight seeds.
+
+| task | `gap_ratio` | recency | SE | seeds + | calendar |
+|---|---:|---:|---:|---:|---:|
+| rel-avito/user-clicks | 1.250 | **−9.25** | 0.52 | 0/8 | +0.09 |
+| rel-f1/driver-dnf | 0.100 | **−4.91** | 0.68 | 0/8 | +0.93 |
+| rel-avito/user-visits | 1.250 | **−3.45** | 0.30 | 0/8 | +0.02 |
+| rel-trial/study-outcome | 0.111 | **−2.50** | 0.36 | 0/8 | −0.43 |
+| rel-f1/driver-top3 | 0.511 | **−1.78** | 0.20 | 0/8 | −0.21 |
+| rel-event/user-repeat | 0.119 | −0.31 | 0.14 | 2/8 | +0.18 |
+| *rel-event/user-ignore (in-sample)* | *0.102* | *+6.27* | *0.60* | *8/8* | *+3.02* |
+
+**The quantity was mis-specified, and the pre-registration is what caught it.** The prediction
+said rel-trial would sit near 2.0 and rel-f1 far out; they are **0.111** and **0.100**. The
+error was computing each task's span from its *horizon* rather than its actual training period
+— rel-f1 covers 19,860 days of Formula 1 and rel-trial 6,570. So rel-event's 0.102 and
+rel-f1/driver-dnf's 0.100 are the same number, with **+6.27 on one and −4.91 on the other**.
+No ordering by this quantity could have worked, and writing the falsifier down first is what
+turned that into a result rather than a quiet substitution of a better ratio.
+
+**rel-event/user-repeat kills the obvious repair.** The post-hoc reading after lane A was that
+absolute recency matters rather than the ratio — rel-event's whole training period is 147 days,
+so its most recent 1,000 rows are days old where rel-f1's span years. user-repeat is the *same
+database*, the same 147-day span, the same short-gap geometry, and recency is **−0.31, two
+seeds of eight**. The effect is not a property of rel-event. **It is a property of
+user-ignore**, and no temporal geometry available before the labels distinguishes them.
+
+#### The draw gate, resolved and partly passed
+
+`--context-orders recent` is deterministic, so phase 1's sd of 0.28 measured model noise with
+the draw variance missing. `recent-half` samples at random inside the recent half:
+
+| | mean | sd |
+|---|---:|---:|
+| `ctl` | 80.65 | 1.60 |
+| `recent1k` (deterministic) | 86.92 | **0.28** |
+| `recent-half` (randomised) | 82.88 | **3.62** |
+
+**+2.22 over control, SE 1.37, 6/8 — the direction survives randomisation and the magnitude
+does not.** The sd rises 0.28 → 3.62, so the headline's apparent stability was an artefact of
+never varying the draw, by roughly thirteen-fold. Read with one caveat that keeps this from
+being a clean control: `recent-half` is also a *weaker treatment*, sampling across the recent
+50% rather than taking the newest 1,000, so part of the drop is by construction and this
+under-tests. What it establishes is that +6.27 ± 0.28 was never the right uncertainty.
+
+#### What survives
+
+* **Recency must not ship as a default.** Worst-case regret: adopt **9.25**, decline **0.00**.
+  Six of six negative. This is not close and no unmeasured task can rescue it — one would have
+  to gain more than 9.25.
+* **The calendar block is null.** −0.43 to +0.93 across six tasks, every cell inside the ±0.6
+  floor but one. Regret nominally says adopt, on differences the floor cannot resolve; the
+  honest verdict is no effect, and the +3.02 on user-ignore is again that one task.
+* **user-ignore's +6.27 is real, isolated, and not predictable in advance.** Which is an
+  argument for the A/B decision rather than against it: a task-specific win of that size is
+  exactly what per-task selection can capture and no fixed default can.
+
+**Lanes C and D were not run.** Five big tasks at a memory tier, ~$30–50, to refine a verdict
+already at 9.25 against 0.00 and a correlation already refuted. Stopping is the finding acting
+on itself.
+
+### 9-original. The pre-registration, kept verbatim
 
 Phase 1 established that recency survives the fixed-arm path: **+6.27 on rel-event**
 (SE 0.60, t 10.40, 8/8), with the size half of "recency at a 1,000-row context" worth
