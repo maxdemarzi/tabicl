@@ -4370,12 +4370,26 @@ def test_poller_does_not_read_a_dead_host_as_a_finished_round():
 
 
 def test_probe_process_count_cannot_match_itself():
-    """`pgrep -f eval_track_record` matched the probe's own ssh command line, so the count was
-    never below one on a healthy host and the "nothing running" break could never fire. A lane
-    whose work had been stopped polled to its deadline, billing the whole way."""
+    """`pgrep -f work.sh` would match the probe's own ssh command line, so the count would
+    never fall below one on a healthy host and the "nothing running" break could never fire.
+    A lane whose work had been stopped would poll to its deadline, billing the whole way."""
     from tabicl.scaling.cycle import PROBE
-    assert "pgrep -fc '[e]val_track_rec'" in PROBE
-    assert "pgrep -f eval_track_record" not in PROBE
+    assert "[w]ork" in PROBE, "the bracket trick is what stops the pattern matching itself"
+    assert "pgrep -f work.sh" not in PROBE
+    assert "pgrep -fc 'work" not in PROBE
+
+
+def test_probe_watches_the_work_script_not_one_entry_point():
+    """The count answers "is the round alive", so it must watch something every round starts.
+
+    It watched `[e]val_track_rec` -- the module the benchmark rounds happen to call -- so a
+    round running anything else (screen_motif_signal, eval_backbone, eval_dfs_baseline) read
+    as zero processes the moment its first step finished, and the break tore the pod down
+    mid-run. work.sh is alive for the whole round whatever it invokes.
+    """
+    from tabicl.scaling.cycle import PROBE
+    assert "eval_track_rec" not in PROBE, (
+        "watching one entry point breaks every round that calls a different module")
 
 
 def test_poller_parses_a_real_probe_reply():

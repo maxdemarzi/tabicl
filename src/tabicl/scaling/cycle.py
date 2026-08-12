@@ -96,16 +96,24 @@ def verify_payload(repo: pathlib.Path, out: pathlib.Path, rel: str = RUNNER) -> 
 
 # ----------------------------------------------------------------------------- transfer
 
-# `[e]val_track_rec` is the bracket trick, and it is load-bearing rather than a flourish.
-# Written as `pgrep -f eval_track_record`, the pattern matches THE PROBE'S OWN command line --
-# ssh runs it through a shell whose argv contains the pattern -- so the count was never below
-# one on a healthy host. That silently disabled the "nothing running and nothing new
-# finishing" break: a lane whose work had been stopped polled on to its deadline instead of
-# fetching and tearing down, billing by the second the whole way. A guard that cannot fire is
-# indistinguishable from one that never needed to.
+# `[w]ork\.sh` is the bracket trick, and it is load-bearing rather than a flourish. Written
+# as `pgrep -f work.sh`, the pattern matches THE PROBE'S OWN command line -- ssh runs it
+# through a shell whose argv contains the pattern -- so the count is never below one on a
+# healthy host. That silently disables the "nothing running and nothing new finishing" break:
+# a lane whose work had been stopped polls on to its deadline instead of fetching and tearing
+# down, billing by the second the whole way. A guard that cannot fire is indistinguishable
+# from one that never needed to.
+#
+# IT WATCHES THE WORK SCRIPT, NOT ONE ENTRY POINT. This was `[e]val_track_rec`, which is the
+# module the benchmark rounds happen to call -- so a round running anything else looked dead
+# the moment its first step finished, and the break fired mid-run. It cost a pod on the
+# rel-arxiv screen (`screen_motif_signal`), and the same trap was under every round that ever
+# called eval_backbone, eval_dfs_baseline or a one-off: the guard was watching for a process
+# those rounds never start. `work.sh` is alive for the whole round whatever it runs, which is
+# precisely the question being asked.
 PROBE = ("cat /workspace/WORK_DONE 2>/dev/null; "
          "echo ---; (cat /workspace/logs/RC 2>/dev/null; echo) | head -20; "
-         "echo ---; pgrep -fc '[e]val_track_rec' || echo 0; "
+         "echo ---; pgrep -fc '[w]ork\\.sh' || echo 0; "
          "echo ---; tail -3 /workspace/work.log 2>/dev/null")
 
 
