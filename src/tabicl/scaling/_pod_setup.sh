@@ -104,7 +104,13 @@ echo "gate ok: eval_track_record imports and parses"
 # Kept fast on purpose: this runs on every round, and a gate that costs real time gets
 # skipped. If the suite ever grows slow, mark the slow tests rather than dropping the gate.
 echo "=== tests ==="
-pip install -q pytest
+# `runpod` is a DRIVER dependency and is installed here anyway, for one reason: without it
+# `import pod_runner` fails and its tests fail with it -- and the driver machine cannot run
+# the suite at all, so those tests would pass nowhere and quietly guard nothing. It is a
+# small pure-python package, and it brings the provisioner under the gate. That is the file
+# whose GPU-name handling broke twice on 2026-08-11; it is the last one that should be
+# exempt from its own tests.
+pip install -q pytest runpod
 # `set -e` is NOT in force for this (the script runs under `set -euo pipefail`, but a command
 # in an `if` is exempt), and the exit status of a PIPELINE is its LAST stage -- so
 # `pytest | tail` reports tail's success no matter what pytest did. That is the same class of
