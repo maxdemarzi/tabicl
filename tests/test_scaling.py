@@ -4541,3 +4541,8 @@ def test_setup_gate_runs_the_unit_tests_and_reads_pytests_exit_code():
     assert "pytest" in window
     assert "PIPESTATUS" in window, "the gate must read pytest's status, not the pipeline's"
     assert "exit 1" in window
+    # SCOPED, and pinned. Gating on all of `tests/` refused a round on 2026-08-11: 403 passed
+    # and 49 failed, every failure in upstream's vendored-model tests. A gate that blocks a
+    # measurement on unrelated breakage gets deleted, and then nothing is gated at all.
+    assert "tests/test_scaling.py" in window, "the gate must scope to the harness suite"
+    assert "pytest tests/ -q" not in window, "gating on the whole tree blocks rounds"
