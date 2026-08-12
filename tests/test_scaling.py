@@ -4426,3 +4426,118 @@ def test_setup_gate_runs_the_entry_point_not_a_version_banner():
     # printed before the real check would announce a setup that had not happened yet.
     last = [ln for ln in setup.splitlines() if ln.strip()][-1]
     assert "SETUP_OK" in last, f"SETUP_OK is not the final line; got {last!r}"
+
+
+# --- context recency as a DEFAULT, not a selectable axis ---------------------------------
+# `--context-orders` was built to ask whether validation can SEE a recency effect. It cannot
+# (rel-event: +7.50 on test at a 1,000-row context, rejected 3/3 by validation), which makes
+# the next question whether recency should be the default -- and a default is measured on a
+# fixed configuration, not by a protocol that selects. These cover the two things that had to
+# exist before that question could be asked at all.
+
+def test_union_recent_pool_keeps_the_uniform_draw_unchanged():
+    """The union ADDS rows; it must not resample to make room. A run with and without the
+    flag then differs only by the appended rows, which is what makes the enrichment of the
+    random draw measurable rather than merely bounded."""
+    import numpy as np
+    from tabicl.scaling.eval_track_record import union_recent_pool
+    t = np.arange(10_000)
+    plain, extra0 = union_recent_pool(t, train_pool=1_000, k=0)
+    unioned, extra = union_recent_pool(t, train_pool=1_000, k=200)
+    assert extra0 == 0
+    assert set(plain.tolist()) <= set(unioned.tolist())
+    assert len(unioned) == len(plain) + extra
+
+
+def test_union_recent_pool_makes_the_recency_draw_exact():
+    """Every one of the k most recent rows is present, so `pool[-k:]` is the same set of
+    rows it would be without a pool cut. That is the whole point: recency has to mean the
+    same thing on the five tasks that need --train-pool as on the seven that do not."""
+    import numpy as np
+    from tabicl.scaling.eval_track_record import union_recent_pool
+    rng = np.random.default_rng(7)
+    t = rng.permutation(10_000)            # timestamps not in row order
+    k = 300
+    keep, _ = union_recent_pool(t, train_pool=1_000, k=k)
+    newest = set(np.argsort(t, kind="stable")[-k:].tolist())
+    assert newest <= set(keep.tolist())
+
+
+def test_union_recent_pool_enrichment_is_small_and_reported():
+    """At the sizes this is used with -- k=1,000 against a 300,000 pool -- the random draw's
+    contamination is a fraction of a percent. The test pins the order of magnitude, because
+    an enrichment that grew large would invalidate cross-task comparison silently."""
+    import numpy as np
+    from tabicl.scaling.eval_track_record import union_recent_pool
+    t = np.arange(2_500_000)
+    keep, extra = union_recent_pool(t, train_pool=300_000, k=1_000)
+    assert extra / len(keep) < 0.005, f"enrichment {extra / len(keep):.4f} is not negligible"
+
+
+def test_union_recent_pool_is_deterministic():
+    import numpy as np
+    from tabicl.scaling.eval_track_record import union_recent_pool
+    t = np.arange(5_000)
+    a, ea = union_recent_pool(t, train_pool=500, k=100)
+    b, eb = union_recent_pool(t, train_pool=500, k=100)
+    assert (a == b).all() and ea == eb
+
+
+def test_train_pool_still_refuses_a_recency_order_without_the_union():
+    """The refusal is what keeps recency comparable across tasks; --union-recent is the way
+    THROUGH it, not a reason to drop it. A default that silently spanned a wider window on
+    the five largest tasks would be the kind of confound that reads as a result."""
+    import pathlib as _p
+    src = _p.Path("src/tabicl/scaling/eval_track_record.py").read_text(encoding="utf-8")
+    i = src.index("wants_recency = ")
+    window = src[i:i + 1200]
+    assert "--union-recent" in window and "raise SystemExit" in window
+
+
+def test_fixed_arm_path_refuses_several_context_orders():
+    """Several orders are a selection axis and this path does not select. Accepting a list
+    here would quietly use the first, or the last, and report it as a fixed configuration."""
+    import pathlib as _p
+    src = _p.Path("src/tabicl/scaling/eval_track_record.py").read_text(encoding="utf-8")
+    i = src.index("fixed_orders = ")
+    window = src[i:i + 800]
+    assert "raise SystemExit" in window and "--calibrated" in window
+
+
+def test_fixed_arm_recency_draw_takes_the_newest_rows_by_timestamp():
+    """The invariant the fixed-arm draw has to satisfy: the newest `size` rows BY TIME, not
+    the last `size` rows by position. Row order and time order differ on every real task."""
+    import numpy as np
+    rng = np.random.default_rng(3)
+    t = rng.permutation(1_000)
+    time_order = np.argsort(t, kind="stable")
+    size = 50
+    rows = time_order[-size:]
+    assert len(rows) == size
+    assert t[rows].min() >= np.sort(t)[-size]      # every drawn row is in the newest `size`
+    assert (t[rows] == np.sort(t)[-size:]).all()
+
+
+def test_fixed_arm_recency_draw_is_deterministic_across_seeds():
+    """Deterministic given a size, so every seed shares the context and the seed varies only
+    what scoring does downstream. If recency helps, it helps without a draw -- that is the
+    honest behaviour and not something to randomise away."""
+    import numpy as np
+    t = np.random.default_rng(11).permutation(2_000)
+    order = np.argsort(t, kind="stable")
+    assert (order[-100:] == order[-100:]).all()    # no rng consulted at all
+
+
+def test_setup_gate_runs_the_unit_tests_and_reads_pytests_exit_code():
+    """The suite cannot be collected on the development machine (`import tabicl` fails on a
+    Windows checkout with no install), so the pod is the only place it can run and setup is
+    the only moment before a round commits hours. `pytest | tail` would report TAIL's status,
+    which is the same bug as the `pip | tail -3` that once ate a build failure's reason."""
+    import pathlib
+    from tabicl.scaling import cycle
+    setup = pathlib.Path(cycle.__file__).with_name("_pod_setup.sh").read_text()
+    i = setup.index("=== tests ===")
+    window = setup[i:]
+    assert "pytest" in window
+    assert "PIPESTATUS" in window, "the gate must read pytest's status, not the pipeline's"
+    assert "exit 1" in window

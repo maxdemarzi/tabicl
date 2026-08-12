@@ -93,4 +93,29 @@ PY
 echo "=== gate ==="
 python -m tabicl.scaling.eval_track_record --help > /dev/null
 echo "gate ok: eval_track_record imports and parses"
+
+# THE UNIT TESTS, RUN HERE BECAUSE THEY CANNOT RUN ANYWHERE ELSE. The development machine is
+# a Windows checkout with no `tabicl` installed -- `import tabicl` fails, so the suite cannot
+# even be collected there, and every runner change until now shipped to a pod unverified. The
+# pod is the only environment that has the package, and setup is the only moment before a
+# round commits hours to it. `--help` proves the module imports and parses; it proves nothing
+# about whether the code does what it says.
+#
+# Kept fast on purpose: this runs on every round, and a gate that costs real time gets
+# skipped. If the suite ever grows slow, mark the slow tests rather than dropping the gate.
+echo "=== tests ==="
+pip install -q pytest
+# `set -e` is NOT in force for this (the script runs under `set -euo pipefail`, but a command
+# in an `if` is exempt), and the exit status of a PIPELINE is its LAST stage -- so
+# `pytest | tail` reports tail's success no matter what pytest did. That is the same class of
+# bug as the `pip | tail -3` that once ate a build failure's only explanation. PIPESTATUS is
+# read explicitly, and the tail is 25 lines because a pytest failure summary is worth having.
+python -m pytest tests/ -q 2>&1 | tail -25
+rc=${PIPESTATUS[0]}
+if [ "$rc" -ne 0 ]; then
+  echo "UNIT TESTS FAILED (rc=$rc) -- refusing to start the round. The payload is broken in"
+  echo "a way that would otherwise be discovered hours in, or not at all."
+  exit 1
+fi
+echo "tests ok"
 echo "SETUP_OK"

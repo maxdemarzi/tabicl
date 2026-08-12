@@ -610,6 +610,32 @@ def fold_plan(abstain: bool, select_lexi: bool, cv_folds, gap_validation) -> boo
     return wanted
 
 
+def union_recent_pool(t_train: np.ndarray, train_pool: int, k: int,
+                      seed: int = 0) -> tuple[np.ndarray, int]:
+    """Fit-pool rows for --train-pool with a recency-ordered context: the uniform sample
+    plus the most recent `k` rows. Returns `(keep, extra)`, sorted, with `extra` the count
+    the union added.
+
+    A uniform subsample is equivalent to the full train set for random context draws and
+    NOT for recency-ordered ones -- the most recent 1,000 rows of a uniform 300,000-row
+    sample of 2.5M span far more time than the most recent 1,000 rows overall -- so a
+    recency default would mean something different on the tasks that need a pool cut. Adding
+    the recent rows back makes the recency draw exact.
+
+    **The uniform part is not resampled to make room.** It is the same draw, at the same
+    seed, as a run without the union, so the random arm differs only by the appended rows
+    and the enrichment is bounded by `extra / len(keep)` -- a number to report, and to
+    measure by running the random arm both ways, rather than a caveat to write down.
+    """
+    n = len(t_train)
+    keep = np.random.default_rng(seed).choice(n, size=min(train_pool, n), replace=False)
+    if k <= 0:
+        return np.sort(keep), 0
+    recent = np.argsort(t_train, kind="stable")[-k:]
+    out = np.union1d(keep, recent)
+    return out, len(out) - len(np.unique(keep))
+
+
 def random_val_indices(n_train: int, n_val: int, seed: int) -> np.ndarray:
     """Train rows held out to select on, for --random-val-split (arXiv 2502.20260).
 
@@ -905,6 +931,17 @@ def main() -> None:
                          "temporal, so the validation split is a LATER period than train "
                          "and can see a recency effect -- the instrument that failed on "
                          "resampling was CV over held-out train rows, which cannot.")
+    ap.add_argument("--union-recent", action="store_true",
+                    help="with --train-pool and a non-random --context-orders, add the most "
+                         "recent K rows to the uniform sample so a recency draw finds every "
+                         "row it wants (K = the largest context requested). Without it the "
+                         "combination is refused, because the most recent rows OF A UNIFORM "
+                         "SUBSAMPLE span a far wider window than the most recent rows "
+                         "overall -- so recency would mean one thing on the five tasks that "
+                         "need a pool cut and another on the seven that do not. The uniform "
+                         "part is unchanged, so the enrichment of the random draw is bounded "
+                         "by K/(pool+K), printed at run time, and measurable by running the "
+                         "random arm with and without this flag.")
     ap.add_argument("--calendar", action="store_true",
                     help="day of week, day, month, weekend flag and their sine/cosine "
                          "pairs, from the prediction timestamp. Every datetime column is "
@@ -1195,21 +1232,45 @@ def main() -> None:
     # `time_order`, the gap-validation pools -- is derived from `train` after the cut, so
     # they cannot fall out of alignment.
     if args.train_pool and len(train) > args.train_pool:
-        if [o.strip() for o in args.context_orders.split(",") if o.strip()] != ["random"]:
-            raise SystemExit(
-                "--train-pool subsamples the fit pool uniformly, which is statistically "
-                "equivalent for RANDOM context draws and not for recency-ordered ones: the "
-                "most recent rows of a uniform subsample span a far wider window than the "
-                "most recent rows overall. Refusing rather than quietly changing what "
-                f"--context-orders {args.context_orders!r} means.")
         if args.train_pool < 5 * args.context:
             raise SystemExit(f"--train-pool {args.train_pool} is under 5x --context "
                              f"{args.context}; the pool would barely exceed the draw.")
-        keep = np.sort(np.random.default_rng(0).choice(
-            len(train), size=args.train_pool, replace=False))
-        print(f"train pool: {len(train):,} -> {args.train_pool:,} rows (uniform, seed 0), "
-              f"applied BEFORE feature construction; the fit draws {args.context:,}",
+        # THE UNION POOL. A uniform subsample is statistically equivalent to the full train
+        # set for RANDOM context draws and not for recency-ordered ones: the most recent
+        # 1,000 rows of a uniform 300,000-row sample of 2.5M span roughly eight times the
+        # window of the most recent 1,000 rows overall. Recency would then mean something
+        # different on the five tasks that need a pool cut than on the seven that do not,
+        # and cells measured that way cannot be compared -- which is why this used to refuse
+        # outright.
+        #
+        # Refusing also made the question unanswerable on those five tasks. Instead, ADD the
+        # most recent K rows to the uniform sample, where K is the largest context any
+        # recency draw can request. The recency draw then finds every row it wants and is
+        # exact. The uniform part is untouched -- same seed, same rows, so the random arm is
+        # bit-identical to a run without the union except for the K rows appended -- and the
+        # contamination is bounded by K/(pool+K), reported below rather than assumed. It is
+        # 0.3% at K=1,000 against a 300,000 pool, and measurable: run the random arm with and
+        # without --union-recent and the difference IS the contamination.
+        orders = [o.strip() for o in args.context_orders.split(",") if o.strip()]
+        wants_recency = [o for o in orders if o != "random"]
+        if wants_recency and not args.union_recent:
+            raise SystemExit(
+                f"--context-orders {args.context_orders!r} needs the most recent rows and "
+                f"--train-pool subsamples uniformly, so the recency draw would span a far "
+                f"wider window than it does without a pool cut. Pass --union-recent to add "
+                f"them back exactly, or drop --train-pool.")
+        k = 0
+        if args.union_recent and wants_recency:
+            grid = [int(s) for s in args.context_grid.split(",") if s.strip()]
+            k = max(grid + [args.context])
+        keep, extra = union_recent_pool(train[tcol].to_numpy(), args.train_pool, k)
+        print(f"train pool: {len(train):,} -> {len(keep):,} rows (uniform {args.train_pool:,}, "
+              f"seed 0), applied BEFORE feature construction; the fit draws {args.context:,}",
               flush=True)
+        if extra:
+            print(f"  union-recent: +{extra:,} of the most recent {k:,} rows were not already "
+                  f"in the uniform sample, so a recency draw is exact and the random draw is "
+                  f"{100 * extra / len(keep):.2f}% enriched in recent rows", flush=True)
         train = train.iloc[keep].reset_index(drop=True)
         y = y[keep]
 
@@ -2770,13 +2831,56 @@ def main() -> None:
                   flush=True)
         return
 
+    # THE CONTEXT ORDER IN THE FIXED-ARM PATH. `--context-orders` began life as a selectable
+    # axis, offered to validation inside the calibrated block and read nowhere else, because
+    # the question then was whether validation can SEE a recency effect. It cannot. That
+    # makes the next question a different one -- whether recency should be the DEFAULT -- and
+    # a default is measured here, on a fixed configuration, not by a protocol that selects.
+    # Until this existed the question could not be asked: there was no way to run the base
+    # arm on a recent context.
+    fixed_orders = [o.strip() for o in args.context_orders.split(",") if o.strip()]
+    if len(fixed_orders) > 1:
+        raise SystemExit(
+            f"--context-orders {args.context_orders!r} lists {len(fixed_orders)} orders and "
+            f"this run does not select. Several orders are only meaningful under "
+            f"--calibrated, which picks between them on validation; here, pass exactly one "
+            f"and compare runs.")
+    fixed_order = fixed_orders[0] if fixed_orders else "random"
+    # Ordered by the training timestamp, stable so ties keep their original order and the
+    # draw is reproducible. Indices are into `train` AFTER any --train-pool cut, matching
+    # every arm's feature matrix.
+    fixed_time_order = np.argsort(train[tcol].to_numpy(), kind="stable")
+    if fixed_order != "random":
+        # A recency draw indexes arm matrices BY POSITION, so a train frame that no longer
+        # lines up with them would silently select the wrong rows -- and produce a plausible
+        # number, not an error. Misalignment between an index and the frame it indexes has
+        # cost this project two rounds; it is cheap to refuse and expensive to discover.
+        if len(fixed_time_order) != len(arms["base"][0]):
+            raise SystemExit(
+                f"the train frame has {len(fixed_time_order):,} rows and the arm matrices "
+                f"have {len(arms['base'][0]):,}, so a time-ordered index cannot address "
+                f"them. --context-orders {fixed_order!r} is refused rather than applied to "
+                f"whatever those positions happen to mean.")
+        print(f"context order: {fixed_order} (fixed-arm path; the draw is the same rows for "
+              f"every arm, so the comparison between arms is unchanged)", flush=True)
+
     header = "".join(f"{name:>10}" for name in arms)
     print(f"\n{'seed':>5}{header}", flush=True)
     results = {k: [] for k in arms}
     for seed in range(args.seeds):
         rng = np.random.default_rng(seed)
         n = len(arms["base"][0])
-        rows = rng.choice(n, size=min(args.context, n), replace=False)
+        size = min(args.context, n)
+        if fixed_order == "recent":
+            # Deterministic given a size: if recency helps, it helps without a draw. Every
+            # seed therefore shares this context and the seed varies only what `score` does
+            # downstream -- which is the honest behaviour, not a bug to randomise away.
+            rows = fixed_time_order[-size:]
+        elif fixed_order == "recent-half":
+            half = fixed_time_order[len(fixed_time_order) // 2:]
+            rows = rng.choice(half, size=min(size, len(half)), replace=False)
+        else:
+            rows = rng.choice(n, size=size, replace=False)
         t0 = time.perf_counter()
         for name, (X, Xe) in arms.items():
             results[name].append(score(X, Xe, rows, seed))
