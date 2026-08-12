@@ -360,6 +360,41 @@ never-tune 2.17, so it still favours keeping tuning, and that survives shrinkage
 regret falls to 0.52, below always-tune's 0.79, and the verdict flips. A decision resting on a
 single cell is worth stating as such rather than reporting the verdict alone.
 
+### DECIDED 2026-08-12: keep per-task tuning
+
+**The package ships the calibrated per-task protocol.** The maintainer decision is made, on a
+complete twelve-task picture rather than the seven it started from, and the reasoning is
+recorded here because the margin above is thin enough that someone will reasonably re-open it.
+
+**What was checked before deciding.** Five held-out tasks were measured specifically to see
+whether any lost more from tuning than rel-trial gains — the one result that would have flipped
+it. None did: the worst is rel-hm at −0.76, which ties user-clicks rather than beating it. Three
+of the five had never produced a number before. **There is nothing left to measure**: across the
+published RelBench families the extra tasks are almost entirely regression or link prediction,
+so the twelve are close to the complete set of binary entity-classification tasks that exist,
+and the single-cell margin is a fact to live with rather than one more round can dissolve.
+
+**What decided it was not the regret table.** 0.79 against 2.17 is thin and rests on rel-trial.
+The stronger argument came from trying the alternative and watching it fail. Fixed defaults were
+given their best two candidates — context recency, worth **+6.27** on rel-event/user-ignore, and
+the calendar block at +3.02 — and measured across six tasks as defaults rather than as
+selections. Recency is **negative on all six**, five of them on every seed, down to **−9.25**;
+worst-case regret adopts at 9.25 against declining at 0.00. The calendar block is null, every
+cell inside the ±0.6 floor but one.
+
+**And the reason that generalises past those two candidates.** user-ignore's +6.27 is real and
+reproduces, and *nothing computable before the labels predicts it*. A pre-registered rule keyed
+on temporal geometry was refuted the day it was written (ρ = −0.203 against −0.50; `RESEARCH.md`
+§9), and rel-event/user-repeat — the same database, the same 147-day span, the same geometry —
+gains nothing from the same intervention. **A win that large, that task-specific, and that
+unpredictable is exactly what per-task selection captures and no fixed default can.** That is
+the case for A, and it does not depend on rel-trial.
+
+**What would re-open this**, stated so the reopening is cheap: a task losing more than 2.17 from
+tuning, or a rule that predicts where a large default-level effect fires using only information
+available before the labels. Eleven instruments have failed at the second; that is evidence, not
+proof.
+
 **Not because selection is noisy there.** Validation on that task is 21,183 rows and picks
 `+struct` over `base` consistently, in every seed, on both halves of its own time range;
 test then prefers `base`. Validation is stable and systematically wrong, which is the same
