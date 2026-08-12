@@ -730,13 +730,37 @@ whose `src-dst-mrr` tasks are link prediction on genuinely temporal graphs.
 * **The twelve-task table is a slice, not the benchmark.** Its worth is that it reproduces the
   published `Avg AUROC` to the digit for all nine comparison methods, and that stays true. But
   "our position on RelBench" means our position on the twelve tasks that report chose.
-* **Several bolded tasks are binary classification on datasets already downloaded**, so they
-  cost a round rather than a port. `study-adverse`, `site-success`, `ad-ctr` and
-  `badges-class` are the obvious candidates, and they would widen the worst-case-regret
-  evidence base that currently rests on rel-trial's single cell.
+* ~~**Several bolded tasks are binary classification on datasets already downloaded**, so they
+  cost a round rather than a port.~~ **WRONG, corrected 2026-08-12.** Those names were read off
+  the registry and assumed; the task definitions say otherwise. `study-adverse`, `site-success`,
+  `ad-ctr` and `driver-position` are all **REGRESSION**, and `user-attendance` too — this
+  harness scores binary ROC-AUC and cannot run one of them. The remaining binary-sounding names
+  (`studies-has_dmc`, `eligibilities-adult/child`, `searchinfo-isuserloggedon`, `badges-class`)
+  are not in the per-dataset modules at all: they come from `dbinfer.py`, and are
+  column-prediction tasks that predict a static attribute rather than a future outcome — a
+  different problem shape from the temporal cutoff structure this package and its whole leakage
+  discipline are built around.
+
+  **So the lead is much weaker than it looked.** Across the published temporal families the
+  extra tasks are almost entirely regression or link prediction, and **the twelve we run are
+  close to the complete set of binary entity-classification tasks that exist there.** There is
+  no cheap pool of extra cells waiting to widen the worst-case-regret argument, and the
+  A/B margin resting on rel-trial's single +2.17 is a fact to live with rather than one more
+  measurement can dissolve.
 * **`author-category` exists**, which is the label the motif screen actually wanted -- co-author
   community predicting research area, rather than paper-citation's popularity. It is multiclass,
   which this harness does not support.
+
+
+**A note on how this was established, because the cheap route does not exist.** Three pods
+died proving it. `get_task(download=True)` does not reliably fetch a small task table: where
+RelBench has not published one it falls back to *"Making Database object from scratch"* and
+derives the task by materialising the entire database — 6.40 GB for rel-amazon, then `rc=137`.
+That fallback is per TASK, not per dataset, so a published family gives no protection and
+there is no way to find out except by paying. **The task definitions are public source, and
+reading them costs nothing and answers the question exactly.** `scan_tasks.py` is kept for the
+one thing it does that source cannot — base rates and row counts on a task already known to be
+runnable — and it should never again be the first move.
 
 **And a caution about how this was found.** We had run rounds against this registry for weeks
 without ever printing it, and the version banner still reports `relbench (no __version__)`, so
