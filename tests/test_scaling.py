@@ -4572,3 +4572,31 @@ def test_setup_banner_reads_relbench_version_from_metadata_not_the_module():
     setup = pathlib.Path(cycle.__file__).with_name("_pod_setup.sh").read_text()
     assert "importlib.metadata" in setup
     assert 'version("relbench")' in setup
+
+
+def test_gap_ratio_is_the_quantity_recency_should_track():
+    """gap / span, label-free and computable before any outcome is read.
+
+    Context recency is +6.27 on rel-event as a plain default and was null or negative on the
+    three other tasks it was tried on. The stated mechanism is that "recent" only means "close
+    to what you are predicting" when the train->test gap is small relative to the span being
+    drawn from -- rel-event's test rows sit 15 days past a 147-day training period, rel-trial's
+    sit 731 days past its own. This pins the arithmetic, since a ratio inverted or normalised
+    by the wrong quantity would order the tasks backwards and refute a true mechanism.
+    """
+    import numpy as np
+    day = np.timedelta64(1, "D")
+    t0 = np.datetime64("2020-01-01")
+    # rel-event-shaped: a long training period, test immediately after
+    tr = np.array([t0, t0 + 147 * day])
+    te = np.array([t0 + 162 * day])
+    span = (tr.max() - tr.min()) / day
+    gap = (te.min() - tr.max()) / day
+    assert span == 147 and gap == 15
+    near = gap / span
+    # rel-trial-shaped: test far past the training period relative to its span
+    tr2 = np.array([t0, t0 + 365 * day])
+    te2 = np.array([t0 + 365 * day + 731 * day])
+    far = ((te2.min() - tr2.max()) / day) / ((tr2.max() - tr2.min()) / day)
+    assert near < far, "the ratio must order rel-event-shaped tasks BELOW rel-trial-shaped ones"
+    assert round(near, 3) == 0.102 and round(far, 3) == 2.003

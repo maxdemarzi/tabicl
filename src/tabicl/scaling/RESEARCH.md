@@ -705,6 +705,56 @@ pick, which is why nine of them have failed: **they attack the wrong quantity.**
 not which configuration validation picks; it is whether to select at all, or to change what
 quantity is being estimated — which is directions 5 and 6 below.
 
+### 9. Context recency is a RULE, not a default — PRE-REGISTERED 2026-08-12, unrun
+
+Phase 1 established that recency survives the fixed-arm path: **+6.27 on rel-event**
+(SE 0.60, t 10.40, 8/8), with the size half of "recency at a 1,000-row context" worth
+**+0.13** and therefore nothing. It also left the obvious question unanswered, and there is
+already evidence about it in this file: the 2026-08-05 note records recency as **null or
+negative on the three other tasks it was tried on**, with a mechanism stated at the time —
+rel-event's test rows sit 15 days past a 147-day training period, where rel-trial's sit 731
+days past its own.
+
+**So the hypothesis is not "recency is a good default". It is that recency pays exactly where
+"recent" still means "close to what you are predicting".** The quantity is
+
+> `gap_ratio = (train→test gap) / (training span)`
+
+label-free, computable before any outcome is read, and now printed by every run as `GAPRATIO`.
+rel-event is ≈0.10; a rel-trial-shaped task is ≈2.0, twenty times further out.
+
+**THE PRE-REGISTERED TEST.** Run `ctl` and `recent1k` on all twelve tasks, fixed arm, paired,
+and take the recency gain per task. Then, **excluding rel-event, which is where the rule came
+from and is therefore in-sample**:
+
+> **Spearman ρ between `gap_ratio` and the recency gain, across the eleven held-out tasks,
+> is ≤ −0.5.**
+
+**What refutes it:** ρ > −0.5. That includes the outcome where recency simply does nothing
+anywhere — a flat set of near-zero gains has no rank structure to find, and would say the
+effect is rel-event-specific with no rule behind it rather than a rule we have located.
+
+**Why this is worth running when the flat question is nearly answered.** A worst-case-regret
+sweep would almost certainly conclude "recency is a bad default": one large winner, eleven
+tasks it does nothing for. That is a real answer and a thin one. If the mechanism holds,
+recency is not a default but a **rule keyed on a quantity known in advance** — the same shape
+as the conditional-tuning criterion that died in item 7, and it fails or survives for the same
+kind of reason. The difference is that this one has its mechanism stated first, its quantity
+fixed first, and its falsifier written down before a single run existed. That is the whole
+difference between the two, and it is why item 7's refutation was worth having.
+
+**Stated in advance so a positive result is not overread.** The payoff is narrow even if the
+rule holds: it would fire on perhaps one or two of twelve tasks. A rule that says "do this on
+rel-event" is worth having because it says *why*, not because of how many tasks it moves.
+
+**And one thing phase 1 cannot settle.** `--context-orders recent` is deterministic, so its
+eight seeds are eight model fits of ONE context and its sd of 0.28 measures model noise with
+the draw variance missing entirely. If those particular 1,000 rows are lucky, nothing measured
+so far would reveal it. Lane B carries `recent-half` on rel-event — random sampling inside the
+recent half — whose spread across seeds is the missing component. **If `recent-half` collapses
+toward `ctl`, the +6.27 is a draw and not a mechanism, and this item dies before its
+correlation is computed.**
+
 ### 8. The benchmark is far larger than the twelve tasks we run (found 2026-08-11)
 
 Incidental to the rel-arxiv screen, and more consequential than the screen was. The pod

@@ -1205,6 +1205,21 @@ def main() -> None:
     test = task.get_table("test", mask_input_cols=False).df
     tcol = next(c for c in train.columns if pd.api.types.is_datetime64_any_dtype(train[c]))
     horizon = None if args.no_horizon else getattr(task, "timedelta", None)
+    # THE TEMPORAL GEOMETRY OF THE TASK, printed on every run because a hypothesis now rests
+    # on it. Context recency is +6.27 on rel-event as a plain default and was null or negative
+    # on the three other tasks it was tried on, with a stated mechanism: rel-event's test rows
+    # sit 15 days past a 147-day training period, where rel-trial's sit 731 days past its own.
+    # "Recent" only means "close to what you are predicting" when the gap is small relative to
+    # the span you are drawing from, so `gap_ratio` is the quantity that should predict where
+    # recency pays -- and it is label-free and computable before any outcome is read.
+    t_tr, t_te = train[tcol].to_numpy(), test[tcol].to_numpy()
+    span_d = (t_tr.max() - t_tr.min()) / np.timedelta64(1, "D")
+    gap_d = (t_te.min() - t_tr.max()) / np.timedelta64(1, "D")
+    gap_ratio = gap_d / span_d if span_d else float("nan")
+    print(f"temporal geometry: train span {span_d:.0f}d, train->test gap {gap_d:.0f}d, "
+          f"GAP_RATIO {gap_ratio:.4f}", flush=True)
+    print(f"GAPRATIO\t{args.dataset}/{args.task}\t{span_d:.1f}\t{gap_d:.1f}\t"
+          f"{gap_ratio:.4f}", flush=True)
     y, y_te = train[target].to_numpy(), test[target].to_numpy()
     max_cols = None if str(args.max_columns).lower() in ("none", "null", "") else int(args.max_columns)
     spec = args.window_days or DEFAULT_WINDOWS.get(args.dataset, "30,365")
