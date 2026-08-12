@@ -705,6 +705,44 @@ pick, which is why nine of them have failed: **they attack the wrong quantity.**
 not which configuration validation picks; it is whether to select at all, or to change what
 quantity is being estimated — which is directions 5 and 6 below.
 
+### 8. The benchmark is far larger than the twelve tasks we run (found 2026-08-11)
+
+Incidental to the rel-arxiv screen, and more consequential than the screen was. The pod
+printed the installed registry before asking it for anything, and it lists **33 datasets**
+where this project knows seven, and far more tasks per dataset than the one or two we run:
+
+| dataset | tasks it registers |
+|---|---|
+| rel-stack | `user-badge`, `user-engagement`, **`badges-class`**, **`post-votes`**, **`post-post-related`**, **`user-post-comment`** |
+| rel-trial | `study-outcome`, plus **`site-success`**, **`study-adverse`**, **`studies-has_dmc`**, `eligibilities-adult/child`, `studies-enrollment`, `condition-sponsor-run`, `site-sponsor-run` |
+| rel-f1 | `driver-dnf`, `driver-top3`, plus **`driver-position`**, **`qualifying-position`**, `results-position`, `driver-circuit-compete` |
+| rel-avito | `user-clicks`, `user-visits`, plus **`ad-ctr`**, **`searchinfo-isuserloggedon`**, `searchstream-click`, `user-ad-visit` |
+| rel-amazon | `user-churn`, `item-churn`, plus `item-ltv`, `user-ltv`, `review-rating`, `user-item-*` |
+| rel-arxiv | `paper-citation`, **`author-category`**, `author-publication`, `paper-paper-cocitation` |
+| rel-event | `user-ignore`, `user-repeat`, plus `user-attendance`, `users-birthyear`, `event_interest-*` |
+
+And whole families we had never seen: **`rel-ratebeer`, `rel-salt`, `rel-mimic`**, eight
+`dbinfer-*` datasets, and the TGB temporal-graph benchmarks (`tgbl-*`, `tgbn-*`, `thgl-*`),
+whose `src-dst-mrr` tasks are link prediction on genuinely temporal graphs.
+
+**Why this matters more than a longer list.** Three standing conclusions are qualified by it:
+
+* **The twelve-task table is a slice, not the benchmark.** Its worth is that it reproduces the
+  published `Avg AUROC` to the digit for all nine comparison methods, and that stays true. But
+  "our position on RelBench" means our position on the twelve tasks that report chose.
+* **Several bolded tasks are binary classification on datasets already downloaded**, so they
+  cost a round rather than a port. `study-adverse`, `site-success`, `ad-ctr` and
+  `badges-class` are the obvious candidates, and they would widen the worst-case-regret
+  evidence base that currently rests on rel-trial's single cell.
+* **`author-category` exists**, which is the label the motif screen actually wanted -- co-author
+  community predicting research area, rather than paper-citation's popularity. It is multiclass,
+  which this harness does not support.
+
+**And a caution about how this was found.** We had run rounds against this registry for weeks
+without ever printing it, and the version banner still reports `relbench (no __version__)`, so
+no round on record can say which release produced its numbers. Listing a registry costs
+seconds; that is a poor reason to have gone this long without one.
+
 ### 7. Conditional tuning — REFUTED 2026-08-11 on the first held-out task
 
 **The prediction below was falsified by rel-hm/user-churn: tuning gain −0.76 (SE 0.16,

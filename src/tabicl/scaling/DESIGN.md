@@ -449,6 +449,45 @@ with types would cost `(k * n_phases) ** 3` joins for a measured loss.
 still an order of magnitude below what free features and relation choice deliver. The
 machinery is correct, fast and general; on this task it remains the small term.
 
+#### Screened on a second graph: rel-arxiv confirms the diagnosis and not the hope
+
+The result above is one task, and "a denser, longer-running temporal graph is where it would
+get a fair test" was left standing as a claim. `screen_motif_signal.py` tests it cheaply --
+a triangle census and a GBDT, no TabICL fit -- with the bar **pre-registered at rel-event's
++0.016**, the gain already measured and already declined. rel-arxiv/paper-citation, 1,223,361
+citation edges dated by `Submission_Date`, 9 distinct cutoffs, 100k rows per split, base rate
+0.475:
+
+| features | val AUC | gain |
+|---|---:|---:|
+| degree alone | 0.8049 | — |
+| + triangles, clustering | 0.8045 | **−0.0004** (sd 0.0003, 0/3) |
+| + ordered phase census | 0.8072 | **+0.0027** (3/3) |
+
+**Triangles add nothing over degree: −0.0004, on a graph where they plainly exist.** 82.2% of
+rows have an edge before their cutoff and **51.6% have a triangle**, so this is not a null for
+want of structure -- the census found triangles for half the rows and a GBDT could not use
+them once it had the degree. That is the same finding as rel-event (+0.016 there, which this
+does not even reach) on a graph an order of magnitude denser in the relevant sense. **VERDICT:
+FAIL. No rel-arxiv round.**
+
+**Read as weak evidence, because of what the label is.** "Will this paper be cited in the next
+six months" is preferential attachment: the target *is* popularity, and degree alone reaching
+0.805 says so. A task whose label is degree cannot ask whether density matters where
+popularity does not. The pre-registration said this before the run, and it is the reason the
+failure does not close the question -- `rel-arxiv/author-category` is the better-matched label
+(co-author community predicting research area) and needs multiclass support this harness lacks.
+
+**The phase census flipped sign, which is the diagnosis confirming.** −0.014 on rel-event,
+**+0.0027** here, positive on all three fits. The stated reason for rel-event's loss was that
+its timestamps reach 13.9% coverage by the midpoint cutoff, leaving most rows too little
+history for a phase split to mean anything; on a graph with real edge times the sign reverses.
+**It is +1.9 sampling SE on a 100k validation split, so it is suggestive and not resolved** --
+and the three replicates vary the GBDT seed, not the sample, so their sd of 0.0003 measures
+model variance and understates the real uncertainty. What it does establish is that the
+rel-event result was a coverage artefact rather than the ordering census being worthless. It
+is still a fifth of the bar.
+
 ### Cyclic patterns: worst-case optimal joins
 
 Tree aggregation covers parent-child schemas, which is what RelBench uses. It cannot
