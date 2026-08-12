@@ -4600,3 +4600,56 @@ def test_gap_ratio_is_the_quantity_recency_should_track():
     far = ((te2.min() - tr2.max()) / day) / ((tr2.max() - tr2.min()) / day)
     assert near < far, "the ratio must order rel-event-shaped tasks BELOW rel-trial-shaped ones"
     assert round(near, 3) == 0.102 and round(far, 3) == 2.003
+
+
+# --- the phase-2 defaults analysis, pinned before the data existed ----------------------
+# RESEARCH.md §9 fixes the hypothesis and the falsifier; analyse_defaults.py fixes the
+# arithmetic. These pin the arithmetic itself, because an analysis chosen after seeing the
+# numbers can rescue almost any hypothesis and that freedom is what pre-registration removes.
+
+def _analyse_defaults():
+    import importlib.util, pathlib as _p
+    f = _p.Path("src/tabicl/scaling/analyse_defaults.py")
+    spec = importlib.util.spec_from_file_location("_ad", f)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def test_spearman_endpoints_and_ties():
+    ad = _analyse_defaults()
+    assert round(ad.spearman([1, 2, 3, 4], [4, 3, 2, 1]), 6) == -1.0
+    assert round(ad.spearman([1, 2, 3, 4], [1, 2, 3, 4]), 6) == 1.0
+    # ties must be averaged, or the correlation is not Spearman and the threshold means
+    # something other than what §9 says it means
+    assert round(ad.spearman([1, 1, 2, 2], [1, 2, 1, 2]), 6) == 0.0
+
+
+def test_the_preregistered_threshold_separates_mechanism_from_the_flat_outcome():
+    """§9 refutes on rho > -0.5, and names the flat outcome as a refutation on purpose: a set
+    of near-zero gains has no rank structure, so it means rel-event-specific with no rule
+    behind it rather than a rule we located. The threshold has to actually do that."""
+    ad = _analyse_defaults()
+    ratio = [0.10, 0.30, 0.80, 1.50, 2.00]
+    mechanism = [6.30, 2.10, 0.20, -0.10, 0.05]      # gain falls as the gap ratio grows
+    flat = [0.05, -0.02, 0.01, 0.03, -0.01]          # recency does nothing anywhere
+    assert ad.spearman(ratio, mechanism) <= ad.RHO_THRESHOLD
+    assert ad.spearman(ratio, flat) > ad.RHO_THRESHOLD
+
+
+def test_paired_gain_is_by_seed_position_and_reports_its_own_spread():
+    import numpy as np
+    ad = _analyse_defaults()
+    a = np.array([10.0, 11.0, 12.0])
+    b = np.array([9.0, 10.5, 12.5])
+    mean, se, pos, n = ad.paired(a, b)
+    assert round(mean, 4) == 0.3333 and pos == 2 and n == 3
+    assert se > 0
+
+
+def test_in_sample_task_is_excluded_from_its_own_test():
+    """rel-event is where the rule came from. Leaving it in would let the case that generated
+    the hypothesis vote on it, which is the objection that killed the conditional-tuning
+    criterion in RESEARCH item 7."""
+    ad = _analyse_defaults()
+    assert ad.IN_SAMPLE == "rel-event/user-ignore"
