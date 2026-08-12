@@ -246,6 +246,12 @@ two facts probably belong together.
 
 See `PERFORMANCE.md`, 2026-08-05 entry (RESEARCH 6e), for the protocol and per-seed numbers.
 
+**`ALTERNATIVES.md` puts this in its wider frame** — the same build-versus-depend question
+asked of skrub (ruled out: no join or aggregation primitive in its API takes a temporal
+cutoff, so every aggregation would read past the prediction time), of getml and RDBLearn
+(never evaluated, and said so), and of the benchmark harness itself (an argument, not a
+measurement — most of this package has never been compared against anything).
+
 ## Measured results
 
 ### RelBench, official protocol
