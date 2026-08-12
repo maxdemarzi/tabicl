@@ -705,6 +705,107 @@ pick, which is why nine of them have failed: **they attack the wrong quantity.**
 not which configuration validation picks; it is whether to select at all, or to change what
 quantity is being estimated — which is directions 5 and 6 below.
 
+### 7. Conditional tuning — REFUTED 2026-08-11 on the first held-out task
+
+**The prediction below was falsified by rel-hm/user-churn: tuning gain −0.76 (SE 0.16,
+t = −4.90, 7 of 8 seeds negative, shrunk −0.69).** The criterion reports coverage HOLDS there
+(0.96–1.03), so it says *tune*, and tuning loses three quarters of a point — past the −0.6
+falsifier fixed in advance, on both the raw and the shrunk figure.
+
+So the shared-key coverage ratio **does not identify where tuning is safe**. It flagged
+rel-avito and rel-f1 and looked convincing on the seven tasks that produced the gains; the
+first task it had never seen breaks it. That is the whole reason the test used tasks which
+informed neither the criterion nor the table, and the reason the prediction was written down
+before any of them ran.
+
+**What survives:** nothing of the conditional policy. The decision reverts to always-tune (A)
+versus fixed defaults (B) on worst-case regret. Adding rel-hm as an eighth task leaves that
+verdict unchanged — always-tune's worst case is still 0.79 (user-clicks, now joined by
+rel-hm's 0.76) against never-tune's 2.17 (rel-trial) — but it makes the picture worse in a way
+the verdict hides: **three of eight tasks now lose from tuning**, and the case for A rests
+entirely on rel-trial continuing to be worth +2.17.
+
+The remaining held-out tasks were still worth running, for a different reason than they were
+started: not to rescue the criterion, which is dead, but because a task where tuning loses
+more than 2.17 would flip the A/B verdict outright.
+
+#### The held-out set, four of five measured (2026-08-11)
+
+8 replicates each, paired by seed, tuned = the calibrated protocol and base = the fixed `base`
+arm of the same task on the same pod. All four ran at `--max-columns 2 --offload cpu
+--train-pool 300000` on an H100 SXM, the tier that made the three largest tasks fit at all.
+
+| task | tuned | base | gain | SE | t | seeds + | verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| rel-hm/user-churn | — | — | **−0.76** | 0.16 | −4.90 | 1/8 | **refutes** |
+| rel-amazon/user-churn | 67.11 | 66.96 | +0.15 | 0.13 | 1.14 | 5/8 | null |
+| rel-stack/user-engagement | 89.70 | 89.57 | +0.12 | 0.14 | 0.90 | 5/8 | null |
+| rel-amazon/item-churn | 80.16 | 80.12 | +0.04 | 0.08 | 0.48 | 4/8 | null |
+| rel-stack/user-badge | — | — | *not measured* | | | | — |
+
+**The three nulls are the outcome the pre-registration warned would confirm little**, and two
+of them are the very tasks named there: item-churn and user-badge have most arms excluded by
+their own leak controls, so selection has almost nothing to choose between. user-engagement was
+not on that list and still came in at +0.12 — inside the floor, five seeds of eight positive.
+
+**Nothing here rescues the criterion and nothing here flips A/B.** The criterion was already
+dead on rel-hm; three nulls neither revive nor further damage it. For the A/B decision what
+mattered was whether any held-out task loses more than rel-trial's +2.17, and the worst of the
+four is rel-hm at −0.76 — which merely ties user-clicks rather than beating it. **Always-tune's
+worst case is unchanged at 0.79, never-tune's at 2.17.**
+
+rel-stack/user-badge is the one cell still open, and the only remaining candidate to flip the
+verdict. Its lane died on a driver deadline with one seed of eight complete; it is the slowest
+cell in the suite at ~31 min per seed of selection sweep, so budget eight hours rather than
+five.
+
+**A side result worth keeping:** rel-stack/user-engagement now has a clean 8-replicate
+**89.70 ± 0.18** (base arm 89.57), replacing the salvaged 89.33 that STATUS carried from a
+partial run.
+
+#### The original pre-registration, kept verbatim
+
+The re-measured table says tuning is a rel-trial-specific win (+2.17), a user-clicks-specific
+loss (−0.79), and nothing measurable on the other five. A conditional policy — tune only where
+it pays — beats both always-tune (worst-case regret 0.79) and never-tune (2.17) *on that
+table*. But choosing the condition after seeing which tasks won is fitting the rule to the
+answer, which is the objection that keeps `--drop-stale-arms` out of the standing table. So
+the condition is taken from a criterion that ALREADY EXISTED, and tested on tasks that did not
+inform it.
+
+**The criterion, unchanged from `coverage_probe.py` (commit 2039c50, before this table):** the
+shared-key block's coverage ratio between validation and test, with the threshold
+`--drop-stale-arms` already used, 0.8. It is label-free — links, timestamps and the existence
+of a label column, never its values — and computable before any test label is read.
+
+**What it says about the seven tasks it was not chosen on.** Coverage collapses on exactly
+five RelBenchV1 tasks, all on rel-avito and rel-f1. Lining that up against the re-measured
+gains, without touching either:
+
+| coverage | tasks | re-measured gains |
+|---|---|---|
+| collapses (<0.8) | rel-avito ×2, rel-f1 ×2 | −0.79, −0.36, +0.52, +0.01 |
+| holds (0.96–1.03) | rel-trial, rel-event ×2 | **+2.17**, +0.27, +0.10 |
+
+"Tune only where coverage holds" would have worst-case regret **0.52** (forgoing driver-dnf),
+against 0.79 always-tune and 2.17 never-tune. Encouraging — and NOT yet evidence, because
+these are the same seven tasks that produced the gains.
+
+**THE PRE-REGISTERED TEST.** `coverage_probe` reports all five held-out RelBenchV1 tasks at
+0.96–1.03: coverage HOLDS on every one. So the rule says **tune on all five**, and therefore
+predicts:
+
+> **No held-out task shows tuning losing materially** (nothing below −0.6, the floor).
+
+**What refutes it:** any of rel-hm/user-churn, rel-stack/user-engagement,
+rel-stack/user-badge, rel-amazon/user-churn or rel-amazon/item-churn losing more than 0.6 by
+tuning. One such task and the criterion does not identify where tuning is safe.
+
+**Stated in advance, the test is weaker than it looks.** Two of the five (rel-stack/user-badge,
+rel-amazon/item-churn) have five of seven arms excluded by their own leak controls, so
+selection has almost nothing to choose between and a gain near zero there confirms little. A
+*loss* would still refute. Reporting this now so a null is not later read as support.
+
 ### 6. Temporal-distance extrapolation — BUILT AND REFUTED, 2026-08-10 (`--select-extrapolate`)
 
 **Verdict first: it cannot pay for itself, and where it runs it is harmful.** Three tasks,

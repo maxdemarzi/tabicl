@@ -35,13 +35,13 @@ field is shown here, with our rank in it.
 | rel-avito / user-clicks ◆ | **65.89** | 8/10 | 68.19 ⁿ²⁰ | — | 68.23 | 68.30 | 65.90 | 45.90 | 69.04 | 65.72 | **69.06** | 67.42 ˟ | 67.09 |
 | rel-f1 / driver-dnf ◆ | **69.66** | 9/10 | 69.95 ⁿ⁶ | — | 75.29 | **75.87** | 72.62 | 57.70 | 70.87 | 71.72 | 71.72 | 72.03 | 70.74 |
 | rel-hm / user-churn ◆◆ | **66.75** | 9/10 | — | — | **70.93** | 69.27 | 69.88 | 60.20 | 68.05 | 70.11 | 70.06 | 67.81 | 70.55 |
-| rel-stack / user-engagement ◆◆ | **89.33** ⁴ | 8/10 | — | — | **90.75** | 90.53 | 90.59 | 77.50 | 89.39 | 90.23 | 90.59 | 88.69 | 90.66 |
+| rel-stack / user-engagement ◆◆ | **89.70** ⁶ | 7/10 | — | — | **90.75** | 90.53 | 90.59 | 77.50 | 89.39 | 90.23 | 90.59 | 88.69 | 90.66 |
 | rel-stack / user-badge ◆◆ | **83.80** ⁴⁵ | 8/10 | — | — | **88.98** | 86.32 | 88.86 | 73.50 | 85.26 | 82.81 | 85.98 | 85.40 | 85.17 |
 | rel-amazon / user-churn ◆◆ | **66.94** | 9/10 | — | — | **70.99** | 70.39 | 70.42 | 62.30 | 67.57 | 69.74 | 69.35 | 67.71 | 70.27 |
 | rel-amazon / item-churn ◆◆ | **80.20** ⁵ | 8/10 | — | — | 82.64 | 82.55 | **82.81** | 69.00 | 82.07 | 82.18 | 82.46 | 80.18 | **82.81** |
-| **average** ¶ | **75.10** | **9/10** | — | — | **78.06** | 76.65 | 75.83 | 66.29 | 75.55 | 75.31 | 76.01 | 75.91 | 76.91 |
+| **average** ¶ | **75.13** | **9/10** | — | — | **78.06** | 76.65 | 75.83 | 66.29 | 75.55 | 75.31 | 76.01 | 75.91 | 76.91 |
 
-**Median rank 8 of 10.** Ranks: 3, 4, 6, 7, 8, 8, 8, 8, 8, 9, 9, 9. Bold in the comparison columns marks
+**Median rank 8 of 10.** Ranks: 3, 4, 6, **7**, 7, 8, 8, 8, 8, 9, 9, 9. Bold in the comparison columns marks
 the best method for that task; **we never hold it.**
 
 ¶ **The average row now covers all twelve tasks, so it IS the report's Avg AUROC.** The
@@ -67,7 +67,15 @@ training set, which can only reduce between-seed diversity.
 
 ⁴ Four replicates, not five: salvaged by `scaling/salvage.py` from a run the 3-hour ceiling
 killed before it printed a summary (~55 min/seed once disk offloading engages). A real
-measurement and a weaker one, marked rather than rounded up.
+measurement and a weaker one, marked rather than rounded up. **user-engagement no longer
+carries it** — see ⁶. user-badge still does.
+
+⁶ **Re-measured 2026-08-11 and no longer salvaged: 89.70 ± 0.18 over 8 replicates** (range
+89.46–90.07), on an H100 SXM at `--max-columns 2 --offload cpu --train-pool 300000`. It
+replaces the four salvaged replicates that averaged 89.33, and it moves the task from rank 8
+to **rank 7** — 89.70 clears RDBLearn's 89.39, which 89.33 did not. The larger tier is what
+made a complete run possible; nothing about the method changed. The fixed `base` arm scores
+89.57 on the same seeds, so tuning is worth +0.12 here (SE 0.14) — inside the ±0.6 floor.
 
 ◆◆ Added 2026-08-08/09 — the three tasks that dropped us from 6th to 9th. **This is the
 most important correction in this file.** They were run *because* they were missing, not
@@ -5028,6 +5036,59 @@ point that shrinks the residual and disarms the shrinkage); a two-point fit trus
 its error was unmeasurable; and a diagnostic blaming shrinkage for a zero that was structural.
 All are now pinned by tests. None was reachable without real data — which is the argument for
 smoking a new instrument on the cheapest task before spending a window on it.
+
+---
+
+### 2026-08-11 — the tuning table re-measured at current defaults, and tuning's value collapses
+
+**What changed since the previous entry:** only the defaults. `--categories` moved 0 → 8 and
+`--children` 3 → 0 after the original table was measured, so every number the ship/don't-ship
+decision rested on described a configuration that no longer ships. Re-run at what ships now:
+12 replicates, paired, `--categories` and `--children` at their new defaults, per-dataset
+necessities kept (`--timed-links-only` on rel-event, `--max-columns` per STANDING_FLAGS
+including `none` on rel-f1). Tuned = the calibrated protocol; base = the fixed `base` arm of
+the same task on the same pod, read from `PERSEED_ARM`.
+
+| task | tuned | base | gain | SE | shrunk | old gain |
+|---|---:|---:|---:|---:|---:|---:|
+| rel-trial/study-outcome | 73.31 | 71.14 | **+2.17** | 0.31 | +1.57 | +2.74 |
+| rel-f1/driver-dnf | 70.06 | 69.54 | +0.52 | 0.67 | +0.19 | +1.48 |
+| rel-event/user-ignore | 81.35 | 81.07 | +0.27 | 0.68 | +0.10 | +1.76 |
+| rel-event/user-repeat | 78.63 | 78.53 | +0.10 | 0.31 | +0.07 | +0.76 |
+| rel-f1/driver-top3 | 82.28 | 82.26 | +0.01 | 0.31 | +0.01 | +0.63 |
+| rel-avito/user-visits | 65.68 | 66.04 | −0.36 | 0.21 | −0.31 | −0.11 |
+| rel-avito/user-clicks | 65.61 | 66.40 | **−0.79** | 0.24 | −0.64 | −1.29 |
+
+**Mean +0.85 → +0.28, and every positive cell shrank — several to nothing.** Four of the five
+former gains are now inside the ±0.6 floor.
+
+**The mechanism is that better defaults raised the untuned baseline.** `base` is a fixed
+feature configuration, and both changed defaults feed it: categories adds columns to every
+arm's build and `--children 0` stops discarding child tables. A stronger `base` leaves less
+for selection to recover, so tuning's measured value falls without tuning itself changing.
+That is the whole reason to re-measure rather than reason from the old table.
+
+**Only two cells are resolvable**: rel-trial +2.17 and user-clicks −0.79. Everything else is
+inside the floor and should be read as *no effect*, not as a small gain.
+
+**Worst-case regret**, the framework that settled `max_columns=4`:
+
+| policy | worst-case regret | driven by |
+|---|---:|---|
+| always tune | **0.79** | rel-avito/user-clicks |
+| never tune | **2.17** | rel-trial/study-outcome |
+
+It favours keeping tuning, and survives shrinkage (0.64 vs 1.57). **The margin rests entirely
+on rel-trial**: excluding that one task, never-tune's worst regret is 0.52 against
+always-tune's 0.79 and the verdict inverts. A one-cell verdict is fragile and is reported as
+such.
+
+**What this does NOT license.** Fitting a conditional policy to this table — "tune only where
+it helped here" — would be choosing the rule after seeing the answer, the same objection that
+keeps `--drop-stale-arms` out of the standing table. A conditional rule has to be specified
+from a mechanism and then tested on tasks that did not inform it. The five RelBench tasks
+outside this table (rel-hm/user-churn, rel-stack/user-engagement, rel-stack/user-badge,
+rel-amazon/user-churn, rel-amazon/item-churn) are the held-out set for exactly that.
 
 ---
 

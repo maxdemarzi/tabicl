@@ -45,6 +45,22 @@ NAME = os.environ.get("TABICL_POD_NAME", "tabicl-bench")
 GPU_PREFERENCE = ["NVIDIA RTX A6000", "NVIDIA A40", "NVIDIA L40S", "NVIDIA L40",
                   "NVIDIA RTX A5000", "NVIDIA GeForce RTX 3090",
                   "NVIDIA GeForce RTX 4090"]
+
+# A round that is bound by SYSTEM RAM rather than VRAM can ask for a larger tier.
+#
+# The five largest RelBench tasks (both rel-stack, both rel-amazon, and historically
+# rel-hm) die with rc=137 -- SIGKILL from the kernel, not a CUDA error -- during the
+# relational aggregation, which scans child tables of millions of rows whatever the fit
+# pool is. `--offload cpu`, `--offload disk`, `--row-chunk` and `--train-pool` all address
+# GPU memory or the fit pool and none of them touch that, which is why six attempts on
+# rel-stack/user-badge failed the same way. On RunPod system RAM scales with the GPU tier,
+# so the lever is the tier itself.
+#
+# TABICL_GPU takes a comma-separated preference list of *substrings*, matched against the
+# names the API reports (e.g. "H100 SXM", "A100 PCIe", "H200 NVL").
+_gpu = os.environ.get("TABICL_GPU", "").strip()
+if _gpu:
+    GPU_PREFERENCE = [g.strip() for g in _gpu.split(",") if g.strip()]
 IMAGES = [
     "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
     "runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04",

@@ -52,6 +52,24 @@ print("torch floor ok")
 PY
 fi
 python -c "import torch;print('torch kept at', torch.__version__, 'cuda', torch.cuda.is_available())"
+# Hugging Face credentials, if the driver uploaded them. Unauthenticated Hub requests are
+# rate-limited and slower, and every round pays that on the TabICL checkpoint -- on a large
+# tier the download happens at $3+/hr with the GPU at 0% utilisation, so it is worth removing.
+#
+# Read from a FILE that the driver scp'd with 0600, never from the ssh command line: an
+# argument is visible in the remote process list and lands in any log that echoes the command.
+# The token is exported for child processes and never printed.
+if [ -f /workspace/.hf_token ]; then
+  export HF_TOKEN="$(cat /workspace/.hf_token)"
+  export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"
+  mkdir -p /root/.cache/huggingface
+  cp /workspace/.hf_token /root/.cache/huggingface/token
+  chmod 600 /root/.cache/huggingface/token
+  echo "hugging face token installed (${#HF_TOKEN} chars)"
+else
+  echo "no hugging face token supplied; downloads will be unauthenticated and rate-limited"
+fi
+
 # DIAGNOSTICS MAY NOT FAIL A BUILD. Under `set -e` this banner once aborted setup outright:
 # `relbench.__version__` does not exist on every release, the heredoc exited non-zero, the
 # script stopped before SETUP_OK, and four cycles in a row reported a failure that looked

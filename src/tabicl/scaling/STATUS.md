@@ -281,17 +281,20 @@ bounds the aggregation.
 | rel-avito / user-clicks | 65.89 | 8/10 | RDBLearn+v3 69.06 | −3.17 |
 | rel-f1 / driver-dnf | 69.66 | 9/10 | RelGT 75.87 | −6.21 |
 | rel-hm / user-churn | 66.75 | 9/10 | RelGNN 70.93 | −4.18 |
-| rel-stack / user-engagement | 89.33 ⁴ | 8/10 | RelGNN 90.75 | −1.42 |
+| rel-stack / user-engagement | 89.70 ⁶ | 7/10 | RelGNN 90.75 | −1.05 |
 | rel-amazon / user-churn | 66.94 | 9/10 | RelGNN 70.99 | −4.05 |
 | rel-amazon / item-churn | 80.20 ⁵ | 8/10 | GraphSAGE 82.81 | −2.61 |
 | rel-stack / user-badge | 83.80 ⁴⁵ | 8/10 | RelGNN 88.98 | −5.18 |
-| **average** | **75.10** | **9/10** | RelGNN 78.06 | −2.96 |
+| **average** | **75.13** | **9/10** | RelGNN 78.06 | −2.93 |
 
 ⁴ Four replicates, salvaged from a run the 3-hour ceiling killed before its summary.
 ⁵ `--train-pool 300000` and a dropped array column; `base`-only, five of seven arms
 excluded by its own leak controls.
+⁶ Re-measured 2026-08-11 on an H100 SXM: **8 clean replicates, 89.70 ± 0.18**, replacing the
+four salvaged ones that averaged 89.33. It clears RDBLearn's 89.39 and takes the task from
+rank 8 to 7. The tier is what changed, not the method.
 
-**Median rank 8 of 10.** Ranks 3, 4, 6, 7, 8, 8, 8, 8, 8, 9, 9, 9. An earlier version of this section
+**Median rank 8 of 10.** Ranks 3, 4, 6, **7**, 7, 8, 8, 8, 8, 9, 9, 9. An earlier version of this section
 showed three comparison methods and reported gaps against them; RelGT beats us on three of
 the four original tasks and was absent. The average row covers **all twelve** tasks for every method, and reproduces Table 14's
 own Avg AUROC column to the digit for all nine of them, so it is directly comparable, so it is internally comparable but is *not* the report's twelve-task Avg
@@ -316,20 +319,37 @@ tasks and a long tail.**
 `PERFORMANCE.md` also carries the DFS baseline, a labelled best-configuration upper bound,
 and what to expect *before* calibrating.
 
-### Is tuning worth it? Measured on all seven, at shipped defaults (2026-08-06)
+### Is tuning worth it? RE-MEASURED at current defaults (2026-08-11)
 
-| tuning gains | tasks |
-|---|---|
-| **+2.74, +1.76, +1.48** | rel-trial, rel-event/user-ignore, rel-f1/driver-dnf |
-| +0.76, +0.63 | rel-event/user-repeat, rel-f1/driver-top3 |
-| **−0.11, −1.29** | rel-avito/user-visits, **rel-avito/user-clicks** |
+The table this section used to carry was measured before `--categories` moved 0 → 8 and
+`--children` 3 → 0. Re-run at the defaults that actually ship — 12 replicates, paired, tuned
+= the calibrated protocol, base = the fixed `base` arm of the same task on the same pod:
 
-Mean **+0.85**, negative on two of seven. **The number to give a customer is not the mean —
-it is the rule that predicts their case: tuning pays where the optional feature blocks pay.**
-rel-trial's best block is worth +2.63 over the default one and rel-event's +1.87; on
-rel-avito the best is +0.24 on one task and *nothing* on the other. `user-clicks` loses
-**1.29** — four places in the published field — reproduced across two independent rounds at
-two different defaults, so it is a property of the task rather than a bad draw.
+| task | tuned | base | **gain** | SE | shrunk | old gain |
+|---|---:|---:|---:|---:|---:|---:|
+| rel-trial/study-outcome | 73.31 | 71.14 | **+2.17** | 0.31 | +1.57 | +2.74 |
+| rel-f1/driver-dnf | 70.06 | 69.54 | +0.52 | 0.67 | +0.19 | +1.48 |
+| rel-event/user-ignore | 81.35 | 81.07 | +0.27 | 0.68 | +0.10 | +1.76 |
+| rel-event/user-repeat | 78.63 | 78.53 | +0.10 | 0.31 | +0.07 | +0.76 |
+| rel-f1/driver-top3 | 82.28 | 82.26 | +0.01 | 0.31 | +0.01 | +0.63 |
+| rel-avito/user-visits | 65.68 | 66.04 | −0.36 | 0.21 | −0.31 | −0.11 |
+| rel-avito/user-clicks | 65.61 | 66.40 | **−0.79** | 0.24 | −0.64 | −1.29 |
+
+**Mean fell +0.85 → +0.28, and every positive cell shrank.** The mechanism is that the new
+defaults raised the UNTUNED baseline: `--categories 8` and `--children 0` improved the `base`
+arm, so there is less left for tuning to recover. The old table was measuring headroom that no
+longer exists — which is exactly why a decision must not rest on numbers describing what used
+to ship.
+
+**Only two of seven cells clear the ±0.6 floor**: rel-trial +2.17 and user-clicks −0.79. So
+the honest summary is no longer "tuning generally pays". It is **a rel-trial-specific win, a
+user-clicks-specific loss, and nothing measurable on the other five.**
+
+**Worst-case regret, the framework that settled `max_columns`:** always-tune 0.79 against
+never-tune 2.17, so it still favours keeping tuning, and that survives shrinkage (0.64 vs
+1.57). **But the entire margin rests on one task** — drop rel-trial and never-tune's worst
+regret falls to 0.52, below always-tune's 0.79, and the verdict flips. A decision resting on a
+single cell is worth stating as such rather than reporting the verdict alone.
 
 **Not because selection is noisy there.** Validation on that task is 21,183 rows and picks
 `+struct` over `base` consistently, in every seed, on both halves of its own time range;

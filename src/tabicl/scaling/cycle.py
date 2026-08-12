@@ -205,6 +205,7 @@ def main() -> int:
     remote_sh = pathlib.Path(__file__).with_name("_pod_remote.sh")
 
     pr.auth()
+    adopted = False
     if not args.attach:
         build_payload(REPO, payload)
         verify_payload(REPO, payload)
@@ -215,6 +216,8 @@ def main() -> int:
                                  "create"]).returncode
             if rc != 0:
                 raise SystemExit("could not obtain a usable host")
+        else:
+            adopted = True
 
     pod = pr.find_pod()
     if pod is None:
@@ -222,11 +225,37 @@ def main() -> int:
     _, target = pr.wait_ready(pod["id"])
     print(f"pod {pod['id']} at root@{target[0]}:{target[1]}", flush=True)
 
+    if adopted:
+        # ADOPTING A POD SKIPS `create`, AND `create` IS WHERE THE HOST IS PROBED. Four lanes
+        # died at install on 2026-08-11 because a previous aborted launch had left pods under
+        # their names: each lane found one, skipped creation, and ran on a host nothing had
+        # validated for CUDA, torch version or bandwidth. The tell was in the startup -- no
+        # `trying SECURE`, no `created`, no `USABLE` -- which is easy to miss precisely because
+        # nothing failed there. A reused host has to clear the same bar as a fresh one.
+        usable, why = pr.probe_host(target)
+        if not usable:
+            raise SystemExit(
+                f"adopted the existing pod {pod['id']} and it FAILED the probe: {why}. "
+                f"Terminate it and rerun so a fresh host is created and validated.")
+        print(f"adopted an existing pod and probed it: {why}", flush=True)
+
     fetched = workdir / "results"
     fetched.mkdir(exist_ok=True)
     try:
         if not args.attach:
             scp_up(target, payload, "/workspace/payload.tar.gz")
+            # Hugging Face token, if this machine has one. Uploaded as a FILE so it never
+            # appears in an ssh argument, a remote process list, or a log line -- and the
+            # driver prints only whether one was found, never its contents. Unauthenticated
+            # Hub downloads are rate-limited, which on a large tier is paid at the large
+            # tier's price with the GPU idle.
+            hf = pathlib.Path.home() / ".cache" / "huggingface" / "token"
+            if hf.exists():
+                scp_up(target, hf, "/workspace/.hf_token")
+                pr.run_ssh(target, "chmod 600 /workspace/.hf_token", timeout=120)
+            else:
+                print("  no HF token at ~/.cache/huggingface/token -- downloads will be "
+                      "unauthenticated", flush=True)
             for f, dest in ((pathlib.Path(__file__).with_name("_pod_setup.sh"),
                              "/workspace/_pod_setup.sh"),
                             (work_sh, "/workspace/work.sh"),
