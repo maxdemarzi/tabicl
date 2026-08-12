@@ -56,8 +56,15 @@ GPU_PREFERENCE = ["NVIDIA RTX A6000", "NVIDIA A40", "NVIDIA L40S", "NVIDIA L40",
 # rel-stack/user-badge failed the same way. On RunPod system RAM scales with the GPU tier,
 # so the lever is the tier itself.
 #
-# TABICL_GPU takes a comma-separated preference list of *substrings*, matched against the
-# names the API reports (e.g. "H100 SXM", "A100 PCIe", "H200 NVL").
+# TABICL_GPU takes a comma-separated preference list. Entries may be either the API's `id`
+# ("NVIDIA H100 80GB HBM3") or the friendlier `displayName` ("H100 SXM"); `resolve_gpus`
+# below maps the latter onto the former before any pod is created.
+#
+# BOTH NAMES EXIST AND ONLY ONE WORKS, WHICH HAS NOW COST TWO LAUNCHES. `create_pod` takes
+# `gpu_type_id`, so a displayName raises "No GPU found with the specified ID" -- once per
+# cloud, per image, per entry, so the failure arrives as a dozen identical lines that read
+# like a capacity shortage rather than a typo. Accepting both and resolving up front is the
+# fix; the alternative is remembering which of two plausible strings the API wanted.
 _gpu = os.environ.get("TABICL_GPU", "").strip()
 if _gpu:
     GPU_PREFERENCE = [g.strip() for g in _gpu.split(",") if g.strip()]
@@ -238,6 +245,33 @@ def _check_images() -> None:
             )
 
 
+def resolve_gpus(names: list[str]) -> list[str]:
+    """Map each requested GPU onto an API `id`, accepting an id or a displayName.
+
+    Raises before anything is provisioned if a name matches neither, because the
+    alternative -- letting `create_pod` reject it -- is indistinguishable from the tier
+    being sold out, and a sold-out tier is something you wait for rather than fix.
+    """
+    catalog = runpod.get_gpus()
+    ids = {g["id"] for g in catalog}
+    by_display = {g.get("displayName"): g["id"] for g in catalog if g.get("displayName")}
+    out, unknown = [], []
+    for n in names:
+        if n in ids:
+            out.append(n)
+        elif n in by_display:
+            print(f"  GPU {n!r} -> id {by_display[n]!r}", flush=True)
+            out.append(by_display[n])
+        else:
+            unknown.append(n)
+    if unknown:
+        raise SystemExit(
+            f"TABICL_GPU names not in the RunPod catalog: {unknown}. Use an id or a "
+            f"displayName, e.g. 'NVIDIA H100 80GB HBM3' or 'H100 SXM'. Available: "
+            + ", ".join(f"{g['id']!r} ({g.get('displayName')})" for g in catalog))
+    return out
+
+
 def create(offset: int = 0):
     if not PUBKEY.exists():
         raise SystemExit(f"no public key at {PUBKEY}")
@@ -248,8 +282,8 @@ def create(offset: int = 0):
     # loop retries the same preference in the same order and keeps landing on the machine
     # it just rejected: one run spent attempts 7 through 12 on a single host, terminating
     # each pod on arrival because the address was already blacklisted.
-    gpus = GPU_PREFERENCE[offset % len(GPU_PREFERENCE):] + \
-        GPU_PREFERENCE[:offset % len(GPU_PREFERENCE)]
+    resolved = resolve_gpus(GPU_PREFERENCE)
+    gpus = resolved[offset % len(resolved):] + resolved[:offset % len(resolved)]
     for cloud in CLOUDS:
       for gpu in gpus:
         for image in IMAGES:
