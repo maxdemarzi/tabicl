@@ -53,6 +53,19 @@ import pandas as pd
 warnings.filterwarnings("ignore")
 
 # The twelve this project already measures, so a scan can show only what is new.
+# Datasets whose task tables RelBench publishes ready-made. Everything else falls back to
+# "Making Database object from scratch" inside `get_task` -- deriving the task by building the
+# whole database in memory -- which is not a download problem but a MEMORY one: the scan died
+# rc=137, SIGKILL from the kernel, part-way through the dbinfer-* family. rel-mimic is a
+# separate wall again ("Verifying MIMIC-IV access"), being credentialed data.
+#
+# So "task tables only" is not a property of how this scan asks; it is a property of WHICH
+# datasets are asked. These are the published benchmark families, which is also where the
+# question lives -- new tasks on databases whose twelve we already measure are the ones that
+# cost a round rather than a port.
+PUBLISHED = ("rel-amazon", "rel-arxiv", "rel-avito", "rel-event", "rel-f1", "rel-hm",
+             "rel-stack", "rel-trial")
+
 KNOWN = {
     ("rel-f1", "driver-top3"), ("rel-f1", "driver-dnf"),
     ("rel-trial", "study-outcome"),
@@ -103,7 +116,7 @@ def main() -> int:
     from relbench.datasets import get_dataset_names
     from relbench.tasks import get_task, get_task_names
 
-    names = args.datasets or sorted(get_dataset_names())
+    names = args.datasets or [n for n in sorted(get_dataset_names()) if n in PUBLISHED]
     if not args.include_tgb:
         skipped = [n for n in names if n.startswith(("tgbl", "tgbn", "thgl"))]
         names = [n for n in names if n not in skipped]
