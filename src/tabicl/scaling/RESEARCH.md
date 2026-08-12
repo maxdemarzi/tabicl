@@ -767,7 +767,7 @@ The remaining held-out tasks were still worth running, for a different reason th
 started: not to rescue the criterion, which is dead, but because a task where tuning loses
 more than 2.17 would flip the A/B verdict outright.
 
-#### The held-out set, four of five measured (2026-08-11)
+#### The held-out set, COMPLETE (2026-08-12)
 
 8 replicates each, paired by seed, tuned = the calibrated protocol and base = the fixed `base`
 arm of the same task on the same pod. All four ran at `--max-columns 2 --offload cpu
@@ -778,24 +778,34 @@ arm of the same task on the same pod. All four ran at `--max-columns 2 --offload
 | rel-hm/user-churn | — | — | **−0.76** | 0.16 | −4.90 | 1/8 | **refutes** |
 | rel-amazon/user-churn | 67.11 | 66.96 | +0.15 | 0.13 | 1.14 | 5/8 | null |
 | rel-stack/user-engagement | 89.70 | 89.57 | +0.12 | 0.14 | 0.90 | 5/8 | null |
+| rel-stack/user-badge | 83.95 | 83.81 | +0.14 | 0.18 | 0.79 | 5/8 | null |
 | rel-amazon/item-churn | 80.16 | 80.12 | +0.04 | 0.08 | 0.48 | 4/8 | null |
-| rel-stack/user-badge | — | — | *not measured* | | | | — |
 
-**The three nulls are the outcome the pre-registration warned would confirm little**, and two
+**The four nulls are the outcome the pre-registration warned would confirm little**, and two
 of them are the very tasks named there: item-churn and user-badge have most arms excluded by
 their own leak controls, so selection has almost nothing to choose between. user-engagement was
 not on that list and still came in at +0.12 — inside the floor, five seeds of eight positive.
 
-**Nothing here rescues the criterion and nothing here flips A/B.** The criterion was already
-dead on rel-hm; three nulls neither revive nor further damage it. For the A/B decision what
-mattered was whether any held-out task loses more than rel-trial's +2.17, and the worst of the
-four is rel-hm at −0.76 — which merely ties user-clicks rather than beating it. **Always-tune's
-worst case is unchanged at 0.79, never-tune's at 2.17.**
+**Nothing here rescues the criterion, and the set is now complete without flipping A/B.** The
+criterion was already dead on rel-hm; four nulls neither revive nor further damage it. For the
+A/B decision what mattered was whether any held-out task loses more than rel-trial's +2.17, and
+the worst of the five is rel-hm at −0.76 — which merely ties user-clicks rather than beating it.
+**Always-tune's worst case is unchanged at 0.79, never-tune's at 2.17, and there are no cells
+left to measure.** The decision is now made on a complete twelve-task picture rather than a
+seven-task one.
 
-rel-stack/user-badge is the one cell still open, and the only remaining candidate to flip the
-verdict. Its lane died on a driver deadline with one seed of eight complete; it is the slowest
-cell in the suite at ~31 min per seed of selection sweep, so budget eight hours rather than
-five.
+**user-badge separates the two axes selection sweeps, which no other cell has.** Validation
+chose `base` on **all eight seeds** — so the arm axis contributed exactly nothing, as the leak
+controls predicted, and the entire +0.14 came from the *context size*: 2,500 rows on four
+seeds, 5,000 on two, 10,000 on two, against the fixed arm's 10,000. A smaller context beat a
+larger one and validation could see it. That is worth holding next to the recency thread, where
+validation could *not* see a small context on rel-event — the difference is that rel-event's
+win needs the small context to also be *recent*, and here plain size was enough.
+
+**And the number it replaces was honest.** The standing table carried 83.80 from four salvaged
+replicates; eight clean ones put the fixed arm at 83.81 and the calibrated protocol at 83.95.
+Six earlier attempts on this task died `rc=137` during aggregation; what cleared it was an
+H200's memory tier, not any flag.
 
 **A side result worth keeping:** rel-stack/user-engagement now has a clean 8-replicate
 **89.70 ± 0.18** (base arm 89.57), replacing the salvaged 89.33 that STATUS carried from a

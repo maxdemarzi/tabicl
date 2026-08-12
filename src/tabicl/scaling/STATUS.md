@@ -290,8 +290,8 @@ bounds the aggregation.
 | rel-stack / user-engagement | 89.70 ⁶ | 7/10 | RelGNN 90.75 | −1.05 |
 | rel-amazon / user-churn | 66.94 | 9/10 | RelGNN 70.99 | −4.05 |
 | rel-amazon / item-churn | 80.20 ⁵ | 8/10 | GraphSAGE 82.81 | −2.61 |
-| rel-stack / user-badge | 83.80 ⁴⁵ | 8/10 | RelGNN 88.98 | −5.18 |
-| **average** | **75.13** | **9/10** | RelGNN 78.06 | −2.93 |
+| rel-stack / user-badge | 83.95 ⁷ | 8/10 | RelGNN 88.98 | −5.03 |
+| **average** | **75.15** | **9/10** | RelGNN 78.06 | −2.91 |
 
 ⁴ Four replicates, salvaged from a run the 3-hour ceiling killed before its summary.
 ⁵ `--train-pool 300000` and a dropped array column; `base`-only, five of seven arms
@@ -299,6 +299,9 @@ excluded by its own leak controls.
 ⁶ Re-measured 2026-08-11 on an H100 SXM: **8 clean replicates, 89.70 ± 0.18**, replacing the
 four salvaged ones that averaged 89.33. It clears RDBLearn's 89.39 and takes the task from
 rank 8 to 7. The tier is what changed, not the method.
+⁷ Re-measured 2026-08-12 on an H200: **8 clean replicates, 83.95 ± 0.40**, replacing the four
+salvaged ones that averaged 83.80 — a salvage the clean run vindicates, since the fixed `base`
+arm scores 83.81. Rank unchanged at 8/10. **This was the last unmeasured cell in the suite.**
 
 **Median rank 8 of 10.** Ranks 3, 4, 6, **7**, 7, 8, 8, 8, 8, 9, 9, 9. An earlier version of this section
 showed three comparison methods and reported gaps against them; RelGT beats us on three of

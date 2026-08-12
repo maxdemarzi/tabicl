@@ -36,10 +36,10 @@ field is shown here, with our rank in it.
 | rel-f1 / driver-dnf ◆ | **69.66** | 9/10 | 69.95 ⁿ⁶ | — | 75.29 | **75.87** | 72.62 | 57.70 | 70.87 | 71.72 | 71.72 | 72.03 | 70.74 |
 | rel-hm / user-churn ◆◆ | **66.75** | 9/10 | — | — | **70.93** | 69.27 | 69.88 | 60.20 | 68.05 | 70.11 | 70.06 | 67.81 | 70.55 |
 | rel-stack / user-engagement ◆◆ | **89.70** ⁶ | 7/10 | — | — | **90.75** | 90.53 | 90.59 | 77.50 | 89.39 | 90.23 | 90.59 | 88.69 | 90.66 |
-| rel-stack / user-badge ◆◆ | **83.80** ⁴⁵ | 8/10 | — | — | **88.98** | 86.32 | 88.86 | 73.50 | 85.26 | 82.81 | 85.98 | 85.40 | 85.17 |
+| rel-stack / user-badge ◆◆ | **83.95** ⁷ | 8/10 | — | — | **88.98** | 86.32 | 88.86 | 73.50 | 85.26 | 82.81 | 85.98 | 85.40 | 85.17 |
 | rel-amazon / user-churn ◆◆ | **66.94** | 9/10 | — | — | **70.99** | 70.39 | 70.42 | 62.30 | 67.57 | 69.74 | 69.35 | 67.71 | 70.27 |
 | rel-amazon / item-churn ◆◆ | **80.20** ⁵ | 8/10 | — | — | 82.64 | 82.55 | **82.81** | 69.00 | 82.07 | 82.18 | 82.46 | 80.18 | **82.81** |
-| **average** ¶ | **75.13** | **9/10** | — | — | **78.06** | 76.65 | 75.83 | 66.29 | 75.55 | 75.31 | 76.01 | 75.91 | 76.91 |
+| **average** ¶ | **75.15** | **9/10** | — | — | **78.06** | 76.65 | 75.83 | 66.29 | 75.55 | 75.31 | 76.01 | 75.91 | 76.91 |
 
 **Median rank 8 of 10.** Ranks: 3, 4, 6, **7**, 7, 8, 8, 8, 8, 9, 9, 9. Bold in the comparison columns marks
 the best method for that task; **we never hold it.**
@@ -52,7 +52,18 @@ That validates every field figure transcribed here, and makes this row directly 
 to the published one — which the seven-, eight-, ten- and eleven-task versions never were. Its rank cell is our
 standing among the ten methods' averages, on the same rule as every other row.
 
-⁴⁵ Four salvaged replicates *and* `--train-pool 300000`. Six attempts: `--row-chunk auto`,
+⁷ **Re-measured 2026-08-12: 83.95 ± 0.40 over 8 replicates** (range 83.22-84.61), on an
+H200 at `--max-columns 2 --offload cpu --train-pool 300000`. It replaces the four salvaged
+replicates that averaged 83.80, and the salvage was honest -- the fixed `base` arm on eight
+clean seeds scores **83.81**. Rank is unchanged at 8/10. Validation chose `base` on all eight
+seeds, so the arm axis contributed nothing here and the calibrated protocol's +0.14 over the
+fixed arm came entirely from picking a SMALLER context (2,500 on four seeds against the fixed
+10,000). The memory tier is what made a complete run possible; nothing about the method
+changed.
+
+⁴⁵ Superseded for this task by ⁷ above, and kept because the rest of the note still applies
+to how it was first obtained. Four salvaged replicates *and* `--train-pool 300000`. Six
+attempts: `--row-chunk auto`,
 `--offload cpu`, `--offload disk` and `--train-pool` all bound the model or the fit pool and
 all died `rc=137`. What unblocked it was dropping child rows whose key is never queried,
 which bounds the **aggregation** — exact, since those rows live only in blocks never indexed.
