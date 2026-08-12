@@ -7,9 +7,17 @@ it. The obvious next move is to run some, and the obvious next mistake is to pic
 that list and launch: the registry mixes entity classification with regression, multiclass and
 recommendation, and this harness scores binary ROC-AUC and nothing else.
 
-So this scans first. It reads TASK TABLES ONLY -- never `get_dataset`, which downloads a whole
-database -- so classifying forty tasks costs megabytes and a couple of minutes rather than
-tens of gigabytes. For each task it reports what a decision actually needs:
+So this scans first. It never calls `get_dataset`, which would pull a whole database per
+entry. That is necessary and it was not sufficient: **task tables are not small.** The first
+version classified a task AFTER `get_task(download=True)`, so every recommendation and
+temporal-graph task was downloaded in full and then discarded for being the wrong shape -- one
+of them 5.12 GB, against a 30 GB container disk and 33 datasets still to go. Classification
+now happens BEFORE any download: `get_task(download=False)` is enough to read the class, and
+only entity tasks are fetched. The `tgb*` families are skipped by default for the same reason,
+since they are link-prediction benchmarks on multi-gigabyte temporal graphs and none of them
+can be scored by this harness.
+
+For each task it reports what a decision actually needs:
 
   * **task class**, since `RecommendationTask` is a different scoring problem, not a flag;
   * **target dtype and cardinality**, which is what separates binary from regression and
@@ -85,12 +93,23 @@ def main() -> int:
     ap.add_argument("datasets", nargs="*", help="default: every dataset in the registry")
     ap.add_argument("--exclude-known", action="store_true",
                     help="skip the twelve tasks already in the standing table")
+    ap.add_argument("--include-tgb", action="store_true",
+                    help="scan the tgbl-/tgbn-/thgl- families too. Off by default: they are "
+                         "link-prediction benchmarks on multi-gigabyte temporal graphs, "
+                         "scored by MRR rather than ROC-AUC, so this harness cannot run one "
+                         "and fetching them is pure download cost.")
     args = ap.parse_args()
 
     from relbench.datasets import get_dataset_names
     from relbench.tasks import get_task, get_task_names
 
     names = args.datasets or sorted(get_dataset_names())
+    if not args.include_tgb:
+        skipped = [n for n in names if n.startswith(("tgbl", "tgbn", "thgl"))]
+        names = [n for n in names if n not in skipped]
+        if skipped:
+            print(f"skipping {len(skipped)} temporal-graph datasets (MRR link prediction, not "
+                  f"runnable here): {', '.join(skipped)}", flush=True)
     print(f"scanning {len(names)} dataset(s); task tables only, no databases\n", flush=True)
     rows, failures = [], []
     for ds in names:
@@ -103,12 +122,17 @@ def main() -> int:
             if args.exclude_known and (ds, tn) in KNOWN:
                 continue
             try:
-                t = get_task(ds, tn, download=True)
+                # CLASSIFY BEFORE DOWNLOADING. `download=True` here fetched the task tables of
+                # every recommendation and temporal-graph task in the registry only to discard
+                # them one line later -- 5.12 GB for a single entry, against a 30 GB container
+                # disk. The class is available from the object without any table.
+                t = get_task(ds, tn, download=False)
                 cls = type(t).__name__
                 if "Recommendation" in cls or "Link" in cls:
                     rows.append((ds, tn, cls, "RECOMMENDATION", "ranked, not ROC-AUC",
                                  "", "", ""))
                     continue
+                t = get_task(ds, tn, download=True)
                 tr = t.get_table("train", mask_input_cols=False).df
                 va = t.get_table("val", mask_input_cols=False).df
                 te = t.get_table("test", mask_input_cols=True).df
