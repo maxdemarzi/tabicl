@@ -1,7 +1,14 @@
 [project]
-name = "tabicl"
+# Distribution name only. The import package is still `tabicl` (see tool.hatch.build
+# targets below), because all 46 modules under tabicl.scaling import it by that name and
+# renaming the import would fork the codebase away from upstream for no benefit.
+#
+# Consequence worth knowing: `tabicl-rel` and upstream `tabicl` both own the `tabicl/`
+# directory, so they cannot be installed into the same environment. That is intended --
+# this is a replacement for upstream, not an addition to it.
+name = "tabicl-rel"
 dynamic = ["version"]
-description = "TabICL: A state-of-the-art tabular foundation model"
+description = "TabICL + relational scaling work: a fork of soda-inria/tabicl with the tabicl.scaling research campaign"
 readme = "README.md"
 authors = [
     { name = "Jingang Qu" },
@@ -74,8 +81,24 @@ test = [
     "pandas",
     "pytest",
 ]
+scaling = [
+    # Everything `tabicl.scaling` imports that the core package does not already pull in.
+    # Without this the modules install but do not import, which is how the work shipped
+    # for 398 commits: present in the wheel, unusable on arrival.
+    "pandas>=2.1.2",
+    "relbench>=2.1",  # the benchmark the scaling campaign is measured on
+    "tabpfn>=8.0",  # baseline compared against in eval_track_record
+    "tabfm>=1.0",  # requires Python >= 3.11, unlike the rest of this package
+    "lightgbm>=4.0",  # gradient-boosting baseline
+    "featuretools>=1.31",  # DFS baseline in eval_dfs_baseline
+    "runpod>=1.12",  # only used by the remote round driver in cycle.py
+    # pybind11 is NOT here: it is a build-time requirement of the optional C++ join
+    # accelerator, installed on demand by `python -m tabicl.scaling.build_native`.
+]
 all = [
-    "tabicl[doc,forecast,shap,pretrain,finetune,test]",
+    # Must name the distribution, not the import package: `tabicl[...]` here would resolve
+    # to upstream's PyPI release and install a second copy of the `tabicl/` directory.
+    "tabicl-rel[doc,forecast,shap,pretrain,finetune,test,scaling]",
 ]
 
 [build-system]
@@ -87,9 +110,27 @@ path = "src/tabicl/__about__.py"
 
 [tool.hatch.build.targets.sdist]
 only-include = ["src/tabicl", "figures", "LICENSE", "README.md"]
+exclude = [
+    # Locally-built artifacts of the optional C++ join accelerator. These are gitignored,
+    # but hatchling builds from the working tree, so an in-place build would otherwise put
+    # a platform-specific binary into an otherwise portable artifact.
+    "src/tabicl/scaling/_wcoj_native*.pyd",
+    "src/tabicl/scaling/_wcoj_native*.so",
+    "src/tabicl/scaling/build/",
+    "src/tabicl/scaling/_build_tmp/",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tabicl"]
+# `_wcoj_native.cpp` is deliberately NOT excluded: shipping the source is what lets a Linux
+# user run `python -m tabicl.scaling.build_native` to get the compiled join, while the
+# wheel itself stays py3-none-any and installs anywhere.
+exclude = [
+    "src/tabicl/scaling/_wcoj_native*.pyd",
+    "src/tabicl/scaling/_wcoj_native*.so",
+    "src/tabicl/scaling/build/",
+    "src/tabicl/scaling/_build_tmp/",
+]
 
 [tool.hatch.envs.default]
 installer = "uv"
