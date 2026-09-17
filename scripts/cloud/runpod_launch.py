@@ -76,19 +76,37 @@ IMAGE_FALLBACK = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
 #          H100 leads here even though an A100 is cheaper -- stages 2 and 3 of the recipe
 #          pass --use_flash_attn3 and fall back silently without it.
 #
-# Prices read from the API 2026-09-17, community on-demand; they drift, re-read with `gpus`.
+# THE IDS BELOW ARE THE REST-CREATE SPELLING, WHICH IS NOT THE ONE `gpus` PRINTS.
+# The GraphQL catalogue exposes a short `displayName` ("RTX PRO 6000") alongside the real id
+# ("NVIDIA RTX PRO 6000 Blackwell Server Edition"), and POST /v1/pods validates gpuTypeIds
+# against its own enum that accepts only the latter. Worse, `stock()` on a wrong id returns
+# the same empty result as a genuinely unavailable card -- so a typo reads as "out of stock"
+# and sends you hunting for capacity that was there all along. That happened here: a plan for
+# "NVIDIA RTX PRO 6000" reported NONE AVAILABLE while the real id was High stock.
+# The authority is GET /v1/openapi.json; `gpus --ids` prints the reconciliation.
+#
+# Prices and stock read 2026-09-17; they drift, re-read with `gpus`.
 LANES = {
     "sweep": {
-        "gpu": "NVIDIA RTX PRO 6000",                   # 96 GB, sm_120, ~$1.69/hr
-        "alternates": ("NVIDIA H100 NVL",               # 94 GB, sm_90,  ~$2.59/hr
-                       "NVIDIA H100 PCIe",              # 80 GB, sm_90,  ~$1.99/hr
-                       "NVIDIA A100 80GB PCIe"),        # 80 GB, sm_80,  ~$1.19/hr
+        # 96 GB, sm_120. Secure was High stock at $2.09 when this was written.
+        "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+        "alternates": (
+            "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",   # 96 GB, ~$1.69 community
+            "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition",  # 96 GB, ~$1.64, ~300W
+            "NVIDIA H100 NVL",                                     # 94 GB, sm_90, ~$2.59
+            "NVIDIA A100 80GB PCIe",                               # 80 GB, sm_80, ~$1.59
+        ),
     },
     "train": {
-        "gpu": "NVIDIA H100 PCIe",                      # 80 GB, sm_90,  ~$1.99/hr, FA3
-        "alternates": ("NVIDIA A100 80GB PCIe",         # 80 GB, sm_80,  ~$1.19/hr, no FA3
-                       "NVIDIA L40S",                   # 48 GB, sm_89,  ~$0.79/hr, no FA3
-                       "NVIDIA RTX A6000"),             # 48 GB, sm_86,  ~$0.33/hr, no FA3
+        # H100 PCIe had no stock in either cloud; NVL is the same sm_90 generation and does
+        # have it, which is what matters for FlashAttention-3.
+        "gpu": "NVIDIA H100 NVL",                                  # 94 GB, sm_90, FA3
+        "alternates": (
+            "NVIDIA H100 PCIe",                                    # 80 GB, sm_90, FA3
+            "NVIDIA A100 80GB PCIe",                               # 80 GB, sm_80, no FA3
+            "NVIDIA L40S",                                         # 48 GB, sm_89, no FA3
+            "NVIDIA RTX A6000",                                    # 48 GB, sm_86, no FA3
+        ),
     },
 }
 
@@ -142,11 +160,32 @@ def create_body(args: argparse.Namespace) -> dict:
         "volumeMountPath": MOUNT,
         "ports": ["22/tcp"],
         "supportPublicIp": True,
-        # The synthetic prior is generated on CPU (--prior_device cpu, --n_jobs N), so a
-        # training pod is CPU-bound on data generation long before it is GPU-bound.
-        # Undersizing vCPU here starves the GPU and quietly halves steps/sec.
-        "minRAMPerGPU": 32,
-        "minVCPUPerGPU": 16,
+        # WITHOUT THIS THE POD EXITS ABOUT FIVE SECONDS AFTER IT STARTS.
+        # Created with no templateId, RunPod runs the image's own CMD, which for
+        # runpod/pytorch returns immediately -- the pod goes to EXITED ("Exited by Runpod")
+        # with an empty publicIp and no error field anywhere in the record, so it reads as
+        # "still starting" until you notice `desiredStatus`. It keeps billing disk meanwhile.
+        #
+        # `sshd -D` is the whole start command on purpose: it blocks, so it doubles as the
+        # process that keeps the container alive, and there is no `sleep infinity` that can
+        # hold a pod up while ssh is quietly dead. A first attempt did exactly that -- pod
+        # RUNNING, port mapped, every connection refused -- because overriding the CMD also
+        # skipped the image's own setup, and sshd will not start without host keys.
+        # `ssh-keygen -A` is that missing step; `/run/sshd` is the privilege-separation dir
+        # sshd refuses to start without.
+        "dockerStartCmd": [
+            "/bin/bash", "-c",
+            "set -x; "
+            "mkdir -p /root/.ssh /run/sshd && "
+            "echo \"$PUBLIC_KEY\" >> /root/.ssh/authorized_keys && "
+            "chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys && "
+            "(command -v sshd >/dev/null 2>&1 || "
+            "  (apt-get update -qq && apt-get install -y -qq openssh-server)) && "
+            "ssh-keygen -A && "
+            "sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' "
+            "  /etc/ssh/sshd_config && "
+            "/usr/sbin/sshd -D -e",
+        ],
         "env": {},
     }
     key = _ssh_pubkey()
@@ -398,6 +437,19 @@ def cmd_payload(args: argparse.Namespace) -> int:
         cwd=REPO, check=True, capture_output=True).stdout
     names = sorted({n.decode() for n in listing.split(b"\0") if n})
 
+    def _normalize(info: tarfile.TarInfo) -> tarfile.TarInfo:
+        """Own every entry as root:root.
+
+        A tarball written on macOS carries this machine's uid/gid (501/50). Extracting it as
+        root on the pod makes tar try to honour that, fail with 'Cannot change ownership',
+        and exit non-zero AFTER writing the files -- so `tar xzf ... && next_step` silently
+        stops at a step that actually succeeded. Normalizing here is better than remembering
+        --no-same-owner at the far end.
+        """
+        info.uid = info.gid = 0
+        info.uname = info.gname = "root"
+        return info
+
     with tarfile.open(out, "w:gz") as tar:
         for name in names:
             source = REPO / name
@@ -407,9 +459,22 @@ def cmd_payload(args: argparse.Namespace) -> int:
                 blob = source.read_bytes().replace(b"\r\n", b"\n")
                 info = tarfile.TarInfo(f"tabicl/{name}")
                 info.size, info.mode = len(blob), 0o755
-                tar.addfile(info, io.BytesIO(blob))
+                tar.addfile(_normalize(info), io.BytesIO(blob))
             else:
-                tar.add(source, arcname=f"tabicl/{name}")
+                tar.add(source, arcname=f"tabicl/{name}", filter=_normalize)
+
+        # Stamp the commit into the payload. The pod gets a tarball, not a clone, so
+        # `git rev-parse` there returns nothing and every ledger row comes back with
+        # commit_sha=None -- provenance the harness declares mandatory, silently absent
+        # exactly where the expensive measurements are taken. Caught on the first real sweep.
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO,
+                              capture_output=True, text=True, check=False).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain"], cwd=REPO,
+                               capture_output=True, text=True, check=False).stdout.strip()
+        blob = json.dumps({"commit_sha": head or None, "dirty": bool(dirty)}, indent=2).encode()
+        info = tarfile.TarInfo("tabicl/.payload_provenance.json")
+        info.size, info.mode = len(blob), 0o644
+        tar.addfile(_normalize(info), io.BytesIO(blob))
 
     missing = [r for r in REQUIRED if r not in names]
     if missing:
@@ -511,6 +576,9 @@ def main() -> int:
 
     gpus = subparsers.add_parser("gpus")
     gpus.add_argument("--min-vram", type=int, default=0)
+    gpus.add_argument("--ids", action="store_true",
+                      help="print the real gpuTypeId next to the displayName; the id is what "
+                           "`create` validates against and they are NOT the same string")
     gpus.set_defaults(func=cmd_gpus)
 
     plan = subparsers.add_parser("plan")

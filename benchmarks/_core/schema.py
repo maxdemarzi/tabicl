@@ -115,6 +115,20 @@ def capture_provenance(device: Optional[str] = None) -> Provenance:
     status = _git("status", "--porcelain")
     branch = _git("rev-parse", "--abbrev-ref", "HEAD")
 
+    # On a pod the checkout is an unpacked tarball with no .git, so every git call above
+    # returns None and the rows carry no commit -- which is precisely where the expensive
+    # measurements happen. `runpod_launch.py payload` writes the stamp below for that case.
+    dirty = None if status is None else bool(status)
+    if commit is None:
+        stamp = REPO_ROOT / ".payload_provenance.json"
+        try:
+            if stamp.is_file():
+                payload = json.loads(stamp.read_text())
+                commit = payload.get("commit_sha")
+                dirty = payload.get("dirty", dirty)
+        except Exception:
+            pass
+
     tabicl_version = tabicl_path = None
     tabicl_is_local = None
     try:
@@ -149,7 +163,7 @@ def capture_provenance(device: Optional[str] = None) -> Provenance:
 
     return Provenance(
         commit_sha=commit,
-        dirty=None if status is None else bool(status),
+        dirty=dirty,
         branch=branch,
         tabicl_version=tabicl_version,
         tabicl_path=tabicl_path,

@@ -103,7 +103,15 @@ The blocking constraint on this entire project: **Stage 1 is 500K steps at batch
 is three stages × two checkpoints = six runs. Per-ablation full-scale training is not viable.
 
 Define a proxy: **Stage-1 architecture and hyperparameters, reduced step count**, on the frozen
-BM-04 prior stream. Start at ~5% of Stage 1 (25K steps) and adjust once wall-clock is known.
+BM-04 prior stream.
+
+> **MEASURED 2026-09-17 — the 25K-step figure below was a guess and it is too expensive.**
+> Throughput on an RTX PRO 6000 is **3.0 s/it**, and micro-batching does not move it (3.11 s/it
+> at `micro_batch_size=4` against 3.00 at 16). That makes one 25K-step run **20.8 hours and
+> $43.50**, the four-run calibration **$174**, and Phase 2 at three seeds **~$520** — against
+> an account balance of $98. **Start the calibration at 5,000 steps** ($8.70/run, $35 for all
+> four) and raise it only if sign agreement fails. See `benchmarks/RESULTS.md` for the cost
+> table and the two bugs this run surfaced.
 
 Then **validate the proxy before trusting it**, which is the step most likely to be skipped and
 most expensive to skip. Take two or three architecture choices whose full-scale effect is already

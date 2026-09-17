@@ -21,7 +21,8 @@ pre-existing and unrelated, verified by stashing the whole branch.
 |---|---|---|
 | ✅ | BM-01 | Harness complete: ledger, provenance, aggregation, resumable runner, datasets |
 | ✅ | TP-12 | Datetime + text preprocessing, shipped |
-| 🔧 | BM-02, BM-03, BM-06 | Implemented; **need a GPU to run** |
+| ✅ | BM-02, BM-03, BM-05 | **Baseline measured** on RTX PRO 6000 (the report's own card), $1.32 |
+| ⚠️ | BM-06 | Throughput measured; **the plan as priced is not affordable** — see RESULTS.md |
 | 🔧 | TP-01, TP-04 | Code + tests done, **off by default, untrained** |
 | 🔧 | TP-14 | Scoring rules done; needs the benchmark's dataset list |
 | ⛔ | TP-02, 03, 05, 06, 07, 08, 09, 10, 11 | Not started |
@@ -31,7 +32,7 @@ pre-existing and unrelated, verified by stashing the whole branch.
 training run or a benchmark sweep. The GPU lane is ready — see [docs/RUNPOD.md](docs/RUNPOD.md)
 and the queue in [scripts/ablations/README.md](scripts/ablations/README.md).
 
-**Nothing has been measured yet.** `TP-01` and `TP-04` are implemented because they are cheap
+**The baseline is measured; no *ablation* has been.** `TP-01` and `TP-04` are implemented because they are cheap
 to implement and their *structure* is testable without training; neither has been shown to
 help this model. The first thing to run is not an ablation, it is `BM-06`'s sign-agreement
 check — a proxy that cannot reproduce the sign of a known full-scale effect would make every
@@ -273,6 +274,26 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       this. Either fix the dtype handling in
       [`forecast/_ts_dataframe.py`](src/tabicl/forecast/_ts_dataframe.py) or cap the pin.
       Relevant to **TP-15**, which runs the forecaster.
+
+- [ ] **BM-07** Two datasets in the frozen `REAL_SMALL` suite are saturated:
+      `banknote-authentication` and `steel-plates-fault` both score 1.0000 accuracy with
+      log-loss ~0. A dataset every method solves perfectly cannot separate methods and only
+      dilutes a mean rank. Keep them — the suite is frozen and dropping datasets after seeing
+      results is how benchmarks become flattering — but exclude or separately report them in
+      ablation readouts. Add the split to `benchmarks/report.py`.
+
+- [ ] **PERF-01** **Single-row cached prediction is ~1.5x slower than 100-row.**
+      Measured across every row count from 1k to 256k (0.0419 s vs 0.0278 s at 1k). Per-call
+      overhead dominates the online path, so the marginal cost of 99 extra rows is negative.
+      This is the exact case the report highlights for cached inference and the shape of real
+      online serving. Profile it: being flat in row count, it is likely Python-side setup,
+      preprocessing, or the ensembling loop rather than attention.
+      **Not from the report — found by running BM-02.**
+
+- [ ] **DOC-01** `micro_batch_size` cannot exceed `batch_size_per_gp` when
+      `seq_len_per_gp=True`; every dataset in a micro-batch must share a training size. Raising
+      one alone fails at step 0 with `ValueError: All datasets in the micro batch must have the
+      same training size`. Add it to the training CLI help.
 
 ## 2. Deliberately not pursued
 

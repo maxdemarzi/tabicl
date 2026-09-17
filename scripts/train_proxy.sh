@@ -25,7 +25,18 @@ EXTRA="${EXTRA:-}"                 # the ablation's flags, and nothing else
 SEED="${SEED:-42}"
 NUM_GPUS="${NUM_GPUS:-1}"
 CKPT_DIR="${CKPT_DIR:-/workspace/ckpt/proxy-${ABLATION}-seed${SEED}}"
-NJOBS="${NJOBS:-$(python -c 'import os; print(max(os.cpu_count()-2, 4))')}"
+# Cap the prior workers and pin BLAS to one thread each.
+#
+# `os.cpu_count() - 2` looks reasonable and is catastrophic on a big pod: 128 vCPUs gave 126
+# prior-generation workers, each starting its own 64-thread OpenBLAS pool, and the run died
+# with "pthread_create failed ... Resource temporarily unavailable" before step 1. The
+# traceback surfaces as a DataLoader worker being killed, which points nowhere near the real
+# cause. Prior generation is many small independent jobs -- it wants processes, not threads,
+# and nested BLAS parallelism inside each one is pure contention.
+NJOBS="${NJOBS:-$(python -c 'import os; print(min(max((os.cpu_count() or 8) - 2, 4), 32))')}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 
 echo "=== proxy run: ${ABLATION} (seed ${SEED}, ${STEPS} steps, ${NUM_GPUS} gpu) ==="
 echo "extra flags : ${EXTRA:-<none>}"

@@ -148,3 +148,4 @@ src_private/
 benchmarks/_results/
 benchmarks/_cache/
 pod_doctor.json
+.payload_provenance.json
