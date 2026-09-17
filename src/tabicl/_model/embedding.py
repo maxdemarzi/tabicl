@@ -8,7 +8,7 @@ import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
 
-from .layers import SkippableLinear, OneHotAndLinear
+from .layers import SkippableLinear, OneHotAndLinear, FourierValueEncoder
 from .encoders import SetTransformer
 from .kv_cache import KVCache
 from .inference import InferenceManager
@@ -71,6 +71,17 @@ class ColEmbedding(nn.Module):
         If True, computes embeddings as: :math:`\\text{features} \\times W + b`.
         If False, directly uses the set transformer output as embeddings.
 
+    fourier_value : bool, default=False
+        If True, encode cell values with a bank of learned Fourier features
+        (:class:`~tabicl._model.layers.FourierValueEncoder`) instead of a single linear
+        projection. Resolves small differences between values that a linear map collapses,
+        which matters most for ordinal-encoded categoricals with high cardinality. Defaults
+        to False so that existing checkpoints load unchanged. TP-01 in ``TODO.md``.
+
+    fourier_freqs : int, default=32
+        Number of learned frequencies per group position. Ignored when ``fourier_value``
+        is False.
+
     feature_group : bool or Literal["same", "valid"], default=False
         Feature grouping mode:
         - False: No grouping
@@ -131,6 +142,8 @@ class ColEmbedding(nn.Module):
         norm_first: bool = True,
         bias_free_ln: bool = False,
         affine: bool = True,
+        fourier_value: bool = False,
+        fourier_freqs: int = 32,
         feature_group: Union[bool, Literal["same", "valid"]] = False,
         feature_group_size: int = 3,
         target_aware: bool = False,
@@ -150,7 +163,12 @@ class ColEmbedding(nn.Module):
         self.max_classes = max_classes
         self.affine = affine
         self.mixed_radix_ensemble = mixed_radix_ensemble
-        self.in_linear = SkippableLinear(feature_group_size if feature_group else 1, embed_dim)
+        in_dim = feature_group_size if feature_group else 1
+        self.fourier_value = fourier_value
+        if fourier_value:
+            self.in_linear = FourierValueEncoder(in_dim, embed_dim, n_freqs=fourier_freqs)
+        else:
+            self.in_linear = SkippableLinear(in_dim, embed_dim)
 
         self.tf_col = SetTransformer(
             num_blocks=num_blocks,

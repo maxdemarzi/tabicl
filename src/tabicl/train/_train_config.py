@@ -278,6 +278,11 @@ def build_parser():
         type=str2bool,
         help="Whether to use SSMax in the column embedder (the variant is chosen by --ssmax_type)",
     )
+    parser.add_argument("--col_fourier_value", default=False, type=str2bool,
+                        help="TP-01: encode cell values with learned Fourier features instead of a "
+                             "single linear projection (helps ordinal-encoded high-cardinality columns)")
+    parser.add_argument("--col_fourier_freqs", type=int, default=32,
+                        help="Number of learned frequencies per group position for --col_fourier_value")
     parser.add_argument("--freeze_col", default=False, type=str2bool, help="Whether to freeze the column embedder")
 
     # Row Interaction Config

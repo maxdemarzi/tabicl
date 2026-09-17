@@ -206,6 +206,8 @@ class Trainer:
             "col_nhead": self.config.col_nhead,
             "col_num_inds": self.config.col_num_inds,
             "col_affine": self.config.col_affine,
+            "col_fourier_value": self.config.col_fourier_value,
+            "col_fourier_freqs": self.config.col_fourier_freqs,
             "col_feature_group": self.config.col_feature_group,
             "col_feature_group_size": self.config.col_feature_group_size,
             "col_target_aware": self.config.col_target_aware,

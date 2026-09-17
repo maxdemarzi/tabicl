@@ -53,20 +53,28 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       *Done:* `_core/schema.py` (provenance + append-only ledger), `_core/aggregate.py`
       (mean rank, win rate, Bradley-Terry Elo, bootstrap CIs), `_core/runner.py` (resumable,
       failures recorded not dropped), 39 passing tests pinning the arithmetic to closed-form cases.
-      *Remaining:* `_core/datasets.py` (fetch + checksum-pinned cache), needed by BM-03.
+      `_core/datasets.py` (OpenML fetch via scikit-learn, on-disk cache, content digests,
+      deterministic folds) with the 10-dataset `REAL_SMALL` suite validated and frozen;
+      `suites/real_small.py` (BM-03) and `report.py` (leaderboard CLI). **BM-01 complete.**
 - [~] **BM-02** Inference speed + memory microbenchmark. *Implemented* as
       `benchmarks/suites/speed.py`; smoke-run on CPU, full sweep still needs a CUDA box. Mirror report Figure 7: forward time vs
       training rows (1k → 1M) at 100 columns / 1,024 test rows; cached-predict time for 1 and
       100 test rows; **and KV-cache bytes**, which their figure omits but which is the quantity
       TP-05 exists to hold flat.
-- [ ] **BM-03** Real-data accuracy suite. TabArena-lite or a TALENT subset — enough datasets to
+- [~] **BM-03** Real-data accuracy suite. *Implemented* as `benchmarks/suites/real_small.py`
+      over the frozen 10-dataset `REAL_SMALL` list; scores accuracy, balanced accuracy,
+      ROC-AUC and log-loss. Smoke-run on CPU; baseline sweep needs a GPU. Original note: TabArena-lite or a TALENT subset — enough datasets to
       rank changes, small enough to run per-ablation.
 - [ ] **BM-04** Held-out synthetic eval set, frozen. Pre-generate with `python -m tabicl.prior`
       (`SavePriorDataset`) so every ablation sees an identical stream and differs only in the
       model change. This is the fast inner-loop signal.
 - [ ] **BM-05** Record baseline numbers for the current released v2 clf + reg checkpoints across
       BM-02/03/04 into `benchmarks/RESULTS.md`. **Nothing else starts before this lands.**
-- [ ] **BM-06** Establish and validate the proxy-scale training recipe (see
+- [~] **BM-06** Establish and validate the proxy-scale training recipe.
+      *Done:* [`scripts/train_proxy.sh`](scripts/train_proxy.sh) (Stage-1 architecture at
+      ~5% of the steps, every non-ablated knob pinned) and the sign-agreement queue in
+      [`scripts/ablations/README.md`](scripts/ablations/README.md).
+      *Remaining:* running it — needs a GPU. Original note: (see
       [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) §"Ablation protocol"). Full Stage 1 is
       500K steps on 4 GPUs — not viable per-ablation.
 
@@ -95,16 +103,30 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       at skrub's `TableVectorizer`. TabPFN-3.5's *open-source* release now handles both natively.
       Given STRABLE has us at 1383, a built-in TF-IDF path for string columns is the cheapest
       move on that board. Inference-side only.
-- [ ] **TP-16** Re-measure and correct the README speed claims.
-      [`README.md:25`](README.md#L25) says "10x faster than TabPFN-2.5" — two generations stale.
-      The same claim is repeated at [`README.md:350`](README.md#L350); fix both.
-      TabPFN-3.5 is ~2x slower than TabPFN-3 on large training sets, but TabPFN-3.5-Fast is 3x
-      *faster* than TabPFN-3 while still ~150 Elo ahead of it on TabArena. Depends on BM-02.
+- [ ] **TP-16** Add a current-generation speed comparison to the README.
+      **Rescoped after looking closely.** [`README.md:25`](README.md#L25) and
+      [`README.md:350`](README.md#L350) say "10x faster than TabPFN-2.5" — which is not
+      *wrong*, since it names the model it compares against. It is merely two generations
+      old. So this is not a text fix to be applied now; it needs a measurement against
+      TabPFN-3.5 and TabPFN-3.5-Fast, and editing the claim before having one would just
+      swap a dated number for an invented one. Blocked on BM-02 on a GPU, plus installing
+      `tabpfn` to measure against. For reference: TabPFN-3.5 is ~2x slower than TabPFN-3 on
+      large training sets, while TabPFN-3.5-Fast is 3x *faster* and still ~150 Elo ahead of
+      TabPFN-3 on TabArena.
 
 ### Phase 2 — Cell encoding + prior (one retrain)
 
-- [ ] **TP-01** Fourier value encoding.
-      [`embedding.py:153`](src/tabicl/_model/embedding.py#L153) is
+- [~] **TP-01** Fourier value encoding. *Code done, untrained.*
+      `FourierValueEncoder` in [`_model/layers.py`](src/tabicl/_model/layers.py), wired through
+      `ColEmbedding` -> `TabICL` -> the training CLI as `--col_fourier_value` /
+      `--col_fourier_freqs`, **off by default** so existing checkpoints load unchanged.
+      14 tests; the load-bearing ones assert the structural property rather than a benchmark
+      number — under a linear projection the embeddings of a value sequence are provably
+      collinear (rank 1 centred), so adjacent ordinal codes *must* be near-identical whatever
+      the weights; Fourier features break that. Costs ~8K parameters against 27.5M.
+      *Remaining:* the ablation itself — queued in
+      [`scripts/ablations/README.md`](scripts/ablations/README.md), needs a GPU.
+      Previously, [`embedding.py:153`](src/tabicl/_model/embedding.py#L153) was
       `SkippableLinear(feature_group_size if feature_group else 1, embed_dim)` — a bare linear
       projection of the scaled scalar. TabPFN replaced exactly this with a bank of `F=32` learned
       frequencies → `[sin, cos]` → summed over the `G` group positions → `Linear(2F → E)`.
@@ -190,6 +212,17 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       20k features with more estimators. Our recipe trains at `--max_features 100`.
 
 ---
+
+## 1b. Found along the way (not from the report)
+
+- [ ] **BUG-01** `tests/test_forecast.py::test_time_series_forecasting` fails on
+      **pandas 3.0.3**: `pd.testing.assert_index_equal` reports a dtype mismatch on the
+      predicted timestamp index. Confirmed pre-existing — it fails identically with the whole
+      TabPFN-3.5 branch stashed, so it is not a regression from this work. `pyproject.toml`
+      pins only `pandas>=2.1.2` for the forecast extra, so a fresh install on pandas 3.x hits
+      this. Either fix the dtype handling in
+      [`forecast/_ts_dataframe.py`](src/tabicl/forecast/_ts_dataframe.py) or cap the pin.
+      Relevant to **TP-15**, which runs the forecaster.
 
 ## 2. Deliberately not pursued
 

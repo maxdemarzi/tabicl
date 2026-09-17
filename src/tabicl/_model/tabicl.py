@@ -60,6 +60,14 @@ class TabICL(nn.Module):
         If True, computes embeddings as: :math:`\\text{features} \\times W + b`.
         If False, directly uses the set transformer output as embeddings.
 
+    col_fourier_value : bool, default=False
+        Encode cell values with learned Fourier features rather than a single linear
+        projection. See :class:`~tabicl._model.layers.FourierValueEncoder`. Off by default so
+        existing checkpoints load unchanged. TP-01 in ``TODO.md``.
+
+    col_fourier_freqs : int, default=32
+        Frequencies per group position when ``col_fourier_value`` is True.
+
     col_feature_group : bool or Literal["same", "valid"], default="same"
         Feature grouping mode:
         - False: No grouping
@@ -159,6 +167,8 @@ class TabICL(nn.Module):
         col_nhead: int = 8,
         col_num_inds: int = 128,
         col_affine: bool = False,
+        col_fourier_value: bool = False,
+        col_fourier_freqs: int = 32,
         col_feature_group: Union[bool, Literal["same", "valid"]] = "same",
         col_feature_group_size: int = 3,
         col_target_aware: bool = True,
@@ -248,6 +258,8 @@ class TabICL(nn.Module):
             norm_first=norm_first,
             bias_free_ln=bias_free_ln,
             affine=col_affine,
+            fourier_value=col_fourier_value,
+            fourier_freqs=col_fourier_freqs,
             feature_group=col_feature_group,
             feature_group_size=col_feature_group_size,
             target_aware=col_target_aware,

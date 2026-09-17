@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 from typing import Optional, Tuple, Union
 
 import torch
@@ -133,6 +134,107 @@ class SkippableLinear(nn.Linear):
         skip_mask = (src == self.skip_value).all(dim=-1)
         if skip_mask.any():
             out[skip_mask] = self.skip_value
+
+        return out
+
+
+class FourierValueEncoder(nn.Module):
+    """Encode scalar cell values with a bank of learned Fourier features.
+
+    A drop-in replacement for :class:`SkippableLinear` in the cell encoder, including its
+    ``skip_value`` contract. Where the linear layer maps each value through a single weight
+    per group position, this multiplies it by ``n_freqs`` learned frequencies and passes the
+    result through sine and cosine, so nearby values receive distinguishable codes instead of
+    proportional ones.
+
+    That matters most for **ordinal-encoded categorical columns with high cardinality**,
+    where codes 731 and 732 are unrelated categories that a linear projection maps to nearly
+    identical embeddings. The TabPFN-3.5 report adopts this from TabFM and reports it as one
+    of the changes behind their high-cardinality gains (their §3.1).
+
+    Shapes follow the report's Figure 8: values of shape ``(..., T, G)`` are expanded to
+    ``(..., T, G, F)``, concatenated as sine and cosine into ``(..., T, G, 2F)``, **summed
+    over the G group positions**, and projected ``2F -> E``.
+
+    Parameters
+    ----------
+    in_features : int
+        Number of group positions ``G`` per cell.
+
+    out_features : int
+        Embedding width ``E``.
+
+    n_freqs : int, default=32
+        Frequencies per group position (``F`` in the report).
+
+    bias : bool, default=True
+        Bias on the output projection.
+
+    skip_value : float, default=-100.0
+        Sentinel marking padded features. Cells whose every group position equals this are
+        passed through as the sentinel, exactly as :class:`SkippableLinear` does.
+
+    learnable_freqs : bool, default=True
+        Whether the frequency bank is trained. False pins it at initialization, which makes
+        the encoder a fixed positional-style basis and is useful as an ablation control.
+
+    min_freq, max_freq : float, default 1.0 and 32.0
+        Range of the log-spaced initialization. Inputs reaching this layer are standard
+        scaled, so they mostly occupy roughly ``+-3``; frequencies up to 32 give a shortest
+        wavelength near 0.2 in those units, which is what resolves adjacent ordinal codes.
+        Initialization is the detail most likely to decide whether this helps, so it is
+        exposed rather than buried.
+
+    Attributes
+    ----------
+    freqs : nn.Parameter
+        Frequency bank of shape ``(G, F)``.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        n_freqs: int = 32,
+        bias: bool = True,
+        skip_value: float = -100.0,
+        learnable_freqs: bool = True,
+        min_freq: float = 1.0,
+        max_freq: float = 32.0,
+    ):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.n_freqs = n_freqs
+        self.skip_value = skip_value
+
+        # Log-spaced, shared across group positions at init but free to diverge if learnable.
+        base = torch.logspace(math.log10(min_freq), math.log10(max_freq), n_freqs)
+        freqs = base.unsqueeze(0).repeat(in_features, 1).contiguous()
+        self.freqs = nn.Parameter(freqs, requires_grad=learnable_freqs)
+
+        self.proj = nn.Linear(2 * n_freqs, out_features, bias=bias)
+
+    def forward(self, src: Tensor) -> Tensor:
+        """
+        Parameters
+        ----------
+        src : Tensor
+            Values of shape ``(..., T, G)``.
+
+        Returns
+        -------
+        Tensor
+            Embeddings of shape ``(..., T, E)``, with skipped cells set to ``skip_value``.
+        """
+
+        angles = src.unsqueeze(-1) * self.freqs  # (..., T, G, F)
+        feats = torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)  # (..., T, G, 2F)
+        out = self.proj(feats.sum(dim=-2))  # sum over G, then (..., T, 2F) -> (..., T, E)
+
+        skip_mask = (src == self.skip_value).all(dim=-1)
+        if skip_mask.any():
+            out = out.masked_fill(skip_mask.unsqueeze(-1), self.skip_value)
 
         return out
 
