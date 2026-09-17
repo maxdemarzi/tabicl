@@ -55,6 +55,224 @@ class RecursionLimitManager:
         return False  # Return False to propagate exceptions
 
 
+class DatetimeEncoder(TransformerMixin, BaseEstimator):
+    """Expand datetime columns into numeric calendar and cyclical features.
+
+    Without this, datetime columns are dropped outright: neither of the selectors in
+    :class:`TransformToNumerical` matches ``datetime64``, so the information leaves the
+    pipeline silently. Anything here is therefore an improvement on the previous behaviour
+    rather than a change to it.
+
+    Each column yields, at most:
+
+    - ``epoch`` -- seconds since the Unix epoch. The trend term, and the one that matters for
+      temporally split data, where the test block sits later in time than training.
+    - ``year``, ``month``, ``day``, ``dayofweek``, ``hour`` -- ordinal calendar parts.
+    - ``sin``/``cos`` pairs for month, day-of-week and hour. December and January are adjacent
+      on a circle and 11 apart as integers; the ordinal form alone makes that wrap look like a
+      cliff, which a tree can learn around but a smooth encoder cannot.
+
+    Features that are constant across the training data are dropped at ``fit`` time, so a
+    date-only column does not contribute four dead hour features.
+
+    Parameters
+    ----------
+    drop_constant : bool, default=True
+        Drop features with no variance in the training data.
+
+    Attributes
+    ----------
+    feature_names_ : list of str
+        Names of the emitted features, in order.
+
+    kept_ : list of tuple
+        ``(column, part)`` pairs retained after the constant-feature filter.
+    """
+
+    #: (part name, period) -- period None means no cyclical pair is emitted.
+    PARTS = (("year", None), ("month", 12), ("day", None), ("dayofweek", 7), ("hour", 24))
+
+    def __init__(self, drop_constant: bool = True):
+        self.drop_constant = drop_constant
+
+    @staticmethod
+    def _parts(series):
+        """Raw parts for one datetime column as ``{name: float ndarray}``."""
+
+        import pandas as pd
+
+        dt = pd.to_datetime(series, errors="coerce")
+        out = {"epoch": dt.astype("int64").to_numpy(dtype=np.float64) / 1e9}
+        # NaT becomes a large negative sentinel under astype(int64); make it missing instead
+        # so the downstream imputer handles it like any other gap.
+        out["epoch"][pd.isna(dt).to_numpy()] = np.nan
+        accessor = dt.dt
+        for name, _period in DatetimeEncoder.PARTS:
+            out[name] = getattr(accessor, name).to_numpy(dtype=np.float64)
+        return out
+
+    def _expand(self, X):
+        """All features for all datetime columns, as ``{(col, part): array}``."""
+
+        features = {}
+        for col in self.columns_:
+            parts = self._parts(X[col])
+            features[(col, "epoch")] = parts["epoch"]
+            for name, period in self.PARTS:
+                values = parts[name]
+                features[(col, name)] = values
+                if period is not None:
+                    angle = 2.0 * np.pi * values / period
+                    features[(col, name + "_sin")] = np.sin(angle)
+                    features[(col, name + "_cos")] = np.cos(angle)
+        return features
+
+    def fit(self, X, y=None):
+        self.columns_ = list(make_column_selector(dtype_include=["datetime", "datetimetz"])(X))
+        if not self.columns_:
+            self.kept_, self.feature_names_ = [], []
+            return self
+
+        features = self._expand(X)
+        kept = []
+        for key, values in features.items():
+            if self.drop_constant:
+                finite = values[np.isfinite(values)]
+                if finite.size == 0 or np.all(finite == finite[0]):
+                    continue
+            kept.append(key)
+        self.kept_ = kept
+        self.feature_names_ = [f"{col}__{part}" for col, part in kept]
+        return self
+
+    def transform(self, X):
+        if not self.kept_:
+            return np.empty((len(X), 0), dtype=np.float64)
+        features = self._expand(X)
+        return np.column_stack([features[key] for key in self.kept_])
+
+    def get_feature_names_out(self, input_features=None):
+        return np.asarray(self.feature_names_, dtype=object)
+
+
+class TextEncoder(TransformerMixin, BaseEstimator):
+    """TF-IDF over character n-grams, reduced by truncated SVD.
+
+    For free-text and high-cardinality string columns, where ordinal encoding assigns an
+    arbitrary integer per distinct value and discards every shared substring -- so
+    ``"Acme Corp"`` and ``"Acme Corporation"`` become unrelated codes.
+
+    Character n-grams rather than words, because the columns this targets are names,
+    addresses, product codes and job titles, where the signal is often sub-word and the
+    vocabulary has a long tail of near-duplicates. The TabPFN-3.5 report notes TF-IDF was the
+    strongest string encoding on STRABLE, which is convenient -- it needs no extra dependency.
+
+    Parameters
+    ----------
+    n_components : int, default=30
+        SVD components per text column. 30 matches the reduction MulTaBench applies to its
+        frozen embeddings, which keeps our numbers comparable to that benchmark.
+
+    max_features : int, default=5000
+        TF-IDF vocabulary cap per column.
+
+    ngram_range : tuple, default=(2, 4)
+        Character n-gram range.
+
+    random_state : int, optional
+        Seed for the randomized SVD.
+
+    Attributes
+    ----------
+    feature_names_ : list of str
+    """
+
+    def __init__(self, n_components: int = 30, max_features: int = 5000,
+                 ngram_range: tuple = (2, 4), random_state: Optional[int] = None):
+        self.n_components = n_components
+        self.max_features = max_features
+        self.ngram_range = ngram_range
+        self.random_state = random_state
+
+    @staticmethod
+    def _as_text(series):
+        return series.astype(str).fillna("").to_numpy()
+
+    def fit(self, X, y=None):
+        from sklearn.decomposition import TruncatedSVD
+        from sklearn.feature_extraction.text import TfidfVectorizer
+
+        # ColumnTransformer has already routed only the text columns here, so every column
+        # of this slice is in scope. Taking them from the frame rather than from a
+        # constructor argument keeps the two from drifting apart.
+        self.columns_ = list(X.columns)
+        self.pipelines_ = {}
+        self.feature_names_ = []
+
+        for col in self.columns_:
+            text = self._as_text(X[col])
+            vectorizer = TfidfVectorizer(
+                analyzer="char_wb",
+                ngram_range=self.ngram_range,
+                max_features=self.max_features,
+                min_df=1,
+            )
+            matrix = vectorizer.fit_transform(text)
+            # SVD cannot produce more components than the matrix has columns, and asking for
+            # exactly as many as there are features raises rather than truncating.
+            n_components = int(min(self.n_components, max(matrix.shape[1] - 1, 1)))
+            svd = TruncatedSVD(n_components=n_components, random_state=self.random_state)
+            svd.fit(matrix)
+            self.pipelines_[col] = (vectorizer, svd)
+            self.feature_names_ += [f"{col}__tfidf{i}" for i in range(n_components)]
+        return self
+
+    def transform(self, X):
+        if not self.columns_:
+            return np.empty((len(X), 0), dtype=np.float64)
+        blocks = []
+        for col in self.columns_:
+            vectorizer, svd = self.pipelines_[col]
+            blocks.append(svd.transform(vectorizer.transform(self._as_text(X[col]))))
+        return np.hstack(blocks).astype(np.float64)
+
+    def get_feature_names_out(self, input_features=None):
+        return np.asarray(self.feature_names_, dtype=object)
+
+
+def classify_string_columns(X, columns, max_cardinality: int = 40, min_mean_length: float = 12.0):
+    """Split string columns into categorical and text.
+
+    A column is treated as text when it has more distinct values than ``max_cardinality``
+    *and* its values are long enough on average to carry sub-word signal. The second
+    condition matters: a high-cardinality identifier column is not free text, and running
+    character n-grams over it produces 30 noise features where an ordinal code would have
+    been honest about carrying no information.
+
+    Returns
+    -------
+    (categorical, text) : tuple of list of str
+    """
+
+    categorical, text = [], []
+    for col in columns:
+        series = X[col]
+        try:
+            cardinality = int(series.nunique())
+        except TypeError:
+            categorical.append(col)
+            continue
+        if cardinality <= max_cardinality:
+            categorical.append(col)
+            continue
+        try:
+            mean_length = float(series.astype(str).str.len().mean())
+        except Exception:
+            mean_length = 0.0
+        (text if mean_length >= min_mean_length else categorical).append(col)
+    return categorical, text
+
+
 class TransformToNumerical(TransformerMixin, BaseEstimator):
     """Transform non-numerical data in a DataFrame to numerical representations.
 
@@ -77,8 +295,23 @@ class TransformToNumerical(TransformerMixin, BaseEstimator):
           through unchanged.
     """
 
-    def __init__(self, verbose: bool = False):
+    def __init__(
+        self,
+        verbose: bool = False,
+        datetime_features: bool = True,
+        text_encoding: str = "ordinal",
+        text_max_cardinality: int = 40,
+        text_min_mean_length: float = 12.0,
+        text_n_components: int = 30,
+        random_state: Optional[int] = None,
+    ):
         self.verbose = verbose
+        self.datetime_features = datetime_features
+        self.text_encoding = text_encoding
+        self.text_max_cardinality = text_max_cardinality
+        self.text_min_mean_length = text_min_mean_length
+        self.text_n_components = text_n_components
+        self.random_state = random_state
 
     def fit(self, X, y=None):
         """Configure transformers for different column types in the input data.
@@ -128,25 +361,50 @@ class TransformToNumerical(TransformerMixin, BaseEstimator):
 
         else:
 
-            cat_cols = make_column_selector(dtype_include=["string", "object", "category", "boolean"])(X)
-            cat_pos = [X.columns.get_loc(col) for col in cat_cols]
+            str_cols = make_column_selector(dtype_include=["string", "object", "category", "boolean"])(X)
 
-            high_cardinality_cols = [col for col in cat_cols if X[col].nunique() > 40]
-            if high_cardinality_cols:
-                import warnings
-
-                warnings.warn(
-                    f"The following categorical columns have a cardinality above 40: {high_cardinality_cols}. "
-                    "High-cardinality columns might benefit from a better encoding than ordinal encoding, "
-                    "e.g. Skrub's TableVectorizer for strings."
+            if self.text_encoding == "tfidf":
+                cat_cols, text_cols = classify_string_columns(
+                    X, str_cols,
+                    max_cardinality=self.text_max_cardinality,
+                    min_mean_length=self.text_min_mean_length,
                 )
+            else:
+                cat_cols, text_cols = list(str_cols), []
+                high_cardinality_cols = [col for col in cat_cols if X[col].nunique() > self.text_max_cardinality]
+                if high_cardinality_cols:
+                    import warnings
 
+                    warnings.warn(
+                        f"The following categorical columns have a cardinality above "
+                        f"{self.text_max_cardinality}: {high_cardinality_cols}. "
+                        "High-cardinality columns might benefit from a better encoding than ordinal encoding: "
+                        "pass text_encoding='tfidf', or use Skrub's TableVectorizer for strings."
+                    )
+
+            cat_pos = [X.columns.get_loc(col) for col in cat_cols]
             numeric_cols = make_column_selector(dtype_include="number")(X)
             numeric_pos = [X.columns.get_loc(col) for col in numeric_cols]
 
-            self.tfm_ = ColumnTransformer(
-                transformers=[("categorical", cat_tfm, cat_pos), ("continuous", num_tfm, numeric_pos)]
-            )
+            transformers = [("categorical", cat_tfm, cat_pos), ("continuous", num_tfm, numeric_pos)]
+
+            # Datetime columns match neither selector above, so without this branch they are
+            # dropped outright rather than encoded badly -- see DatetimeEncoder.
+            if self.datetime_features:
+                dt_cols = make_column_selector(dtype_include=["datetime", "datetimetz"])(X)
+                if dt_cols:
+                    dt_pos = [X.columns.get_loc(col) for col in dt_cols]
+                    transformers.append(("datetime", DatetimeEncoder(), dt_pos))
+
+            if text_cols:
+                text_pos = [X.columns.get_loc(col) for col in text_cols]
+                transformers.append((
+                    "text",
+                    TextEncoder(n_components=self.text_n_components, random_state=self.random_state),
+                    text_pos,
+                ))
+
+            self.tfm_ = ColumnTransformer(transformers=transformers)
 
         self.tfm_.fit(X)
 

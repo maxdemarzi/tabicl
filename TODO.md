@@ -83,7 +83,14 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       TabPFN ran their *general* checkpoint through the TabPFN-TS harness with no time-series
       finetuning and beat their own TS-specific checkpoint at 2.4x the speed — worth testing
       whether the same holds for us.
-- [ ] **TP-12** Native date + text preprocessing. Today
+- [x] **TP-12** Native date + text preprocessing. *Done:* `DatetimeEncoder` (epoch trend,
+      calendar parts, cyclical sin/cos pairs, constant-feature dropping), `TextEncoder`
+      (char n-gram TF-IDF + SVD), and `classify_string_columns` in
+      [`_sklearn/preprocessing.py`](src/tabicl/_sklearn/preprocessing.py); 20 new tests,
+      109 sklearn-compliance tests still green. **Datetime is on by default** because those
+      columns were previously dropped outright, so there is no prior behaviour to preserve.
+      **Text stays ordinal by default** (`text_encoding="tfidf"` opts in) — flipping it is a
+      behaviour change and is gated on the STRABLE measurement, per the plan. Previously:
       [`preprocessing.py:141`](src/tabicl/_sklearn/preprocessing.py#L141) raises and points users
       at skrub's `TableVectorizer`. TabPFN-3.5's *open-source* release now handles both natively.
       Given STRABLE has us at 1383, a built-in TF-IDF path for string columns is the cheapest
