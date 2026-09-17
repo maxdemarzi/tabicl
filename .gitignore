@@ -146,3 +146,5 @@ CLAUDE.md
 ckpts/
 src_private/
 benchmarks/_results/
+benchmarks/_cache/
+pod_doctor.json
