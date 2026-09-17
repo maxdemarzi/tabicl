@@ -80,7 +80,18 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
 
 ### Phase 1 — No retrain required
 
-- [ ] **TP-14** Investigate the ScoringBench result. `TabICL v2 (finetuned)` ranks 12.05 vs
+- [~] **TP-14** Investigate the ScoringBench result. *Scoring machinery done:*
+      [`benchmarks/_core/scoring.py`](benchmarks/_core/scoring.py) — CRPS from predictive
+      quantiles via the pinball identity (with the factor of 2 and trapezoidal integration
+      over levels, both of which are commonly dropped and both of which make the number
+      non-comparable to a published one), plus Winkler interval score and coverage. 13 tests
+      pinning it to closed forms, including CRPS of a standard normal and the exact size of
+      the tail-truncation bias — a scoring bug here would be indistinguishable from the model
+      weakness we are trying to rule out.
+      *Remaining:* the benchmark's own 101-dataset list, which is not published in the report
+      and must come from the ScoringBench repo; and `TabICLRegressor` returns quantiles via
+      `predict(output_type="quantiles", alphas=...)`, which still needs wiring into a suite.
+      Then the sequence below. Original note: `TabICL v2 (finetuned)` ranks 12.05 vs
       TabPFN-3 at 7.64 — behind a model we beat elsewhere. We have native quantile regression
       ([`_model/quantile_dist.py`](src/tabicl/_model/quantile_dist.py)), so this looks anomalous.
       Reproduce under their harness (101 OpenML regression datasets, subsampled to 3,000 rows,
