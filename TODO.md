@@ -12,6 +12,33 @@ Item IDs are stable. Reference them in branches, commits and PRs (`TP-01: add Fo
 
 ---
 
+## Status as of 2026-09-17
+
+Branch `tabpfn-3.5-transfer`, 7 commits. **222 tests pass**; one failure (`BUG-01`) is
+pre-existing and unrelated, verified by stashing the whole branch.
+
+| | Item | State |
+|---|---|---|
+| ✅ | BM-01 | Harness complete: ledger, provenance, aggregation, resumable runner, datasets |
+| ✅ | TP-12 | Datetime + text preprocessing, shipped |
+| 🔧 | BM-02, BM-03, BM-06 | Implemented; **need a GPU to run** |
+| 🔧 | TP-01, TP-04 | Code + tests done, **off by default, untrained** |
+| 🔧 | TP-14 | Scoring rules done; needs the benchmark's dataset list |
+| ⛔ | TP-02, 03, 05, 06, 07, 08, 09, 10, 11 | Not started |
+| ⛔ | TP-15, TP-16 | Blocked on measurement |
+
+**Everything that can be decided on a laptop has been.** Every remaining question is a
+training run or a benchmark sweep. The GPU lane is ready — see [docs/RUNPOD.md](docs/RUNPOD.md)
+and the queue in [scripts/ablations/README.md](scripts/ablations/README.md).
+
+**Nothing has been measured yet.** `TP-01` and `TP-04` are implemented because they are cheap
+to implement and their *structure* is testable without training; neither has been shown to
+help this model. The first thing to run is not an ablation, it is `BM-06`'s sign-agreement
+check — a proxy that cannot reproduce the sign of a known full-scale effect would make every
+ablation after it meaningless.
+
+---
+
 ## 0. Why this matters: where TabICLv2 currently stands
 
 TabPFN-3.5 benchmarks explicitly against TabICLv2 on seven benchmarks and wins all seven.
