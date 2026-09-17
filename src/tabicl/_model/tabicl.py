@@ -60,6 +60,13 @@ class TabICL(nn.Module):
         If True, computes embeddings as: :math:`\\text{features} \\times W + b`.
         If False, directly uses the set transformer output as embeddings.
 
+    qk_norm : bool, default=False
+        TP-04: apply RMSNorm to queries and keys in every attention block. The TabPFN-3.5
+        report adds this specifically to keep training stable at the larger model width and
+        across joint classification/regression training, so it is a prerequisite for TP-06
+        and TP-07 rather than a standalone win. Off by default; existing checkpoints load
+        unchanged.
+
     col_fourier_value : bool, default=False
         Encode cell values with learned Fourier features rather than a single linear
         projection. See :class:`~tabicl._model.layers.FourierValueEncoder`. Off by default so
@@ -167,6 +174,7 @@ class TabICL(nn.Module):
         col_nhead: int = 8,
         col_num_inds: int = 128,
         col_affine: bool = False,
+        qk_norm: bool = False,
         col_fourier_value: bool = False,
         col_fourier_freqs: int = 32,
         col_feature_group: Union[bool, Literal["same", "valid"]] = "same",
@@ -267,6 +275,7 @@ class TabICL(nn.Module):
             reserve_cls_tokens=row_num_cls,
             ssmax=col_ssmax,
             zero_init=zero_init,
+            qk_norm=qk_norm,
             recompute=recompute,
         )
 
@@ -283,6 +292,7 @@ class TabICL(nn.Module):
             norm_first=norm_first,
             bias_free_ln=bias_free_ln,
             zero_init=zero_init,
+            qk_norm=qk_norm,
             recompute=recompute,
         )
 
@@ -299,6 +309,7 @@ class TabICL(nn.Module):
             bias_free_ln=bias_free_ln,
             ssmax=icl_ssmax,
             zero_init=zero_init,
+            qk_norm=qk_norm,
             recompute=recompute,
         )
 

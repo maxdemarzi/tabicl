@@ -130,6 +130,25 @@ def sdpa_with_flattened_batch(
     return out.view(q_shape)
 
 
+class RMSNorm(nn.Module):
+    """Root-mean-square normalization over the last dimension.
+
+    Written out rather than using ``nn.RMSNorm`` because that arrived in torch 2.4 and
+    ``pyproject.toml`` supports ``torch>=2.2``.
+    """
+
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: Tensor) -> Tensor:
+        dtype = x.dtype
+        x = x.float()
+        x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return (x * self.weight.float()).to(dtype)
+
+
 def multi_head_attention_forward(
     query: Tensor,
     num_heads: int,
@@ -146,6 +165,7 @@ def multi_head_attention_forward(
     attn_mask: Optional[Tensor] = None,
     rope: Optional[RotaryEmbedding] = None,
     ssmax_layer: Optional[nn.Module] = None,
+    qk_norm: Optional[nn.Module] = None,
     need_kv: bool = False,
 ) -> Union[Tensor, Tuple[Tensor, Tensor, Tensor]]:
     """Multi-head attention with support for rotary position embeddings.
@@ -244,6 +264,13 @@ def multi_head_attention_forward(
         q = q.view(*batch_shape, tgt_len, num_heads, head_dim).transpose(-3, -2)
         k = k.view(*batch_shape, src_len, num_heads, head_dim).transpose(-3, -2)
         v = v.view(*batch_shape, src_len, num_heads, head_dim).transpose(-3, -2)
+        # QK-norm (TP-04), on the per-head vectors and BEFORE RoPE. Ordering matters for the
+        # cache: `k` is returned below and stored, so it is cached normed-and-roped -- exactly
+        # what a freshly computed key would be. The cached branch therefore must NOT re-apply
+        # this to `k`, only to `q`.
+        if qk_norm is not None:
+            q = qk_norm(q)
+            k = qk_norm(k)
         if rope is not None:
             q = rope.rotate_queries_or_keys(q)
             k = rope.rotate_queries_or_keys(k)
@@ -255,6 +282,9 @@ def multi_head_attention_forward(
         q_proj_bias = in_proj_bias[:embed_dim] if in_proj_bias is not None else None
         q = F.linear(query, q_proj_weight, q_proj_bias)
         q = q.view(*batch_shape, tgt_len, num_heads, head_dim).transpose(-3, -2)
+        # `k` from the cache was already normed before it was stored -- see above.
+        if qk_norm is not None:
+            q = qk_norm(q)
         if rope is not None:
             q = rope.rotate_queries_or_keys(q)
 

@@ -278,6 +278,9 @@ def build_parser():
         type=str2bool,
         help="Whether to use SSMax in the column embedder (the variant is chosen by --ssmax_type)",
     )
+    parser.add_argument("--qk_norm", default=False, type=str2bool,
+                        help="TP-04: RMSNorm on queries and keys in every attention block "
+                             "(stability prerequisite for wider models and joint multitask training)")
     parser.add_argument("--col_fourier_value", default=False, type=str2bool,
                         help="TP-01: encode cell values with learned Fourier features instead of a "
                              "single linear projection (helps ordinal-encoded high-cardinality columns)")

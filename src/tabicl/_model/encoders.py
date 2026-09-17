@@ -88,6 +88,7 @@ class Encoder(nn.Module):
         rope_interleaved: bool = True,
         ssmax: Union[bool, str] = False,
         zero_init: bool = True,
+        qk_norm: bool = False,
         recompute: bool = False,
     ):
         super().__init__()
@@ -106,6 +107,7 @@ class Encoder(nn.Module):
                     norm_first=norm_first,
                     bias_free_ln=bias_free_ln,
                     ssmax=ssmax,
+                    qk_norm=qk_norm,
                     zero_init=zero_init,
                 )
                 for _ in range(num_blocks)
@@ -283,6 +285,7 @@ class SetTransformer(nn.Module):
         bias_free_ln: bool = False,
         ssmax: Union[bool, str] = False,
         zero_init: bool = True,
+        qk_norm: bool = False,
         recompute: bool = False,
     ):
         super().__init__()
@@ -302,6 +305,7 @@ class SetTransformer(nn.Module):
                     norm_first=norm_first,
                     bias_free_ln=bias_free_ln,
                     ssmax=ssmax,
+                    qk_norm=qk_norm,
                     zero_init=zero_init,
                 )
                 for _ in range(num_blocks)

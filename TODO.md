@@ -159,7 +159,19 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
 
 ### Phase 3 — Capacity (order matters: TP-04 → TP-05 → TP-06)
 
-- [ ] **TP-04** QK-norm and extra normalization. `grep` finds no QK-norm anywhere in
+- [~] **TP-04** QK-norm and extra normalization. *Partially done, untrained.*
+      `RMSNorm` in [`_model/attention.py`](src/tabicl/_model/attention.py) (written out rather
+      than `nn.RMSNorm`, which needs torch>=2.4 while `pyproject.toml` allows >=2.2), applied
+      to per-head queries and keys and threaded through every block up to `--qk_norm`.
+      Off by default. 21 norm modules when on (6 column + 3 row + 12 ICL), ~900 parameters.
+      **The care went into the cache boundary:** `k` is normed *before* RoPE and before being
+      returned for caching, so a stored key and a fresh one are normalized identically and the
+      cached path normalizes `q` only. Tests assert cached/uncached equivalence with a
+      non-unit learned weight, which is what would expose a double application — that failure
+      would stay finite and plausible while being wrong, on a feature the README advertises.
+      *Remaining:* the report also adds a LayerNorm after the input encoding and an RMSNorm
+      before the task head; neither is implemented yet. And the ablation, which needs a GPU.
+      Original note: `grep` found no QK-norm anywhere in
       [`_model/`](src/tabicl/_model/). TabPFN added RMSNorm on queries and keys in attention
       blocks, LayerNorm after the input encoding, and RMSNorm before the task head — specifically
       to stabilize the wider model *and* joint multitask training. Prerequisite for TP-06 and TP-07.

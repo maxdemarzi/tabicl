@@ -77,6 +77,7 @@ class RowInteraction(nn.Module):
         norm_first: bool = True,
         bias_free_ln: bool = False,
         zero_init: bool = True,
+        qk_norm: bool = False,
         recompute: bool = False,
     ) -> None:
         super().__init__()
@@ -99,6 +100,7 @@ class RowInteraction(nn.Module):
             rope_base=rope_base,
             rope_interleaved=rope_interleaved,
             zero_init=zero_init,
+            qk_norm=qk_norm,
             recompute=recompute,
         )
 

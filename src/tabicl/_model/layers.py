@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 from .ssmax import create_ssmax_layer
 from .rope import RotaryEmbedding
-from .attention import multi_head_attention_forward
+from .attention import multi_head_attention_forward, RMSNorm
 from .kv_cache import KVCacheEntry, KVCache
 
 
@@ -283,11 +283,15 @@ class MultiheadAttention(nn.MultiheadAttention):
            https://arxiv.org/abs/2501.19399
     """
 
-    def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.0, ssmax: Union[bool, str] = False):
+    def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.0,
+                 ssmax: Union[bool, str] = False, qk_norm: bool = False):
         super().__init__(embed_dim, num_heads, dropout, batch_first=True)
         if isinstance(ssmax, bool):
             ssmax = "qassmax-mlp-elementwise" if ssmax else "none"
         self.ssmax_layer = create_ssmax_layer(ssmax_type=ssmax, num_heads=num_heads, embed_dim=embed_dim)
+        # TP-04: RMSNorm on queries and keys, shared between the two so that a cached key and
+        # a freshly computed one are normalized identically.
+        self.qk_norm = RMSNorm(embed_dim // num_heads) if qk_norm else None
 
     def forward(
         self,
@@ -384,6 +388,7 @@ class MultiheadAttention(nn.MultiheadAttention):
             attn_mask=attn_mask,
             rope=rope,
             ssmax_layer=self.ssmax_layer,
+            qk_norm=self.qk_norm,
             need_kv=need_kv,
         )
 
@@ -443,6 +448,7 @@ class MultiheadAttentionBlock(nn.TransformerEncoderLayer):
         bias_free_ln: bool = False,
         ssmax: Union[bool, str] = False,
         zero_init: bool = True,
+        qk_norm: bool = False,
     ):
         super().__init__(
             d_model, nhead, dim_feedforward, dropout, activation=activation, norm_first=norm_first, batch_first=True
@@ -452,7 +458,7 @@ class MultiheadAttentionBlock(nn.TransformerEncoderLayer):
             self.norm2 = nn.LayerNorm(d_model, bias=False)
 
         del self.self_attn
-        self.attn = MultiheadAttention(d_model, nhead, dropout, ssmax)
+        self.attn = MultiheadAttention(d_model, nhead, dropout, ssmax, qk_norm=qk_norm)
         if zero_init:
             self.init_weights()
 
@@ -703,6 +709,7 @@ class InducedSelfAttentionBlock(nn.Module):
         bias_free_ln: bool = False,
         ssmax: Union[bool, str] = False,
         zero_init: bool = True,
+        qk_norm: bool = False,
         skip_value: float = -100.0,
     ):
         super().__init__()
@@ -713,10 +720,12 @@ class InducedSelfAttentionBlock(nn.Module):
 
         # Two-stage attention mechanism
         self.multihead_attn1 = MultiheadAttentionBlock(
-            d_model, nhead, dim_feedforward, dropout, activation, norm_first, bias_free_ln, ssmax, zero_init
+            d_model, nhead, dim_feedforward, dropout, activation, norm_first, bias_free_ln, ssmax, zero_init,
+            qk_norm=qk_norm
         )
         self.multihead_attn2 = MultiheadAttentionBlock(
-            d_model, nhead, dim_feedforward, dropout, activation, norm_first, bias_free_ln, zero_init=zero_init
+            d_model, nhead, dim_feedforward, dropout, activation, norm_first, bias_free_ln, zero_init=zero_init,
+            qk_norm=qk_norm
         )
 
         # Learnable inducing points
