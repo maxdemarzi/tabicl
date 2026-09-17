@@ -42,9 +42,48 @@ Figures 3–4 (labels rounded to the nearest 10, wide CIs on small slices).
 
 ### Speed and memory (BM-02)
 
-| Run | Commit | Ckpt | Train rows | Cols | Fwd time (s) | Cached 1-row (s) | Cached 100-row (s) | Cache (MB) | Peak VRAM (GB) | HW |
-|---|---|---|---|---|---|---|---|---|---|---|
-| | | | | | | | | | | |
+**Status: smoke run only.** The numbers below validate the harness end to end; they are
+*not* the baseline. The baseline needs a CUDA box (`--preset full`, 1k -> 1M rows,
+100 columns, 8 estimators). Recorded here because the cache scaling they establish is
+already decision-relevant.
+
+Run `BM-05-smoke`, commit `2b184ec` (tree dirty), tabicl **2.1.1 from PyPI, not this tree**,
+CPU / fp32 / Apple arm64, `n_estimators=2`.
+
+| Rows | Cols | fit+predict (s) | cache build (s) | cached 1-row (s) | cached 100-row (s) | cache bytes |
+|---|---|---|---|---|---|---|
+| 500 | 20 | 0.534 | 0.592 | 0.020 | 0.086 | 68,026,368 |
+| 1000 | 20 | 0.720 | 0.670 | 0.021 | 0.090 | 117,178,368 |
+| 500 | 40 | — | — | — | — | 83,755,008 |
+| 1000 | 40 | — | — | — | — | 132,907,008 |
+
+#### Finding: KV cache is 48 KiB per training row per estimator
+
+Fitting the four cache measurements gives **98,304 B/row at 2 estimators = 48 KiB/row/estimator,
+independent of column count** (columns only move the fixed term, 18 MiB at 20 cols to 33 MiB at 40).
+
+That is exactly `12 ICL blocks x 2 (K+V) x 512 dim x 4 bytes = 49,152 B`. The arithmetic matches
+the measurement to the byte, which both confirms the instrument and identifies the ICL transformer
+KV as the dominant term. Cache size therefore scales with `rows x d_model x depth` and not with
+features.
+
+Consequences for the backlog, in fp32:
+
+| Config | Per row/estimator | 100K rows, 8 est | 1M rows, 8 est |
+|---|---|---|---|
+| Today (`d_model=512`) | 48 KiB | ~37 GiB | ~366 GiB |
+| After **TP-06** (`d_model=1024`) | 96 KiB | ~73 GiB | ~732 GiB |
+| After **TP-05** (single 64-dim KV head) | 6 KiB | ~4.6 GiB | ~46 GiB |
+| **TP-05 + TP-06** | 6 KiB | ~4.6 GiB | ~46 GiB |
+
+Caveats, so these are not over-read: measured in fp32 on CPU, so AMP/fp16 on CUDA halves every
+figure; and `kv_cache="repr"` already exists as a mitigation, documented as ~24x less memory for
+the ICL part at the cost of re-running the ICL transformer at predict time.
+
+Read: **TP-05 is worth roughly an 8x cache reduction at current width and 16x after TP-06** — it
+is what makes the widened model deployable in `kv_cache="kv"` mode rather than a separate
+tradeoff to be argued. This is the measured justification for the ordering already written into
+[IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md) §Phase 3.
 
 ### Real-data accuracy (BM-03)
 

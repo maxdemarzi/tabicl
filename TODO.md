@@ -48,9 +48,14 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
 
 ### Phase 0 — Measurement (no model changes)
 
-- [ ] **BM-01** Build `benchmarks/` harness skeleton: dataset fetch + cache, per-dataset runner,
+- [~] **BM-01** Build `benchmarks/` harness skeleton: dataset fetch + cache, per-dataset runner,
       fold handling, result serialization to a stable schema, Elo/mean-rank aggregation.
-- [ ] **BM-02** Inference speed + memory microbenchmark. Mirror report Figure 7: forward time vs
+      *Done:* `_core/schema.py` (provenance + append-only ledger), `_core/aggregate.py`
+      (mean rank, win rate, Bradley-Terry Elo, bootstrap CIs), `_core/runner.py` (resumable,
+      failures recorded not dropped), 39 passing tests pinning the arithmetic to closed-form cases.
+      *Remaining:* `_core/datasets.py` (fetch + checksum-pinned cache), needed by BM-03.
+- [~] **BM-02** Inference speed + memory microbenchmark. *Implemented* as
+      `benchmarks/suites/speed.py`; smoke-run on CPU, full sweep still needs a CUDA box. Mirror report Figure 7: forward time vs
       training rows (1k → 1M) at 100 columns / 1,024 test rows; cached-predict time for 1 and
       100 test rows; **and KV-cache bytes**, which their figure omits but which is the quantity
       TP-05 exists to hold flat.
@@ -135,6 +140,10 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       exactly. [`kv_cache.py`](src/tabicl/_model/kv_cache.py) caches full MHA K/V today, so
       widening without this scales the cache linearly. The README markets KV caching as a headline
       feature, so this is the gate on TP-06, not an optional extra.
+      **Measured (BM-05-smoke):** our cache is 48 KiB/row/estimator =
+      `12 blocks x 2 x 512 dim x 4 B`, independent of column count — ~37 GiB at 100K rows and
+      8 estimators in fp32, doubling to ~73 GiB after TP-06. A single 64-dim KV head cuts it ~8x
+      at current width and ~16x after TP-06. See [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 - [ ] **TP-06** Width scaling — **this is literally the same knob we already have**.
       [`tabicl.py:203`](src/tabicl/_model/tabicl.py#L203) computes
       `icl_dim = embed_dim * row_num_cls` = 128 × 4 = 512 with `icl_nhead 8` (head dim 64) —
