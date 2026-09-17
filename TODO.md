@@ -1,0 +1,186 @@
+# TODO — TabPFN-3.5 transfer backlog
+
+Findings from a full read of the **TabPFN-3.5 Technical Report** (Prior Labs, 14 Sep 2026,
+<https://storage.googleapis.com/prior-labs-tabpfn-public/reports/tabpfn-v3.5-report.pdf>),
+cross-referenced against this codebase.
+
+Companion documents:
+- [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — phased execution order, ablation protocol, gates.
+- [benchmarks/RESULTS.md](benchmarks/RESULTS.md) — the results ledger. Every measurement lands there.
+
+Item IDs are stable. Reference them in branches, commits and PRs (`TP-01: add Fourier value encoding`).
+
+---
+
+## 0. Why this matters: where TabICLv2 currently stands
+
+TabPFN-3.5 benchmarks explicitly against TabICLv2 on seven benchmarks and wins all seven.
+Their report is unusually candid about *how*, and the mapping onto this repo is close to
+one-to-one — partly because TabPFN-3.5 has converged on a TabICL-shaped design. They state
+outright that their synthetic prior takes inspiration from the TabICLv2 prior (report §3.3).
+
+| Benchmark | TabICLv2 | TabPFN-3.5 | Notes |
+|---|---|---|---|
+| TabArena | — (not in their fig.) | 1 of 89 | 57% win rate vs best other TFM |
+| BeyondArena (all) | ~1200 Elo | ~1420 Elo | TabICLv2 behind in **every** slice; 83% win rate against us |
+| STRABLE (strings, TF-IDF) | 1383 | 1714 | we are barely above tuned XGBoost (1336); TabPFN-2.5 is 1499 |
+| MulTaBench | 1637 | 1856 | we are the best non-TabPFN entry |
+| ScoringBench (CRPS mean rank) | 12.05 *(finetuned)* | 2.85 | TabPFN-3 7.64, EXAONE-Tabular 7.59 — **see TP-14** |
+| TALENT | — | 1 of 37 | 80% win rate vs us |
+| fev-bench | not entered | 6 of 29 | TabPFN-TS-3.5 at 44.2 SQL skill |
+
+BeyondArena Elo values are read off Figures 3–4 and are approximate (their labels are rounded
+to the nearest 10 and confidence intervals on the smaller slices are wide).
+
+Two things worth keeping in perspective:
+
+- **TabPFN-3.5-Plus and -Thinking are proprietary and deliberately undocumented** (report §3.4).
+  There is nothing to transfer there. Everything in this backlog comes from the open parts.
+- **fev-bench is the one board they do not dominate** — 6th, behind TimesFM-3, both Chronos-2
+  variants, TiRex-2 and Toto-2.0. Time-series specialists still lead. Calibrate ambitions on
+  TP-15 accordingly.
+
+---
+
+## 1. Backlog
+
+Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dropped (record why)
+
+### Phase 0 — Measurement (no model changes)
+
+- [ ] **BM-01** Build `benchmarks/` harness skeleton: dataset fetch + cache, per-dataset runner,
+      fold handling, result serialization to a stable schema, Elo/mean-rank aggregation.
+- [ ] **BM-02** Inference speed + memory microbenchmark. Mirror report Figure 7: forward time vs
+      training rows (1k → 1M) at 100 columns / 1,024 test rows; cached-predict time for 1 and
+      100 test rows; **and KV-cache bytes**, which their figure omits but which is the quantity
+      TP-05 exists to hold flat.
+- [ ] **BM-03** Real-data accuracy suite. TabArena-lite or a TALENT subset — enough datasets to
+      rank changes, small enough to run per-ablation.
+- [ ] **BM-04** Held-out synthetic eval set, frozen. Pre-generate with `python -m tabicl.prior`
+      (`SavePriorDataset`) so every ablation sees an identical stream and differs only in the
+      model change. This is the fast inner-loop signal.
+- [ ] **BM-05** Record baseline numbers for the current released v2 clf + reg checkpoints across
+      BM-02/03/04 into `benchmarks/RESULTS.md`. **Nothing else starts before this lands.**
+- [ ] **BM-06** Establish and validate the proxy-scale training recipe (see
+      [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) §"Ablation protocol"). Full Stage 1 is
+      500K steps on 4 GPUs — not viable per-ablation.
+
+### Phase 1 — No retrain required
+
+- [ ] **TP-14** Investigate the ScoringBench result. `TabICL v2 (finetuned)` ranks 12.05 vs
+      TabPFN-3 at 7.64 — behind a model we beat elsewhere. We have native quantile regression
+      ([`_model/quantile_dist.py`](src/tabicl/_model/quantile_dist.py)), so this looks anomalous.
+      Reproduce under their harness (101 OpenML regression datasets, subsampled to 3,000 rows,
+      5-fold). Plausibly a harness/config issue rather than a model deficiency. Cheapest
+      potential win in the whole backlog.
+- [ ] **TP-15** Enter fev-bench. `TabICLForecaster` already exists
+      ([`forecast/_forecaster.py`](src/tabicl/forecast/_forecaster.py)) and is not on the board.
+      TabPFN ran their *general* checkpoint through the TabPFN-TS harness with no time-series
+      finetuning and beat their own TS-specific checkpoint at 2.4x the speed — worth testing
+      whether the same holds for us.
+- [ ] **TP-12** Native date + text preprocessing. Today
+      [`preprocessing.py:141`](src/tabicl/_sklearn/preprocessing.py#L141) raises and points users
+      at skrub's `TableVectorizer`. TabPFN-3.5's *open-source* release now handles both natively.
+      Given STRABLE has us at 1383, a built-in TF-IDF path for string columns is the cheapest
+      move on that board. Inference-side only.
+- [ ] **TP-16** Re-measure and correct the README speed claims.
+      [`README.md:25`](README.md#L25) says "10x faster than TabPFN-2.5" — two generations stale.
+      The same claim is repeated at [`README.md:350`](README.md#L350); fix both.
+      TabPFN-3.5 is ~2x slower than TabPFN-3 on large training sets, but TabPFN-3.5-Fast is 3x
+      *faster* than TabPFN-3 while still ~150 Elo ahead of it on TabArena. Depends on BM-02.
+
+### Phase 2 — Cell encoding + prior (one retrain)
+
+- [ ] **TP-01** Fourier value encoding.
+      [`embedding.py:153`](src/tabicl/_model/embedding.py#L153) is
+      `SkippableLinear(feature_group_size if feature_group else 1, embed_dim)` — a bare linear
+      projection of the scaled scalar. TabPFN replaced exactly this with a bank of `F=32` learned
+      frequencies → `[sin, cos]` → summed over the `G` group positions → `Linear(2F → E)`.
+      Their stated motivation: *"captures small differences better than a linear projection of the
+      raw number… particularly advantageous for modeling ordinal-encoded categorical variables
+      with high cardinality."* Credited to TabFM. Self-contained and ablatable in isolation.
+- [ ] **TP-02** In-context ECDF features. Midrank each cell against its column's **training** rows
+      → `u ∈ [0,1]` → expand into `K=4` low-frequency sin/cos harmonics. Monotone-transform
+      invariant: a skewed feature and its log produce identical terms, and heavy tails that
+      standard scaling crushes against the clip spread evenly over `[0,1]`.
+      That last clause lands directly on
+      [`CustomStandardScaler`](src/tabicl/_sklearn/preprocessing.py#L388) (`clip_min=-100,
+      clip_max=100`).
+      **Caveat to test, not assume:** our `ColEmbedding` set transformer is *already*
+      distribution-aware over each column and can in principle learn ECDF-like statistics. The
+      case for making it explicit is that it is O(n log n), free, and — critically — cacheable.
+      TP-02 must be ablated against the unmodified column embedder before we commit to it.
+- [ ] **TP-08** High-cardinality categoricals in the prior. At
+      [`_reg2cls.py:333-341`](src/tabicl/prior/_reg2cls.py#L333-L341):
+      `cat_prob=0.2`, and `num_cats = min(max(round(random.gammavariate(1, 10)), 2), max_categories)`
+      has mean 10 — so hundreds-of-levels categoricals are essentially never generated. Note
+      `DEFAULT_FIXED_HP["max_categories"] = float("inf")`, so the cap is *not* what binds; the
+      gamma is. TabPFN retuned toward high cardinality explicitly *in conjunction with* the
+      encoding changes. Ship with TP-01 — ordinal codes need value resolution to be useful.
+- [ ] **TP-11** Once TP-02 lands, delete preprocessing machinery. TabPFN-3.5 dropped quantile
+      transforms, robust scaling and SVD augmentation outright (§3.2). Here the analogue is the
+      `norm_methods` inference ensemble, defaulting to `["none", "power"]` at
+      [`classifier.py:560`](src/tabicl/_sklearn/classifier.py#L560). Collapsing an ensemble axis
+      into a model input is cheaper *and* strictly more expressive. Gated on TP-02 proving out.
+
+### Phase 3 — Capacity (order matters: TP-04 → TP-05 → TP-06)
+
+- [ ] **TP-04** QK-norm and extra normalization. `grep` finds no QK-norm anywhere in
+      [`_model/`](src/tabicl/_model/). TabPFN added RMSNorm on queries and keys in attention
+      blocks, LayerNorm after the input encoding, and RMSNorm before the task head — specifically
+      to stabilize the wider model *and* joint multitask training. Prerequisite for TP-06 and TP-07.
+- [ ] **TP-05** Grouped-query attention for test rows. TabPFN keeps test rows attending through a
+      *single* 64-dim KV head, so cache size and cached-predict latency stay flat as `d_model`
+      doubles — their Figure 7 shows TabPFN-3.5 and TabPFN-3 single-test-row times aligning
+      exactly. [`kv_cache.py`](src/tabicl/_model/kv_cache.py) caches full MHA K/V today, so
+      widening without this scales the cache linearly. The README markets KV caching as a headline
+      feature, so this is the gate on TP-06, not an optional extra.
+- [ ] **TP-06** Width scaling — **this is literally the same knob we already have**.
+      [`tabicl.py:203`](src/tabicl/_model/tabicl.py#L203) computes
+      `icl_dim = embed_dim * row_num_cls` = 128 × 4 = 512 with `icl_nhead 8` (head dim 64) —
+      the identical starting point to TabPFN-3. Their change is 4 → 8 CLS tokens, giving
+      1024 dim and 16 heads at a fixed head dim of 64. In our recipe
+      ([`train_v2_clf_stage3.sh:81-85`](scripts/train_v2_clf_stage3.sh#L81-L85)) that is
+      `--row_num_cls 8 --icl_nhead 16`. Params go 4x; inference time only ~2x, since it is
+      linear in width rather than parameter count.
+- [ ] **TP-03** Bucketed ECDF cache. TabPFN caches a bucketed ECDF so cache size decouples from
+      training-row count. Required for TP-02 to be compatible with the KV-cache path rather than
+      silently reintroducing an O(n_train) term.
+- [ ] **TP-13** Cache the many-class decoder's *input keys* rather than the final ICL layer's
+      train embeddings. Smaller cache and less compute. TabPFN calls this out as a specific
+      TabPFN-3 → 3.5 optimization.
+
+### Phase 4 — Training economics
+
+- [ ] **TP-07** Single multitask checkpoint. TabPFN trains classification and regression jointly
+      with task type as an input; only the label encoder and output head are task-specific — the
+      cell encoder, column distribution embedder, feature aggregator and in-context transformer
+      are all shared. We ship two checkpoints and two full 3-stage curricula
+      (`scripts/train_v2_{clf,reg}_stage{1,2,3}.sh`) — six training runs.
+      [`prior/_reg2cls.py`](src/tabicl/prior/_reg2cls.py) already derives both tasks from the same
+      SCM, so the data side is largely in place. Halves training cost, and they report it improves
+      both tasks. Depends on TP-04 for stability.
+
+### Phase 5 — Research-grade, highest ceiling
+
+- [ ] **TP-09** Grouped / non-IID splits in the prior. No such notion exists today — the "group"
+      concept in [`_dataset.py`](src/tabicl/prior/_dataset.py) is dataset *batching*, not
+      distribution shift. TabPFN now generates datasets whose test block comes from a different
+      latent group than train, and exposes the group identifier as a feature at inference
+      (their §C.2.3). BeyondArena's Grouped and Temporal slices are where **every** TFM still
+      loses to tuned + ensembled MLPs — yet TabPFN-3.5 closed that gap to parity on non-large
+      datasets purely through the prior. Highest ceiling, least certain payoff.
+- [ ] **TP-10** Wide tables. TabPFN now claims 1M rows × 6k features simultaneously, and up to
+      20k features with more estimators. Our recipe trains at `--max_features 100`.
+
+---
+
+## 2. Deliberately not pursued
+
+- **TabPFN-3.5-Plus / -Thinking internals** — proprietary, intentionally undescribed (§3.4).
+- **FP8 attention** — mentioned as the source of Plus's latency win, but the implementation is
+  part of the proprietary stack. Revisit only if it becomes independently available.
+- **A "Fast" variant checkpoint** — TabPFN-3.5-Fast is a 4-estimator alpha checkpoint on their
+  Pareto front. We already default to `n_estimators=8`, so the same lever exists as a config,
+  not a separate artifact. Not worth a distinct checkpoint until TP-06 makes the base model
+  slow enough to warrant one.
