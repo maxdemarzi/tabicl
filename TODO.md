@@ -14,8 +14,8 @@ Item IDs are stable. Reference them in branches, commits and PRs (`TP-01: add Fo
 
 ## Status as of 2026-09-17
 
-Branch `tabpfn-3.5-transfer`, 7 commits. **222 tests pass**; one failure (`BUG-01`) is
-pre-existing and unrelated, verified by stashing the whole branch.
+Branch `tabpfn-3.5-transfer`, 7 commits. **236 tests pass, zero failures** — `BUG-01` is fixed, so the suite is
+green for the first time on this branch.
 
 | | Item | State |
 |---|---|---|
@@ -275,7 +275,12 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
 
 ## 1b. Found along the way (not from the report)
 
-- [ ] **BUG-01** `tests/test_forecast.py::test_time_series_forecasting` fails on
+- [x] **BUG-01** *Fixed.* [`forecast/_preprocessing.py`](src/tabicl/forecast/_preprocessing.py)
+      allocated the forecast timestamp buffer as a hardcoded `datetime64[ns]`. pandas 3
+      preserves the input's resolution (commonly `datetime64[us]`), so the forecast index came
+      back at a different resolution than the context it was produced from — which breaks any
+      caller that joins or compares the two, not just the test. Now follows the input dtype.
+      **The suite is green for the first time: 236 passed, 0 failed.** Previously:
       **pandas 3.0.3**: `pd.testing.assert_index_equal` reports a dtype mismatch on the
       predicted timestamp index. Confirmed pre-existing — it fails identically with the whole
       TabPFN-3.5 branch stashed, so it is not a regression from this work. `pyproject.toml`
@@ -284,14 +289,29 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       [`forecast/_ts_dataframe.py`](src/tabicl/forecast/_ts_dataframe.py) or cap the pin.
       Relevant to **TP-15**, which runs the forecaster.
 
-- [ ] **BM-07** Two datasets in the frozen `REAL_SMALL` suite are saturated:
+- [x] **BM-07** *Done.* `drop_uninformative()` in
+      [`_core/aggregate.py`](benchmarks/_core/aggregate.py) removes, **at read time**, any
+      dataset on which every method scores identically; `report.py` does this by default and
+      says which it dropped, with `--keep-uninformative` to opt out. Read-time rather than
+      suite-time on purpose: the suite stays frozen, because dropping datasets after seeing
+      results is how a benchmark becomes flattering. Original note:
       `banknote-authentication` and `steel-plates-fault` both score 1.0000 accuracy with
       log-loss ~0. A dataset every method solves perfectly cannot separate methods and only
       dilutes a mean rank. Keep them — the suite is frozen and dropping datasets after seeing
       results is how benchmarks become flattering — but exclude or separately report them in
       ablation readouts. Add the split to `benchmarks/report.py`.
 
-- [ ] **PERF-01** **Single-row cached prediction is ~1.5x slower than 100-row.**
+- [~] **PERF-01** **Single-row cached prediction is ~1.5x slower than 100-row.**
+      *Investigated; the actionable part is done and documented, the anomaly itself is deferred.*
+      The 1-row-slower-than-100-row **inversion does not reproduce on CPU** (there 1 row is
+      8.6x *faster*), so it is GPU-specific — most likely kernel-launch latency dominating when
+      every tensor is tiny — and diagnosing it needs a GPU with a profiler. What is established
+      and now in the README: cached latency is **flat in training rows** (48→79 ms for a 16x
+      increase) and **scales with `n_estimators`** (12.8→60.9 ms from 1 to 8), so the ensemble
+      is the lever for online serving, not the training set size. Trimming it is a trade, not a
+      free win: on 6 datasets x 2 folds, accuracy was within noise but 8 estimators ranked best
+      on both ROC-AUC and log-loss — ensembling buys ranking and calibration more than accuracy.
+      All CIs overlap; directional only. Original note:
       Measured across every row count from 1k to 256k (0.0419 s vs 0.0278 s at 1k). Per-call
       overhead dominates the online path, so the marginal cost of 99 extra rows is negative.
       This is the exact case the report highlights for cached inference and the shape of real
@@ -299,7 +319,8 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       preprocessing, or the ensembling loop rather than attention.
       **Not from the report — found by running BM-02.**
 
-- [ ] **DOC-01** `micro_batch_size` cannot exceed `batch_size_per_gp` when
+- [x] **DOC-01** *Done* — documented on `--batch_size_per_gp` in the training CLI.
+      `micro_batch_size` cannot exceed `batch_size_per_gp` when
       `seq_len_per_gp=True`; every dataset in a micro-batch must share a training size. Raising
       one alone fails at step 0 with `ValueError: All datasets in the micro batch must have the
       same training size`. Add it to the training CLI help.

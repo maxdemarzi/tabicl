@@ -75,6 +75,33 @@ clf.fit(X_train, y_train)  # caches key-value projections for training data
 clf.predict(X_test)  # fast: only processes test data by reusing the cached context
 ```
 
+**Sizing the cache.** The cache is dominated by the in-context transformer's keys and values,
+so it grows with training rows and with the number of estimators, and is essentially
+independent of the feature count. Measured at roughly **24 KiB per training row per
+estimator** in fp16 (48 KiB in fp32) — about 37 GiB at 100K rows with the default 8
+estimators. On a 96 GB GPU that puts the practical ceiling for `kv_cache=True` somewhere
+around 400–500K training rows. If you need more, `kv_cache="repr"` trades some of that memory
+back for re-running the in-context transformer at predict time.
+
+**Latency for online, one-row-at-a-time serving.** Cached prediction latency is close to flat
+in the size of the training set — scoring one row against 500 training rows costs about the
+same as against 8,000 — but scales with `n_estimators`, which is therefore the lever to reach
+for if you are latency-bound:
+
+```python
+clf = TabICLClassifier(kv_cache=True, n_estimators=2)  # ~2-3x lower per-call latency than 8
+```
+
+This is a trade, not a free win. In a small internal comparison (6 datasets, 2 folds, so
+directional only and with overlapping confidence intervals), reducing the ensemble left
+accuracy within noise but cost ROC-AUC and log-loss, with 8 estimators ranking best on both.
+Ensembling buys ranking quality and calibration more than it buys raw accuracy — so if your
+application consumes predicted probabilities rather than hard labels, measure before trimming.
+
+Batching helps far more than trimming, where you can do it: per-row cost falls sharply from
+one row per call to a hundred, because each call pays a fixed cost that a larger batch
+amortizes.
+
 Save and load a fitted classifier or regressor:
 
 ```python

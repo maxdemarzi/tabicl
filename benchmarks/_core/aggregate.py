@@ -24,7 +24,8 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-__all__ = ["Record", "records_from_ledger", "mean_rank", "win_rate", "elo", "bootstrap_ci"]
+__all__ = ["Record", "records_from_ledger", "mean_rank", "win_rate", "elo",
+           "bootstrap_ci", "drop_uninformative"]
 
 
 @dataclass(frozen=True)
@@ -360,3 +361,31 @@ def bootstrap_ci(
 
     lo_q, hi_q = 100 * alpha / 2, 100 * (1 - alpha / 2)
     return {m: (float(np.percentile(v, lo_q)), float(np.percentile(v, hi_q))) for m, v in sorted(draws.items()) if v}
+
+
+def drop_uninformative(records: Sequence[Record], tol: float = 1e-9):
+    """Remove datasets on which every method scores the same.
+
+    A dataset that every method solves identically contributes the same rank to all of them.
+    It cannot separate anything, it drags every mean rank toward the middle, and it makes a
+    real difference elsewhere look smaller than it is. Two of the ten datasets in the frozen
+    BM-03 suite are like this -- `banknote-authentication` and `steel-plates-fault` both sit
+    at 1.0000 accuracy (BM-07 in TODO.md).
+
+    They are *not* removed from the suite, which is frozen: dropping datasets after seeing
+    results is how a benchmark becomes flattering. They are removed at read time, which is
+    visible and reversible.
+
+    Returns
+    -------
+    (kept, dropped_names) : tuple of (list of Record, list of str)
+    """
+
+    per_ds = _per_dataset_means(records)
+    dropped = []
+    for dataset, values in per_ds.items():
+        vals = list(values.values())
+        if len(vals) > 1 and (max(vals) - min(vals)) <= tol:
+            dropped.append(dataset)
+    dropped_set = set(dropped)
+    return [r for r in records if r.dataset not in dropped_set], sorted(dropped)

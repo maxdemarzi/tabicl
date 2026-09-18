@@ -148,7 +148,10 @@ def build_parser():
         type=str2bool,
         help="Delete prior data after loading. Only used when prior_dir is set.",
     )
-    parser.add_argument("--batch_size_per_gp", type=int, default=4, help="Batch size per group")
+    parser.add_argument("--batch_size_per_gp", type=int, default=4,
+                        help="Batch size per group. NOTE: --micro_batch_size must not exceed this "
+                             "when --seq_len_per_gp is True, because every dataset in a micro batch "
+                             "must share a training size; raising one alone fails at step 0.")
     parser.add_argument("--min_features", type=int, default=5, help="The minimum number of features")
     parser.add_argument("--max_features", type=int, default=100, help="The maximum number of features")
     parser.add_argument("--max_classes", type=int, default=10, help="The maximum number of classes")

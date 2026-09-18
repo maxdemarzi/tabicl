@@ -49,7 +49,14 @@ def build_horizon(train_tsdf: TimeSeriesDataFrame, prediction_length: int) -> Ti
 
     freq_offset = pd.tseries.frequencies.to_offset(freq)
 
-    all_timestamps = np.empty(n_items * prediction_length, dtype="datetime64[ns]")
+    # Follow the input's datetime resolution instead of forcing nanoseconds. pandas 3
+    # preserves whatever resolution the input carried (commonly datetime64[us]), so a
+    # hardcoded [ns] buffer silently changes the dtype of the forecast index relative to the
+    # context it was produced from -- which breaks any caller that joins or compares the two.
+    ts_dtype = last_timestamps.dtype
+    if not np.issubdtype(ts_dtype, np.datetime64):
+        ts_dtype = np.dtype("datetime64[ns]")
+    all_timestamps = np.empty(n_items * prediction_length, dtype=ts_dtype)
 
     for i, last_ts in enumerate(last_timestamps):
         start_ts = last_ts + freq_offset

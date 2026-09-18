@@ -18,6 +18,7 @@ import pytest
 from benchmarks._core.aggregate import (
     Record,
     bootstrap_ci,
+    drop_uninformative,
     elo,
     mean_rank,
     records_from_ledger,
@@ -328,3 +329,55 @@ def test_provenance_reports_whether_tabicl_is_local():
 
     prov = capture_provenance()
     assert prov.tabicl_is_local in (True, False, None)
+
+
+# --------------------------------------------------------------------------- #
+# drop_uninformative (BM-07)
+# --------------------------------------------------------------------------- #
+
+
+def test_drop_uninformative_removes_datasets_no_method_separates():
+    records = [
+        # every method scores 1.0 here -- carries no information
+        Record("a", "saturated", 0, 1.0), Record("b", "saturated", 0, 1.0),
+        # real separation here
+        Record("a", "real", 0, 0.9), Record("b", "real", 0, 0.7),
+    ]
+    kept, dropped = drop_uninformative(records)
+    assert dropped == ["saturated"]
+    assert {r.dataset for r in kept} == {"real"}
+
+
+def test_drop_uninformative_keeps_a_dataset_with_any_spread():
+    records = [Record("a", "ds", 0, 1.0), Record("b", "ds", 0, 0.999)]
+    kept, dropped = drop_uninformative(records)
+    assert dropped == [] and len(kept) == 2
+
+
+def test_drop_uninformative_compares_fold_means_not_single_folds():
+    """Methods can differ per fold yet tie on the dataset mean; that still cannot separate."""
+
+    records = [
+        Record("a", "ds", 0, 1.0), Record("a", "ds", 1, 0.0),
+        Record("b", "ds", 0, 0.0), Record("b", "ds", 1, 1.0),
+    ]
+    _kept, dropped = drop_uninformative(records)
+    assert dropped == ["ds"]
+
+
+def test_drop_uninformative_ignores_single_method_ledgers():
+    """With one method every dataset trivially 'ties'; dropping them all would be wrong."""
+
+    records = [Record("a", "ds0", 0, 1.0), Record("a", "ds1", 0, 0.5)]
+    kept, dropped = drop_uninformative(records)
+    assert dropped == [] and len(kept) == 2
+
+
+def test_drop_uninformative_changes_the_mean_rank_it_was_diluting():
+    saturated = [Record(m, f"sat{i}", 0, 1.0) for m in ("a", "b") for i in range(4)]
+    real = [Record("a", "real", 0, 1.0), Record("b", "real", 0, 0.0)]
+    with_sat = mean_rank(saturated + real)
+    kept, _ = drop_uninformative(saturated + real)
+    without = mean_rank(kept)
+    assert with_sat["a"] > without["a"]   # dilution pulled 'a' away from rank 1
+    assert without["a"] == 1.0

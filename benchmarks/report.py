@@ -14,7 +14,14 @@ import argparse
 from pathlib import Path
 from typing import List, Optional
 
-from ._core.aggregate import bootstrap_ci, elo, mean_rank, records_from_ledger, win_rate
+from ._core.aggregate import (
+    bootstrap_ci,
+    drop_uninformative,
+    elo,
+    mean_rank,
+    records_from_ledger,
+    win_rate,
+)
 from ._core.schema import Ledger
 
 
@@ -26,6 +33,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--run-id", default=None, help="Restrict to one sweep")
     parser.add_argument("--lower-is-better", action="store_true", help="For error metrics: log_loss, CRPS, time")
     parser.add_argument("--against", default=None, help="Report win rates against this config_id")
+    parser.add_argument("--keep-uninformative", action="store_true",
+                        help="Keep datasets on which every method scores identically. They "
+                             "cannot separate methods and pull every mean rank toward the "
+                             "middle, so they are dropped at read time by default (BM-07).")
     parser.add_argument("--no-ci", action="store_true")
     parser.add_argument("--n-boot", type=int, default=500)
     args = parser.parse_args(argv)
@@ -42,6 +53,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         if errored:
             print(f"({errored} row(s) in this ledger carry an error)")
         return 1
+
+    if not args.keep_uninformative:
+        records, dropped = drop_uninformative(records)
+        if dropped:
+            print(f"dropped {len(dropped)} uninformative dataset(s) "
+                  f"(every method scored identically): {', '.join(dropped)}")
+            if not records:
+                print("nothing left to rank -- re-run with --keep-uninformative")
+                return 1
 
     higher = not args.lower_is_better
     methods = sorted({r.method for r in records})
