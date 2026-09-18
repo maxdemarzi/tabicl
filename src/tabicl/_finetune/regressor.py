@@ -16,6 +16,24 @@ from tabicl._finetune.base import ValidationMetrics, FinetunedTabICLBase
 from tabicl._finetune.data import MetaBatch
 
 
+def _crps_from_quantiles(y_true: np.ndarray, quantiles: np.ndarray, levels: np.ndarray) -> float:
+    """CRPS approximated from predictive quantiles, via the pinball identity.
+
+    ``CRPS(F, y) ~ 2 * integral of pinball_tau(q_tau, y) dtau``, evaluated with the
+    trapezoidal rule over ``levels``. Kept here rather than imported so the finetuning
+    path has no dependency outside the package.
+
+    Used only for model selection, where the constant factor is irrelevant -- but it is
+    kept anyway so the reported number is comparable to a published CRPS.
+    """
+
+    y_true = np.asarray(y_true, dtype=np.float64).reshape(-1, 1)
+    diff = y_true - np.asarray(quantiles, dtype=np.float64)
+    lv = np.asarray(levels, dtype=np.float64).reshape(1, -1)
+    losses = np.maximum(lv * diff, (lv - 1.0) * diff)
+    return float(2.0 * np.trapezoid(losses, x=levels, axis=1).mean())
+
+
 def _pinball_loss(quantiles: torch.Tensor, targets: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
     """Compute the pinball (quantile) loss averaged over all quantile levels.
 
@@ -180,7 +198,7 @@ class FinetunedTabICLRegressor(RegressorMixin, FinetunedTabICLBase):
 
     **Regressor-specific**
 
-    eval_metric : {"mse", "mae", "r2"}, default="mse"
+    eval_metric : {"mse", "mae", "r2", "crps"}, default="mse"
         Primary validation metric driving early stopping and best-weight
         selection. Computed in raw y space via :meth:`TabICLRegressor.predict`.
         ``mse`` and ``mae`` are internally negated so "higher is better"
@@ -232,7 +250,7 @@ class FinetunedTabICLRegressor(RegressorMixin, FinetunedTabICLBase):
         verbose: bool = False,
         wandb_kwargs: Optional[dict[str, Any]] = None,
         # Regressor-specific
-        eval_metric: Literal["mse", "mae", "r2"] = "mse",
+        eval_metric: Literal["mse", "mae", "r2", "crps"] = "mse",
         extra_regressor_kwargs: Optional[dict[str, Any]] = None,
     ):
         super().__init__(
@@ -331,7 +349,12 @@ class FinetunedTabICLRegressor(RegressorMixin, FinetunedTabICLBase):
         X_val: np.ndarray,
         y_val: np.ndarray,
     ) -> ValidationMetrics:
-        """Fit ``inner`` on train, predict on val, return MSE/MAE/R² metrics."""
+        """Fit ``inner`` on train, predict on val, return validation metrics.
+
+        Always reports MSE/MAE/R² as secondary metrics. When ``eval_metric="crps"``
+        the primary is a distributional score from a second, quantile-valued
+        prediction pass -- see the note at that branch.
+        """
         # The caller (:meth:`FinetunedTabICLBase._validate_current_model`) has
         # already switched the underlying module to eval mode.
         try:
@@ -350,6 +373,32 @@ class FinetunedTabICLRegressor(RegressorMixin, FinetunedTabICLBase):
         r2 = float(r2_score(y_val_arr, preds))
 
         secondary = {"mse": mse, "mae": mae, "r2": r2}
+
+        # Selection on a distributional metric, matching what this class actually trains
+        # against. `_compute_batch_loss` optimizes pinball loss over the raw quantile head,
+        # so early-stopping on mse/mae/r2 selects an epoch by the quality of the conditional
+        # MEAN while the objective was the whole predictive distribution. Those diverge, and
+        # on a benchmark scored with proper scoring rules the point metrics select the wrong
+        # epoch. Computed only when asked, since it needs a second, wider prediction pass.
+        if self.eval_metric == "crps":
+            levels = np.linspace(0.01, 0.99, 99)
+            try:
+                q = np.asarray(
+                    inner.predict(X_val, output_type="quantiles", alphas=levels.tolist()),
+                    dtype=float,
+                )
+                if q.ndim == 1:
+                    q = q[np.newaxis, :]
+                crps = _crps_from_quantiles(y_val_arr, np.sort(q, axis=1), levels)
+            except (ValueError, RuntimeError) as e:
+                if self.verbose:
+                    import logging
+
+                    logging.getLogger(__name__).warning("CRPS validation failed: %s", e)
+                return ValidationMetrics(primary=float("nan"), secondary=secondary)
+            secondary["crps"] = crps
+            return ValidationMetrics(primary=-crps, secondary=secondary)
+
         if self.eval_metric == "mse":
             primary = -mse  # higher-is-better sign convention
         elif self.eval_metric == "mae":

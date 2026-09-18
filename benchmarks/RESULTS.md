@@ -213,13 +213,56 @@ The proxy is not trusted until the signs agree.
 
 ## Phase 1 — No retrain
 
-### TP-14 ScoringBench
+### TP-14 ScoringBench — three hypotheses tested, three negatives
 
-Harness must first reproduce a published baseline before our own numbers are trusted.
+**The premise was probably wrong, and that is the finding.**
 
-| Run | Commit | Config | Harness reproduces baseline? | CRPS mean rank | vs published 12.05 | Reading |
-|---|---|---|---|---|---|---|
-| | | | | | | |
+I called the published `TabICL v2 (finetuned)` mean rank of 12.05 "an outlier relative to
+every other board", "plausibly a harness/config issue rather than a model deficiency", and
+"the cheapest potential win in the whole backlog". Having read their code and tested the
+three mechanisms that could produce it, **none of them do**. That characterization was too
+strong and is withdrawn.
+
+Source: <https://github.com/jonaslandsgesell/ScoringBench>, wrapper at
+`scoringbench/univariate/wrappers/tabicl.py`, config at `univariate/config.py`
+(seed 42, 5 folds, 3,000-row cap — matching the report). All experiments below use their CV
+config and their 200-level alpha grid.
+
+| # | Hypothesis | Mechanism | Result |
+|---|---|---|---|
+| 1 | Wrapper uses the post-hoc calibrated path | It calls `output_type="quantiles"`; our changelog says `raw_quantiles` are "direct outputs … without post-hoc calibration" | **Identical.** 3 datasets x 2 folds: `wine_quality` 0.2913 vs 0.2913, `boston` 1.1108 vs 1.1118, `kin8nm` 0.0407 vs 0.0407. Under 0.1% apart. |
+| 2 | Finetuning degrades calibration | The published entry is the *finetuned* variant (`epochs=80`), not base TabICL | **Neutral.** `boston`, 2 folds: base 1.1108, finetuned 1.1087 (0.2% *better*). |
+| 3 | Selection metric mismatched to scoring | `models.py` sets `eval_metric="mse"` — a point metric — while the benchmark scores CRPS | **Neutral.** `boston`, 3 folds: select-on-mse 1.2327, select-on-crps 1.2358 (0.25% *worse*). |
+
+**Caveat, stated plainly:** hypotheses 2 and 3 were tested on `boston` (506 rows) across 2-3
+folds. That is underpowered and cannot exclude a small effect. It can exclude the *large*
+effect that would be needed to move a mean rank from ~7.6 to 12.05, which is what was being
+claimed.
+
+#### What the number probably means
+
+12.05 is a mean rank among **53 methods** on a board densely populated with purpose-built
+probabilistic regressors — NGBoost, XGBLSS, BART, normalizing flows, conditional density
+estimators, conformal wrappers. TabPFN-3 (7.64) and EXAONE-Tabular (7.59) beat us;
+Nori-30M (13.09) does not. Mid-upper-pack on a benchmark that scores *only* the predictive
+distribution is a plausible honest result for a model whose headline strength is point
+accuracy. It is not obviously an artifact, and I no longer think it is one.
+
+**What would settle it:** running their harness over the real 101 datasets and checking we
+reproduce ~12.05. If we do, the item closes as "accurate, and a genuine weakness to work on".
+Their dataset list is built lazily from OpenML suites and needs the `openml` package. That is
+the remaining work on TP-14, and it is now a verification task, not a bug hunt.
+
+#### One real gap, found and closed
+
+`FinetunedTabICLRegressor` **trains** against pinball loss over the raw quantile head
+(`_compute_batch_loss`) but only offered `{"mse", "mae", "r2"}` for early stopping — all point
+metrics. Selection and objective disagreed by construction. Added `eval_metric="crps"` so they
+can agree, with the CRPS helper pinned against the closed form for a standard normal.
+
+It showed **no measurable benefit** in the one A/B above. It is kept because selecting on the
+metric you trained against is principled and the option costs nothing — not because it was
+shown to win. Do not cite it as a fix.
 
 ### TP-15 fev-bench
 

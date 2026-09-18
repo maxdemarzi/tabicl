@@ -108,7 +108,16 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
 
 ### Phase 1 — No retrain required
 
-- [~] **TP-14** Investigate the ScoringBench result. *Scoring machinery done:*
+- [~] **TP-14** Investigate the ScoringBench result. **Premise withdrawn — see
+      [RESULTS.md](benchmarks/RESULTS.md).** I described 12.05 as anomalous and "the cheapest
+      potential win"; three candidate mechanisms were tested against their actual code and all
+      three came back neutral (calibrated-vs-raw quantiles, finetuned-vs-base, and
+      mse-vs-crps selection, each within 0.25%). 12.05 of **53** methods on a board of
+      purpose-built probabilistic regressors is a plausible honest result, not an artifact.
+      What remains is *verification*: run their 101-dataset harness and check we reproduce it.
+      One genuine gap was found and closed on the way — `FinetunedTabICLRegressor` trained on
+      pinball loss but could only early-stop on point metrics; `eval_metric="crps"` now exists
+      (no measured benefit; kept on principle). *Scoring machinery done:*
       [`benchmarks/_core/scoring.py`](benchmarks/_core/scoring.py) — CRPS from predictive
       quantiles via the pinball identity (with the factor of 2 and trapezoidal integration
       over levels, both of which are commonly dropped and both of which make the number
