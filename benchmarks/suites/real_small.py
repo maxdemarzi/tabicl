@@ -76,18 +76,29 @@ def make_tasks(
     seed: int,
     clf_kwargs: Dict[str, Any],
     checkpoint: Optional[str],
+    suite: str = SUITE,
 ) -> List[Task]:
+    """One task per (dataset, fold).
+
+    ``suite`` is recorded on every row and is part of the resume key, and it must name the
+    DATASET SUITE, not this runner. Two suites can contain datasets with the same name that
+    are not the same dataset -- ``steel-plates-fault`` is OpenML 1504 (binary) in
+    ``real_small`` and 40982 (7-class) in ``cc18_narrow`` -- and rows from both written under
+    one suite label would be averaged together by the aggregator without any error.
+    """
+
     tasks: List[Task] = []
     for spec in specs:
         for fold in range(n_folds):
             tasks.append(
                 Task(
-                    suite=SUITE,
+                    suite=suite,
                     dataset=spec.name,
                     fold=fold,
                     config_id=config_id,
                     metrics=METRICS,
-                    config={"max_rows": max_rows, "n_folds": n_folds, **clf_kwargs},
+                    config={"max_rows": max_rows, "n_folds": n_folds, "openml_id": spec.openml_id,
+                            **clf_kwargs},
                     seed=seed,
                     checkpoint=checkpoint,
                     payload={"spec": spec, "fold": fold, "max_rows": max_rows, "n_folds": n_folds},
@@ -134,7 +145,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--device", default=None)
     parser.add_argument("--n-estimators", type=int, default=8)
     parser.add_argument("--norm-methods", default=None, help="Comma-separated, e.g. 'none' or 'none,power' (TP-11)")
-    parser.add_argument("--checkpoint", default=None)
+    parser.add_argument("--checkpoint", default=None, help="Checkpoint identity, recorded on rows")
+    parser.add_argument("--model-path", default=None,
+                        help="Load weights from this file instead of the released checkpoint. This is "
+                             "how a proxy-training checkpoint is evaluated; without it every run "
+                             "silently measures the released model.")
     parser.add_argument("--datasets", default=None, help="Comma-separated subset of the frozen suite")
     parser.add_argument("--ledger", default="benchmarks/_results/real_small.jsonl")
     parser.add_argument("--no-resume", action="store_true")
@@ -150,6 +165,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     clf_kwargs: Dict[str, Any] = {"n_estimators": args.n_estimators}
     if args.device is not None:
         clf_kwargs["device"] = args.device
+    if args.model_path is not None:
+        clf_kwargs["model_path"] = args.model_path
     if args.norm_methods is not None:
         clf_kwargs["norm_methods"] = [m.strip() for m in args.norm_methods.split(",")]
 
@@ -157,7 +174,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     runner = Runner(ledger, run_id=args.run_id, device=args.device, resume=not args.no_resume)
     runner.warn_if_not_local_tabicl()
 
-    tasks = make_tasks(specs, args.n_folds, args.max_rows, args.config_id, args.seed, clf_kwargs, args.checkpoint)
+    tasks = make_tasks(specs, args.n_folds, args.max_rows, args.config_id, args.seed, clf_kwargs,
+                       args.checkpoint, suite=args.suite)
     executed = runner.run(tasks, make_executor(clf_kwargs))
     print(f"\n{executed} tasks executed -> {args.ledger}")
     return 0

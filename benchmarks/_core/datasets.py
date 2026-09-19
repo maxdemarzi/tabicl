@@ -76,6 +76,93 @@ REAL_SMALL: Tuple[DatasetSpec, ...] = (
 
 SUITES: Dict[str, Tuple[DatasetSpec, ...]] = {"real_small": REAL_SMALL}
 
+#: BM-08. OpenML-CC18 (study 99) restricted to datasets with at most 500 features:
+#: 62 of its 72 datasets. Sized to the ablation question rather than to convenience --
+#: see benchmarks/RESULTS.md: the 10-dataset REAL_SMALL suite detects a true ~64% win rate
+#: (the size of TabICLv2's own published ~100-Elo effects) only ~15% of the time at
+#: p < 0.05, where ~60 datasets reach ~70%.
+#:
+#: The inclusion rule was fixed BEFORE any result on these datasets was seen and applied
+#: mechanically: features <= 500. The 10 excluded are image-like or very wide
+#: (mnist_784, Fashion-MNIST, CIFAR_10, Devnagari-Script, isolet, har, madelon, cnae-9,
+#: Internet-Advertisements, Bioresponse) -- they cost more than the rest of the suite
+#: combined per screen, and they belong to TP-10 (wide tables), not to ablation screening.
+#: Saturated datasets are NOT removed here; `drop_uninformative` handles them at read time
+#: so the suite itself stays fixed.
+#:
+#: Do not edit. Add a new named suite instead.
+CC18_NARROW: Tuple[DatasetSpec, ...] = (
+    DatasetSpec("kr-vs-kp", 3, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("letter", 6, "classification", ('low_dim', 'many_class')),
+    DatasetSpec("balance-scale", 11, "classification", ('low_dim',)),
+    DatasetSpec("mfeat-factors", 12, "classification", ('high_dim',)),
+    DatasetSpec("mfeat-fourier", 14, "classification", ('high_dim',)),
+    DatasetSpec("breast-w", 15, "classification", ('low_dim',)),
+    DatasetSpec("mfeat-karhunen", 16, "classification", ('high_dim',)),
+    DatasetSpec("mfeat-morphological", 18, "classification", ('low_dim',)),
+    DatasetSpec("mfeat-zernike", 22, "classification", ('low_dim',)),
+    DatasetSpec("cmc", 23, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("optdigits", 28, "classification", ('high_dim',)),
+    DatasetSpec("credit-approval", 29, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("credit-g", 31, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("pendigits", 32, "classification", ('low_dim',)),
+    DatasetSpec("diabetes", 37, "classification", ('low_dim',)),
+    DatasetSpec("sick", 38, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("spambase", 44, "classification", ('high_dim',)),
+    DatasetSpec("splice", 46, "classification", ('high_dim', 'categorical')),
+    DatasetSpec("tic-tac-toe", 50, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("vehicle", 54, "classification", ('low_dim',)),
+    DatasetSpec("electricity", 151, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("satimage", 182, "classification", ('low_dim',)),
+    DatasetSpec("eucalyptus", 188, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("vowel", 307, "classification", ('low_dim', 'many_class', 'categorical')),
+    DatasetSpec("analcatdata_authorship", 458, "classification", ('high_dim',)),
+    DatasetSpec("analcatdata_dmft", 469, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("pc4", 1049, "classification", ('low_dim',)),
+    DatasetSpec("pc3", 1050, "classification", ('low_dim',)),
+    DatasetSpec("jm1", 1053, "classification", ('low_dim',)),
+    DatasetSpec("kc2", 1063, "classification", ('low_dim',)),
+    DatasetSpec("kc1", 1067, "classification", ('low_dim',)),
+    DatasetSpec("pc1", 1068, "classification", ('low_dim',)),
+    DatasetSpec("bank-marketing", 1461, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("banknote-authentication", 1462, "classification", ('low_dim',)),
+    DatasetSpec("blood-transfusion-service-center", 1464, "classification", ('low_dim',)),
+    DatasetSpec("first-order-theorem-proving", 1475, "classification", ('high_dim',)),
+    DatasetSpec("ilpd", 1480, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("nomao", 1486, "classification", ('high_dim', 'categorical')),
+    DatasetSpec("ozone-level-8hr", 1487, "classification", ('high_dim',)),
+    DatasetSpec("phoneme", 1489, "classification", ('low_dim',)),
+    DatasetSpec("qsar-biodeg", 1494, "classification", ('low_dim',)),
+    DatasetSpec("wall-robot-navigation", 1497, "classification", ('low_dim',)),
+    DatasetSpec("semeion", 1501, "classification", ('high_dim',)),
+    DatasetSpec("wdbc", 1510, "classification", ('low_dim',)),
+    DatasetSpec("adult", 1590, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("PhishingWebsites", 4534, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("GesturePhaseSegmentationProcessed", 4538, "classification", ('low_dim',)),
+    DatasetSpec("cylinder-bands", 6332, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("dresses-sales", 23381, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("numerai28.6", 23517, "classification", ('low_dim',)),
+    DatasetSpec("texture", 40499, "classification", ('low_dim', 'many_class')),
+    DatasetSpec("connect-4", 40668, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("dna", 40670, "classification", ('high_dim', 'categorical')),
+    DatasetSpec("churn", 40701, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("MiceProtein", 40966, "classification", ('high_dim', 'categorical')),
+    DatasetSpec("car", 40975, "classification", ('low_dim', 'categorical')),
+    DatasetSpec("mfeat-pixel", 40979, "classification", ('high_dim',)),
+    DatasetSpec("steel-plates-fault", 40982, "classification", ('low_dim',)),
+    DatasetSpec("wilt", 40983, "classification", ('low_dim',)),
+    DatasetSpec("segment", 40984, "classification", ('low_dim',)),
+    DatasetSpec("climate-model-simulation-crashes", 40994, "classification", ('low_dim',)),
+    DatasetSpec("jungle_chess_2pcs_raw_endgame_complete", 41027, "classification", ('low_dim',)),
+)
+
+#: The ten CC18 datasets excluded from CC18_NARROW. Recorded, not yet a validated suite --
+#: the natural evaluation set for TP-10 once someone pays to download them.
+CC18_WIDE_IDS: Tuple[int, ...] = (300, 554, 1468, 1478, 1485, 4134, 40923, 40927, 40978, 40996,)
+
+SUITES["cc18_narrow"] = CC18_NARROW
+
+
 
 def _cache_path(spec: DatasetSpec) -> Path:
     return CACHE_DIR / f"openml_{spec.openml_id}_{spec.name}.pkl"

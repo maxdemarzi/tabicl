@@ -22,7 +22,8 @@ green for the first time on this branch.
 | ✅ | BM-01 | Harness complete: ledger, provenance, aggregation, resumable runner, datasets |
 | ✅ | TP-12 | Datetime + text preprocessing, shipped |
 | ✅ | BM-02, BM-03, BM-05 | **Baseline measured** on RTX PRO 6000 (the report's own card), $1.32 |
-| ⚠️ | BM-06 | Throughput measured; **the plan as priced is not affordable** — see RESULTS.md |
+| ⚠️ | BM-06 | **Not launched on purpose** — the old design could not answer its own question; redesigned, now gated on BM-08 (done) |
+| ✅ | BM-08 | Eval suite 10 → 62 datasets (OpenML-CC18, mechanical rule) |
 | 🔧 | TP-01, TP-04 | Code + tests done, **off by default, untrained** |
 | 🔧 | TP-14 | Scoring rules done; needs the benchmark's dataset list |
 | ⛔ | TP-02, 03, 05, 06, 07, 08, 09, 10, 11 | Not started |
@@ -324,6 +325,24 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       `seq_len_per_gp=True`; every dataset in a micro-batch must share a training size. Raising
       one alone fails at step 0 with `ValueError: All datasets in the micro batch must have the
       same training size`. Add it to the training CLI help.
+
+- [x] **BM-08** *Done.* Evaluation suite grown from 10 datasets to **62**: OpenML-CC18
+      restricted by a rule fixed before any result was seen — features <= 500 — and applied
+      mechanically, so the 10 excluded are exactly the image-like and very wide ones. All 62
+      validated and cached. This is now the **gate on BM-06**: at 8 informative datasets a
+      true ~64% win rate (TabICLv2's published effect size) clears p < 0.05 about 15% of the
+      time; at ~60 it is about 70%.
+      Two bugs surfaced on the way, both fixed. Rows were labelled with the *runner* name
+      rather than the dataset suite, and `steel-plates-fault` is two different datasets in the
+      two suites (binary 1504 vs 7-class 40982), so they would have been averaged together
+      silently. And the suite runner had no way to load a proxy checkpoint — **BM-06's
+      evaluation step could not have measured anything but the released model.** Added
+      `--model-path`.
+
+- [ ] **CAVEAT-01** A proxy is **biased against capacity increases**, not just noisy. TabICLv2's
+      own deeper-model ablation showed no clear gain at 280K steps "likely due to insufficient
+      pretraining for the larger model to fully converge". A 5K-step proxy is far more
+      starved than that. A proxy "no" on **TP-06** must not be read as a real "no".
 
 ## 2. Deliberately not pursued
 

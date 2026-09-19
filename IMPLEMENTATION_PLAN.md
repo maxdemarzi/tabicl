@@ -114,10 +114,15 @@ BM-04 prior stream.
 > table and the two bugs this run surfaced.
 
 Then **validate the proxy before trusting it**, which is the step most likely to be skipped and
-most expensive to skip. Take two or three architecture choices whose full-scale effect is already
-known from the TabICLv2 paper's own ablations — SSMax (`--col_ssmax` / `--icl_ssmax`),
-target-aware embeddings (`--col_target_aware`), the RoPE variant (`--row_rope_interleaved`) — run
-them at proxy scale, and check the **sign** of each effect agrees with the published result. If
+most expensive to skip. Take architecture choices whose full-scale effect is *actually published*
+in TabICLv2 §7 — target-aware embeddings (`--col_target_aware`), QASSMax (`--col_ssmax` /
+`--icl_ssmax`), and Muon vs AdamW (`--muon False --lr 1e-4`), each ~100 Elo / ~64% win rate at
+280K steps — run them at proxy scale, and check the **sign** of each effect agrees.
+
+> **Corrected 2026-09-19.** This paragraph originally listed the RoPE variant as a knob with a
+> known effect. RoPE interleaving is never ablated in the paper. And it originally evaluated on
+> the 10-dataset suite, which detects an effect of this size only ~15% of the time — so it now
+> requires `cc18_narrow` (62 datasets, BM-08). See `benchmarks/RESULTS.md`. If
 signs disagree, the proxy is too short; increase and repeat. Record the validation in the ledger.
 
 We are buying sign agreement and rough ordering, not effect-size fidelity. Decisions that hinge on

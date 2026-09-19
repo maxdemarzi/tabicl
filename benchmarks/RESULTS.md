@@ -183,6 +183,69 @@ worth trying:
 3. **Cut seeds from 3 to 2 for screening**, keeping 3 only for whatever survives to a
    full-scale run.
 
+### The calibration was not launched, and why (2026-09-19)
+
+Before spending on BM-06 I read TabICLv2's own ablation section (arXiv 2602.11139, §7 and
+Appendix C) to get the reference signs the calibration is supposed to agree with. It changed
+the plan in four ways, one of which is a correction of my own work.
+
+**1. One of my four calibration knobs had no reference at all.** The plan listed
+`--row_rope_interleaved` as "a knob whose full-scale effect is already known from the
+TabICLv2 paper". It is not. RoPE interleaving is never ablated in the paper — I asserted a
+reference that does not exist. Removed. The published effects that *do* exist:
+
+| Component | Published effect | Reference model |
+|---|---|---|
+| Prior (v2 vs v1) | **Largest effect.** v2 architecture on the v1 prior *fails* — below TabICL, validation loss degrades in the second half | — |
+| Early target inclusion (`--col_target_aware`) | ~100 Elo, ~64% win rate | added to reference |
+| Muon instead of AdamW (`--muon`) | ~100 Elo, ~64% win rate | AdamW at lr 1e-4, regular weight decay |
+| QASSMax (`--col_ssmax`/`--icl_ssmax`) | ~100 Elo, ~64% win rate | reference has none |
+| Repeated feature grouping, prior filtering | smaller gains | |
+| Gaussian noise on prior edges | negligible | |
+| Deeper model (4/4/18 layers) | no clear gain — "likely due to insufficient pretraining for the larger model to fully converge" | |
+
+**2. Those effects were measured at 280,000 steps, not 5,000.** The authors' ablations are
+56% of a full Stage 1 — 56x longer than the proxy the plan proposed — and they note that
+per-step validation "noise decreases as the learning rate decays", i.e. early training is
+the noisiest part to read.
+
+**3. Our evaluation suite cannot see effects of this size.** The paper evaluates on 60
+datasets x 2 splits. Ours has 10, of which 2 are saturated (BM-07), leaving 8. For a true
+64% win rate:
+
+| Datasets | Wins needed for p < 0.05 | True 64% effect clears it |
+|---|---|---|
+| **8 (ours)** | **7** | **15% of the time** |
+| 20 | 15 | 22% |
+| 40 | 26 | 52% |
+| 60 (paper) | 37 | 70% |
+
+A sign test is the least powerful choice — paired tests on continuous log-loss differences
+do better — but the order of magnitude is not in doubt. **With 8 datasets, 85% of real
+~100-Elo effects would read as nothing.** Running the calibration on this suite could not
+distinguish "the proxy works" from "the proxy is noise", which is the only question it exists
+to answer.
+
+**4. A proxy will systematically *under*-estimate capacity changes.** The depth ablation found
+no clear gain *because the larger model had not converged* at 280K steps. A 5K-step proxy is
+far more convergence-starved than that. So a proxy result for **TP-06** (doubled width) is
+not merely noisy — it is **biased against** the change. A proxy "no" on TP-06 must not be
+read as a real "no".
+
+#### What changes
+
+- **BM-03 must grow to ~40–60 datasets before BM-06 runs.** That is the new gate, and it is
+  CPU work. Recorded as **BM-08**.
+- The calibration knobs become **target-aware, Muon, and QASSMax** — the three with a
+  published ~100-Elo reference — plus the control. RoPE is dropped.
+- The AdamW arm must use **lr 1e-4 with regular weight decay**, per the paper, not the Muon
+  learning rate of 8e-4.
+- Read results with a **paired test on log-loss**, not a sign test on accuracy.
+- Phase 3 capacity items get a **standing caveat**: a proxy can reject them wrongly.
+
+Cost of discovering all of this: **$0.03** (one broken community pod) and reading a paper.
+The calibration as specified would have cost $35–80 and returned an uninterpretable answer.
+
 ### Two bugs found by running it
 
 - **`NJOBS = cpu_count - 2` is catastrophic on a large pod.** 128 vCPUs gave 126 prior-worker
