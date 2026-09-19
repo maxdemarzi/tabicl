@@ -334,7 +334,14 @@ class TransformToNumerical(TransformerMixin, BaseEstimator):
         cat_tfm = OrdinalEncoder(
             dtype=np.int64, handle_unknown="use_encoded_value", unknown_value=-1, encoded_missing_value=-1
         )
-        num_tfm = SimpleImputer()
+        # keep_empty_features=True is load-bearing. By default SimpleImputer silently DROPS any
+        # column with no observed values during fit, so an all-NaN column vanishes here while
+        # the caller's `feature_mask` -- which exists precisely to handle all-NaN columns, and
+        # is built in the original feature space -- still counts it. The two then disagree by
+        # one and predict fails with "boolean index did not match indexed array". Keeping the
+        # column lets the mask do the job it was written for. Reproduced on OpenML `sick`
+        # (CC18), whose TBG column is entirely missing.
+        num_tfm = SimpleImputer(keep_empty_features=True)
 
         if not hasattr(X, "columns"):  # proxy way to check whether X is a dataframe without importing pandas
             # no dataframe, so we can't do column-wise transformations. Instead, we check if it's already numeric and if not, raise an error.

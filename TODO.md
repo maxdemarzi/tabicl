@@ -339,6 +339,18 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       evaluation step could not have measured anything but the released model.** Added
       `--model-path`.
 
+- [x] **BUG-02** *Fixed.* Any dataset with an **entirely-missing column crashed at predict
+      time**: `IndexError: boolean index did not match indexed array`. `SimpleImputer` drops
+      all-missing columns during fit by default, while the estimators build a `feature_mask`
+      of all-NaN columns in the *original* feature space precisely so they can be masked —
+      the two disagreed by one column. `keep_empty_features=True` lets the mask do the job it
+      was written for. Found because OpenML `sick` (in CC18) has an all-NaN `TBG` column and
+      failed every fold of the BM-06 anchor evaluation. **Pre-existing** — verified on the
+      code from before any change on this branch. 7 regression tests.
+      **Effect on the running BM-06:** none on validity. The pod has the unfixed copy, so
+      `sick` fails identically for every arm and is dropped symmetrically; comparisons run on
+      61 datasets rather than 62.
+
 - [ ] **CAVEAT-01** A proxy is **biased against capacity increases**, not just noisy. TabICLv2's
       own deeper-model ablation showed no clear gain at 280K steps "likely due to insufficient
       pretraining for the larger model to fully converge". A 5K-step proxy is far more
