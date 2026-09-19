@@ -129,7 +129,11 @@ def main(argv=None) -> int:
         return 0
     held = first_agree is not None and all(a for s, a, _ in verdicts if s >= first_agree)
     last_step, _, last_opposite = verdicts[-1]
-    if held:
+    if held and len(verdicts) < 3:
+        # "Holds at every later checkpoint" is vacuous with nothing later to hold at.
+        print(f"VERDICT (PROVISIONAL, {len(verdicts)} checkpoint(s)): the published sign appears at "
+              f"step {first_agree}. Persistence cannot be judged until more checkpoints are scored.")
+    elif held:
         print(f"VERDICT: the proxy reproduces the published sign from step {first_agree} onward. "
               f"Ablations can be screened at >= {first_agree} steps.")
     elif first_agree is not None:

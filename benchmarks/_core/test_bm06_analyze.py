@@ -85,3 +85,10 @@ def test_too_few_shared_datasets_does_not_produce_a_verdict_row(tmp_path):
     with redirect_stdout(buf):
         main([str(path)])
     assert "too few datasets" in buf.getvalue()
+
+
+def test_a_single_checkpoint_is_only_provisional(tmp_path):
+    """Persistence is undefined with one checkpoint; the verdict must not claim it."""
+
+    v = _verdict(_ledger(tmp_path, {2500: 0.04}, seed=5))
+    assert "PROVISIONAL" in v and "onward" not in v
