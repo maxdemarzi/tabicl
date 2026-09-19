@@ -151,7 +151,7 @@ def create_body(args: argparse.Namespace) -> dict:
         "imageName": args.image,
         "gpuTypeIds": [args.gpu, *([] if args.no_alternates else _alternates(args))],
         "gpuTypePriority": "availability",
-        "gpuCount": 1,
+        "gpuCount": getattr(args, "gpu_count", 1),
         "cloudType": args.cloud,
         "computeType": "GPU",
         "interruptible": args.spot,
@@ -387,7 +387,9 @@ def cmd_plan(args: argparse.Namespace) -> int:
     print(f"          alternates in priority order: "
           f"{', '.join(_alternates(args)) if not args.no_alternates else '(none)'}")
     print(f"          stock right now: {live.get('stockStatus') or 'NONE AVAILABLE'}")
-    print(f"  cost    ${rate}/hr GPU + ~${disk:.3f}/hr disk "
+    if rate:
+        rate = round(rate * getattr(args, "gpu_count", 1), 4)
+    print(f"  cost    ${rate}/hr GPU (x{getattr(args, 'gpu_count', 1)}) + ~${disk:.3f}/hr disk "
           f"({args.container_disk} GB container + {args.volume} GB volume)")
     if rate:
         print(f"          = ~${rate + disk:.2f}/hr, ~${(rate + disk) * 24:.2f}/day if left running")
@@ -569,6 +571,10 @@ def main() -> int:
                          help="interruptible; cheaper, and can be reclaimed mid-run")
         sub.add_argument("--container-disk", type=int, default=CONTAINER_DISK_GB)
         sub.add_argument("--volume", type=int, default=VOLUME_GB)
+        sub.add_argument("--gpu-count", type=int, default=1,
+                         help="GPUs on the pod. Independent arms of one comparison belong on ONE "
+                              "multi-GPU pod: same host, same card, same driver, so the only "
+                              "difference between them is the thing being ablated.")
         sub.add_argument("--no-alternates", action="store_true",
                          help="fail rather than substitute a different card")
 
