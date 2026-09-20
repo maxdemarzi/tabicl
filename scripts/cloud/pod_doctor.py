@@ -227,9 +227,15 @@ def main() -> int:
         print("\nFAIL: no CUDA device. This pod cannot run training or the BM-02 sweep.")
         return 1
     if nccl.get("checked") and not nccl.get("ok"):
-        print("\nFAIL: NCCL cannot all-reduce across this pod's GPUs. Multi-GPU training would "
-              "hang at the first collective. Replace the pod.")
-        return 1
+        # Fatal only when the caller intends multi-GPU. A run with one GPU per arm forms no
+        # process group, so a host that cannot all-reduce is still perfectly usable for it.
+        if os.environ.get("REQUIRE_NCCL", "1") == "1":
+            print("\nFAIL: NCCL cannot all-reduce across this pod's GPUs. Multi-GPU training "
+                  "would hang at the first collective. Replace the pod, or set REQUIRE_NCCL=0 "
+                  "if every arm runs on a single GPU.")
+            return 1
+        print("\nWARNING: NCCL is broken on this pod, but REQUIRE_NCCL=0 -- continuing. "
+              "Only single-GPU-per-arm work is safe here.")
     return 0
 
 

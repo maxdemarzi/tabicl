@@ -58,8 +58,17 @@ fi
 # 600 s NCCL timeout and aborts with SIGABRT. Observed exactly that. With arms whose shapes
 # happen to MATCH it is worse -- it would not fail, it would silently average gradients across
 # the two arms being compared.
-torchrun --nnodes=1 --nproc_per_node="$NUM_GPUS" \
-            --master_addr=127.0.0.1 --master_port="${MASTER_PORT:-29500}" -m tabicl.train \
+# With one GPU there is no process group to form, so run the module directly. That removes
+# NCCL from the picture completely -- worth doing, because two consecutive rented pods have
+# presented GPUs that pass every other check and still cannot all-reduce.
+if [ "$NUM_GPUS" = "1" ]; then
+    LAUNCH=(python -m tabicl.train)
+else
+    LAUNCH=(torchrun --nnodes=1 --nproc_per_node="$NUM_GPUS"
+            --master_addr=127.0.0.1 --master_port="${MASTER_PORT:-29500}" -m tabicl.train)
+fi
+
+"${LAUNCH[@]}" \
             --wandb_log False \
             --wandb_name "proxy_${ABLATION}_seed${SEED}" \
             --device cuda \
