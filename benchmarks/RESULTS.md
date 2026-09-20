@@ -183,6 +183,78 @@ worth trying:
 3. **Cut seeds from 3 to 2 for screening**, keeping 3 only for whatever survives to a
    full-scale run.
 
+### BM-06 — RESULT: the proxy reproduces the published sign (2026-09-20)
+
+**PASS.** Control (Muon) against AdamW, 20,000 steps, 4 GPUs per arm on one 8-GPU
+RTX PRO 6000 Blackwell pod, evaluated on `cc18_narrow` every 2,500 steps.
+**$116.94**, 6.9 h wall clock, pod terminated by the watcher after results were verified.
+
+| Step | Muon acc | AdamW acc | Muon log-loss | AdamW log-loss | AdamW worse on | p (Bonferroni) |
+|---|---|---|---|---|---|---|
+| 2,500 | 0.8558 | 0.8330 | 0.3292 | 0.3895 | 92.9% | ~0 |
+| 5,000 | 0.8577 | 0.8422 | 0.3208 | 0.3633 | 86.3% | ~0 |
+| 7,500 | 0.8619 | 0.8455 | 0.3143 | 0.3535 | 90.2% | ~0 |
+| 10,000 | 0.8644 | 0.8477 | 0.3079 | 0.3466 | 89.1% | ~0 |
+| 12,500 | 0.8656 | 0.8508 | 0.3052 | 0.3393 | 84.7% | ~0 |
+| 15,000 | 0.8660 | 0.8528 | 0.3025 | 0.3334 | 85.8% | ~0 |
+| 17,500 | 0.8667 | 0.8538 | 0.3000 | 0.3326 | 85.8% | ~0 |
+| **20,000** | **0.8673** | **0.8539** | **0.2995** | **0.3320** | **86.3%** | **~0** |
+
+The sign agrees at every checkpoint, on 61 datasets (`sick` excluded by BUG-02, identically
+for both arms). A short proxy run **can** detect an effect the paper measured at 280K steps,
+in the right direction.
+
+#### Three things the curve says that the plan did not anticipate
+
+**1. The gap does not converge toward the published 64%.** It falls once, 92.9% -> 86.3%, then
+plateaus between 84.7% and 90.2% for the remaining six checkpoints. The prediction recorded
+earlier — that this was purely Muon converging faster, and would decay toward 64% — is only
+right about the first step. Either the decay is far slower than implied (the log-loss gap is
+still drifting down, 0.060 -> 0.033) or the proxy genuinely magnifies this effect. **Treat
+proxy effect *sizes* as inflated; trust only the sign and the ordering.**
+
+**2. The proxy is a closer stand-in than expected.** Control reaches log-loss 0.2995 at 20K
+steps against the released checkpoint's 0.2798 on the same 61 datasets — within ~7%, from
+20K steps versus the full 500K-plus three-stage curriculum.
+
+**3. Screening can start early.** The sign is significant from the very first checkpoint at
+2,500 steps and never lapses. Combined with (1), read ablations at the **latest** checkpoint
+available, where the exaggeration is smallest.
+
+#### What this re-prices
+
+Measured: **$0.0029 per arm-step** (two 20,000-step arms, 8 GPUs, 6.9 h, $116.94).
+
+| Screen length | Cost per arm |
+|---|---|
+| 5,000 steps | ~$15 |
+| 10,000 steps | ~$29 |
+| 20,000 steps | ~$58 |
+
+Phase 2 was priced at ~$520 when a 25,000-step run on one GPU was the unit. Screening TP-01,
+TP-02 and TP-08 against a shared control at 10,000 steps is **~$115**, inside the current
+balance.
+
+#### A mistake worth recording: the checkpoints were destroyed
+
+`pod_finish.py` pulled the ledger, logs and `pod_doctor.json`, verified them, then terminated
+— which destroyed the volume holding every checkpoint, including the control arm's. The
+measurement survived, and that was the stated deliverable, but a *reusable control* did not.
+Future comparisons must now either re-run their own control (~$29 at 10K steps) or
+regenerate this one once.
+
+Ablation checkpoints should be pulled, or the pod stopped rather than terminated, whenever
+the trained weights themselves have onward value. Recorded as **BM-09**.
+
+#### What this does NOT establish
+
+Muon's advantage is substantially about convergence *speed*, which a short run flatters — it
+was chosen as the most favourable available test, so passing is necessary, not sufficient.
+Nothing here shows the proxy correctly ranks a change that learns slowly and finishes better,
+which is exactly what **TP-06** (doubled width) and possibly **TP-01** may be. **CAVEAT-01
+stands**, and point (1) above strengthens it. One seed, one of three published effects,
+classification only, stage 1 only.
+
 ### The calibration was not launched, and why (2026-09-19)
 
 Before spending on BM-06 I read TabICLv2's own ablation section (arXiv 2602.11139, §7 and

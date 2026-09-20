@@ -22,7 +22,7 @@ green for the first time on this branch.
 | ✅ | BM-01 | Harness complete: ledger, provenance, aggregation, resumable runner, datasets |
 | ✅ | TP-12 | Datetime + text preprocessing, shipped |
 | ✅ | BM-02, BM-03, BM-05 | **Baseline measured** on RTX PRO 6000 (the report's own card), $1.32 |
-| ⚠️ | BM-06 | **Not launched on purpose** — the old design could not answer its own question; redesigned, now gated on BM-08 (done) |
+| ✅ | BM-06 | **PASS** — proxy reproduces the published sign at all 8 checkpoints, $117. Phase 2 screening re-priced $520 → ~$115 |
 | ✅ | BM-08 | Eval suite 10 → 62 datasets (OpenML-CC18, mechanical rule) |
 | 🔧 | TP-01, TP-04 | Code + tests done, **off by default, untrained** |
 | 🔧 | TP-14 | Scoring rules done; needs the benchmark's dataset list |
@@ -350,6 +350,10 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       **Effect on the running BM-06:** none on validity. The pod has the unfixed copy, so
       `sick` fails identically for every arm and is dropped symmetrically; comparisons run on
       61 datasets rather than 62.
+
+- [ ] **BM-09** Pull ablation checkpoints, or `stop` rather than `terminate`, when the trained
+      weights have onward value. BM-06's control checkpoints were destroyed with the pod, so no
+      future ablation can reuse that control; each must re-run its own (~$29 at 10K steps).
 
 - [ ] **CAVEAT-01** A proxy is **biased against capacity increases**, not just noisy. TabICLv2's
       own deeper-model ablation showed no clear gain at 280K steps "likely due to insufficient
