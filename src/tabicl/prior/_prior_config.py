@@ -13,6 +13,11 @@ DEFAULT_FIXED_HP = {
     "multiclass_ordered_prob": 0.0,
     "cat_prob": 0.2,
     "max_categories": float("inf"),
+    # TP-08: probability that a column being made categorical gets a HIGH cardinality drawn
+    # log-uniformly from [min_high_categories, n_rows // 4] instead of the thin-tailed
+    # gamma. 0.0 reproduces the original prior exactly.
+    "high_card_prob": 0.0,
+    "min_high_categories": 50,
     "scale_by_max_features": False,
     "permute_features": True,
     "permute_labels": True,

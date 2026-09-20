@@ -281,6 +281,15 @@ def build_parser():
         type=str2bool,
         help="Whether to use SSMax in the column embedder (the variant is chosen by --ssmax_type)",
     )
+    parser.add_argument("--prior_high_card_prob", type=float, default=None,
+                        help="TP-08: probability that a column made categorical gets a HIGH cardinality, "
+                             "drawn log-uniformly from [--prior_min_high_categories, n_rows//4], instead "
+                             "of the thin-tailed gamma whose mean is 10. Default (None) leaves the prior "
+                             "bit-identical.")
+    parser.add_argument("--prior_min_high_categories", type=int, default=None,
+                        help="Lower end of the high-cardinality range for --prior_high_card_prob")
+    parser.add_argument("--prior_cat_prob", type=float, default=None,
+                        help="Probability a dataset has any categorical columns at all (prior default 0.2)")
     parser.add_argument("--qk_norm", default=False, type=str2bool,
                         help="TP-04: RMSNorm on queries and keys in every attention block "
                              "(stability prerequisite for wider models and joint multitask training)")

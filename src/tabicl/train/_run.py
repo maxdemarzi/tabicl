@@ -25,6 +25,7 @@ import wandb
 from tabicl._model.tabicl import TabICL
 from tabicl._model.attention import set_flash_attn3_enabled
 from tabicl.prior._dataset import PriorDataset
+from tabicl.prior._prior_config import DEFAULT_FIXED_HP
 from tabicl.prior._genload import LoadPriorDataset, seed_worker
 from tabicl.prior.graph_lib._config import PriorConfig
 from tabicl.train._optim import get_scheduler
@@ -272,7 +273,17 @@ class Trainer:
 
         if self.config.prior_dir is None:
             # Generate prior data on the fly
+            # Only override what was asked for, so an unset flag leaves the prior exactly as
+            # it was -- the control arm of a prior ablation must be bit-identical.
+            fixed_hp = dict(DEFAULT_FIXED_HP)
+            for key, value in (("high_card_prob", self.config.prior_high_card_prob),
+                               ("min_high_categories", self.config.prior_min_high_categories),
+                               ("cat_prob", self.config.prior_cat_prob)):
+                if value is not None:
+                    fixed_hp[key] = value
+
             dataset = PriorDataset(
+                fixed_hp=fixed_hp,
                 regression=self.regression,
                 batch_size=self.config.batch_size,
                 batch_size_per_gp=self.config.batch_size_per_gp,

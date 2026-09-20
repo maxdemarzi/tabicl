@@ -162,6 +162,39 @@ CC18_WIDE_IDS: Tuple[int, ...] = (300, 554, 1468, 1478, 1485, 4134, 40923, 40927
 
 SUITES["cc18_narrow"] = CC18_NARROW
 
+#: BM-10. Datasets whose categorical columns actually have high cardinality -- the regime
+#: TP-01, TP-02 and TP-08 all target and that CC18_NARROW does not contain at all (its most
+#: extreme column is `cylinder-bands` at 71 levels, and only 9 of its 62 datasets reach 10).
+#: Here the largest columns run to 15,415 levels.
+#:
+#: Rule fixed before any result and applied mechanically to active OpenML classification
+#: datasets: a categorical column with >= 100 distinct values, <= 500 features (the
+#: CC18_NARROW cap), >= 2,000 rows, <= 10 classes.
+#:
+#: NOT independent: the three KDDCup09_* tasks share one feature matrix and differ only in
+#: target, as do the ipums_la_9x variants. Effective sample size is nearer 8 than 13, so a
+#: paired test over this suite is less powerful than the count suggests. Report it alongside
+#: CC18_NARROW, never instead of it.
+HIGH_CARD: Tuple[DatasetSpec, ...] = (
+    DatasetSpec("ipums_la_99-small", 378, "classification", ('high_card',)),  # max 3890 levels, 8844 rows
+    DatasetSpec("ipums_la_98-small", 381, "classification", ('high_card',)),  # max 3594 levels, 7485 rows
+    DatasetSpec("ipums_la_97-small", 382, "classification", ('high_card',)),  # max 488 levels, 7019 rows
+    DatasetSpec("kdd_internet_usage", 981, "classification", ('high_card',)),  # max 129 levels, 10108 rows
+    DatasetSpec("kdd_ipums_la_97-small", 993, "classification", ('high_card',)),  # max 191 levels, 7019 rows
+    DatasetSpec("KDDCup09_appetency", 1111, "classification", ('high_card',)),  # max 15415 levels, 50000 rows
+    DatasetSpec("KDDCup09_churn", 1112, "classification", ('high_card',)),  # max 15415 levels, 50000 rows
+    DatasetSpec("KDDCup09_upselling", 1114, "classification", ('high_card',)),  # max 15415 levels, 50000 rows
+    DatasetSpec("musk", 1116, "classification", ('high_card',)),  # max 102 levels, 6598 rows
+    DatasetSpec("Amazon_employee_access", 4135, "classification", ('high_card',)),  # max 7518 levels, 32769 rows
+    DatasetSpec("Diabetes130US", 4541, "classification", ('high_card',)),  # max 790 levels, 101766 rows
+    DatasetSpec("rl", 41160, "classification", ('high_card',)),  # max 2580 levels, 31406 rows
+    DatasetSpec("kick", 41162, "classification", ('high_card',)),  # max 1063 levels, 72983 rows
+    DatasetSpec("okcupid-stem", 41440, "classification", ('high_card',)),  # max 7019 levels, 50789 rows
+)
+
+SUITES["high_card"] = HIGH_CARD
+
+
 
 
 def _cache_path(spec: DatasetSpec) -> Path:

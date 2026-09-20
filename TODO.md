@@ -201,7 +201,14 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       distribution-aware over each column and can in principle learn ECDF-like statistics. The
       case for making it explicit is that it is O(n log n), free, and — critically — cacheable.
       TP-02 must be ablated against the unmodified column embedder before we commit to it.
-- [ ] **TP-08** High-cardinality categoricals in the prior. At
+- [~] **TP-08** High-cardinality categoricals in the prior. *Code done, untrained.*
+      `high_card_prob` in [`_reg2cls.py`](src/tabicl/prior/_reg2cls.py) mixes a log-uniform
+      heavy tail into the cardinality draw, capped at `n_rows // 4` because
+      `MulticlassAssigner` takes its boundaries from the data and more levels than rows just
+      yields empty ones. Exposed as `--prior_high_card_prob` / `--prior_min_high_categories`
+      / `--prior_cat_prob`. **Defaults to 0.0 so the prior stays bit-identical** — a prior
+      ablation's control has to be. Measured: columns with >=100 levels go from ~1% to ~20%
+      at 0.25 and ~30% at 0.4; median levels 7 -> 19. 9 tests. Original note: At
       [`_reg2cls.py:333-341`](src/tabicl/prior/_reg2cls.py#L333-L341):
       `cat_prob=0.2`, and `num_cats = min(max(round(random.gammavariate(1, 10)), 2), max_categories)`
       has mean 10 — so hundreds-of-levels categoricals are essentially never generated. Note
@@ -359,7 +366,15 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       `sick` fails identically for every arm and is dropped symmetrically; comparisons run on
       61 datasets rather than 62.
 
-- [ ] **BM-10** The evaluation suite has no high-cardinality categorical data: across all 62
+- [x] **BM-10** *Done.* `HIGH_CARD` suite in
+      [`_core/datasets.py`](benchmarks/_core/datasets.py): 14 OpenML datasets chosen by a rule
+      fixed before any result — a categorical column with >=100 levels, <=500 features,
+      >=2000 rows, <=10 classes. Cardinalities reach **15,415** levels (`KDDCup09_*`), 7,518
+      (`Amazon_employee_access`), 7,019 (`okcupid-stem`), against CC18's maximum of 71. All
+      14 validated and cached. **Not independent** — the three `KDDCup09_*` tasks share a
+      feature matrix and differ only in target, as do the `ipums_la_9x` variants, so effective
+      n is nearer 8 than 14. Report it alongside `cc18_narrow`, never instead of it.
+      Original note: across all 62
       CC18 datasets the largest categorical column is 71 levels (`cylinder-bands`) and only 9
       reach 10 levels. TP-01, TP-02 and TP-08 all target hundreds-to-thousands of levels, so
       none of them can currently be measured. Needs a dedicated slice — OpenML has candidates

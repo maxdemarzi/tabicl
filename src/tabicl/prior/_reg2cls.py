@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import random
 import warnings
 
@@ -333,10 +334,29 @@ class Reg2Cls(nn.Module):
         if random.random() < self.hp.get("cat_prob", 0.2):
             col_prob = random.random()  # Probability for converting a specific column
             max_categories = self.hp.get("max_categories", 10)
+            # TP-08. `gammavariate(1, 10)` has mean 10 and a thin tail, so a column with
+            # hundreds of levels is essentially never generated -- yet that is exactly the
+            # regime the cell encoder is meant to resolve, and the TabPFN-3.5 report is
+            # explicit that they tuned the prior toward high cardinality *in conjunction
+            # with* their encoding change. `high_card_prob` mixes in a log-uniform heavy
+            # tail. It defaults to 0.0, so the prior is bit-identical unless asked.
+            high_card_prob = self.hp.get("high_card_prob", 0.0)
+            min_high = int(self.hp.get("min_high_categories", 50))
+            n_rows = X.shape[0]
+            # Never ask for more levels than the column can support: MulticlassAssigner draws
+            # rank boundaries from the data, so cardinality above the row count yields empty
+            # levels rather than a harder problem.
+            ceiling = min(max_categories, max(n_rows // 4, 2))
             for col in range(X.shape[1]):
                 if random.random() < col_prob:
-                    # Determine number of categories for this feature
-                    num_cats = min(max(round(random.gammavariate(1, 10)), 2), max_categories)
+                    if high_card_prob > 0 and random.random() < high_card_prob and ceiling > min_high:
+                        # Log-uniform over [min_high, ceiling]: every order of magnitude of
+                        # cardinality gets equal weight, rather than the largest dominating.
+                        num_cats = int(round(math.exp(random.uniform(math.log(min_high),
+                                                                     math.log(ceiling)))))
+                    else:
+                        num_cats = round(random.gammavariate(1, 10))
+                    num_cats = int(min(max(num_cats, 2), ceiling))
                     # Use MulticlassAssigner to convert this column
                     assigner = MulticlassAssigner(num_cats, mode="rank", ordered_prob=0.3)
                     X[:, col] = assigner(X[:, col]).float()
