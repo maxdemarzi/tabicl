@@ -56,13 +56,15 @@ def main(argv=None) -> int:
                     help="Direction the published result predicts for the TREATMENT. BM-06 asked "
                          "whether AdamW is worse; an improvement like TP-01 is expected better, and "
                          "reporting that as an 'opposite sign' would invert the conclusion.")
+    ap.add_argument("--eval-suite", default=None,
+                    help="Restrict to rows scored on this dataset suite")
     ap.add_argument("--slice", default=None,
                     help="Restrict to datasets whose cc18_narrow slices include this tag")
     args = ap.parse_args(argv)
 
     rows = list(Ledger(Path(args.ledger)))
-    ll = records_from_ledger(rows, metric="log_loss")
-    acc = records_from_ledger(rows, metric="accuracy")
+    ll = records_from_ledger(rows, metric="log_loss", suite=args.eval_suite)
+    acc = records_from_ledger(rows, metric="accuracy", suite=args.eval_suite)
     if not ll:
         print("no log_loss rows yet")
         return 1

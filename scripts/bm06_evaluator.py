@@ -49,15 +49,22 @@ def permanent_steps(ckpt_dir: Path, every: int) -> list[int]:
 
 def evaluate(arm: str, step: int, model_path: Path | None, args, gpu: str) -> int:
     config_id = f"{arm}-step{step}" if model_path else arm
+    rc = 0
+    for suite in args.suite:
+        rc |= _evaluate_one(suite, config_id, model_path, args, gpu)
+    return rc
+
+
+def _evaluate_one(suite: str, config_id: str, model_path: Path | None, args, gpu: str) -> int:
     cmd = [sys.executable, "-m", "benchmarks.suites.real_small",
-           "--suite", args.suite, "--run-id", args.run_id, "--config-id", config_id,
+           "--suite", suite, "--run-id", args.run_id, "--config-id", config_id,
            "--n-folds", str(args.n_folds), "--max-rows", str(args.max_rows),
            "--device", "cuda", "--ledger", args.ledger,
            "--checkpoint", str(model_path) if model_path else "released-v2"]
     if model_path:
         cmd += ["--model-path", str(model_path)]
     env = dict(os.environ, CUDA_VISIBLE_DEVICES=gpu)
-    print(f"[eval] {config_id} on gpu {gpu}", flush=True)
+    print(f"[eval] {config_id} / {suite} on gpu {gpu}", flush=True)
     return subprocess.call(cmd, env=env, cwd=args.repo)
 
 
@@ -67,7 +74,9 @@ def main() -> int:
                     help="name=ckpt_dir=gpu, e.g. control=/workspace/ckpt/c=0 (repeatable)")
     ap.add_argument("--every", type=int, default=2500)
     ap.add_argument("--final-step", type=int, required=True)
-    ap.add_argument("--suite", default="cc18_narrow")
+    ap.add_argument("--suite", action="append", default=None,
+                    help="Dataset suite to score on; repeat to score several. The ledger records "
+                         "the suite per row, so one config_id can span suites safely.")
     ap.add_argument("--run-id", default="BM-06-C")
     ap.add_argument("--n-folds", type=int, default=3)
     ap.add_argument("--max-rows", type=int, default=3000)
@@ -76,6 +85,7 @@ def main() -> int:
     ap.add_argument("--poll", type=float, default=120.0)
     ap.add_argument("--anchor", action="store_true", help="Also score the released checkpoint once")
     args = ap.parse_args()
+    args.suite = args.suite or ["cc18_narrow"]
 
     arms = []
     for spec in args.arm:

@@ -21,6 +21,7 @@ STEPS="${STEPS:-20000}"
 RUN_ID="${RUN_ID:?set RUN_ID}"
 ARM="${ARM:?set ARM}"
 ARM_EXTRA="${ARM_EXTRA:?set ARM_EXTRA}"
+CONTROL_EXTRA="${CONTROL_EXTRA:-}"
 ROOT="${ROOT:-/workspace}"
 GPUS_A="${GPUS_A:-0,1,2,3}"
 GPUS_B="${GPUS_B:-4,5,6,7}"
@@ -34,13 +35,16 @@ launch() {  # name gpus extra
     echo "launched $1 on gpus $2 ($NPER per arm)  extra='${3:-<none>}'"
 }
 
-launch control "$GPUS_A" ""
+# CONTROL_EXTRA holds whatever BOTH arms share. Putting the prior change in both arms and
+# varying only the encoder isolates the encoder: a control on the old prior would differ from
+# the treatment in two ways at once, and neither could be attributed.
+launch control "$GPUS_A" "${CONTROL_EXTRA:-}"
 launch "$ARM"  "$GPUS_B" "$ARM_EXTRA"
 
 setsid nohup python scripts/bm06_evaluator.py \
     --arm "control=$ROOT/ckpt/$RUN_ID-control=${GPUS_A%%,*}" \
     --arm "$ARM=$ROOT/ckpt/$RUN_ID-$ARM=${GPUS_B%%,*}" \
-    --every 2500 --final-step "$STEPS" --anchor \
+    --every 2500 --final-step "$STEPS" --anchor ${EVAL_SUITES:---suite cc18_narrow} \
     --run-id "$RUN_ID" --ledger "benchmarks/_results/${RUN_ID}.jsonl" \
     > "$ROOT/logs/evaluator.log" 2>&1 < /dev/null &
 echo "launched evaluator -> benchmarks/_results/${RUN_ID}.jsonl"
