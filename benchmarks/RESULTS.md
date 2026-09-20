@@ -183,6 +183,69 @@ worth trying:
 3. **Cut seeds from 3 to 2 for screening**, keeping 3 only for whatever survives to a
    full-scale run.
 
+### TP-01 — RESULT: no benefit at proxy scale, but the suite cannot test the claim (2026-09-20)
+
+**Null, and partly my own fault for screening it alone.** Control vs `--col_fourier_value True`,
+20,000 steps, 4 GPUs per arm, seed 42, same host/card. **$113.90**, 6.5 h. Checkpoints pulled
+this time (BM-09), so this control is reusable.
+
+`sick` now evaluates, so this run has **62 datasets** against BM-06's 61 — BUG-02's fix
+shipped in this payload.
+
+| Step | control ll | TP-01 ll | control acc | TP-01 acc | separated? |
+|---|---|---|---|---|---|
+| 2,500 | 0.3247 | 0.3385 | 0.8578 | 0.8529 | **TP-01 worse** (p=0.001) |
+| 5,000 | 0.3140 | 0.3133 | 0.8615 | 0.8628 | no |
+| 10,000 | 0.3061 | 0.3015 | 0.8645 | 0.8669 | no |
+| 15,000 | 0.2968 | 0.2968 | 0.8689 | 0.8687 | no |
+| **20,000** | **0.2946** | **0.2947** | **0.8699** | **0.8695** | **no** |
+
+TP-01 starts **behind** — it has to learn its frequency bank — draws level by 5,000, runs
+marginally ahead between 7,500 and 12,500, and finishes indistinguishable.
+
+#### The suite cannot test what this change is for
+
+The report credits Fourier encoding specifically for *"ordinal-encoded categorical variables
+with high cardinality"*. Sliced at step 20,000 by maximum categorical cardinality:
+
+| Slice | n | control ll | TP-01 ll | TP-01 better on | p |
+|---|---|---|---|---|---|
+| all | 62 | 0.2946 | 0.2947 | 40.3% | 0.81 |
+| has categoricals | 22 | 0.3713 | 0.3688 | 45.5% | 0.38 |
+| **max cardinality >= 10** | **9** | **0.3715** | **0.3672** | **66.7%** | **0.18** |
+| max cardinality >= 20 | 4 | 0.5235 | 0.5170 | 50.0% | — |
+| purely numeric | 40 | 0.2524 | 0.2539 | 37.5% | 0.92 |
+
+The direction is right where the mechanism predicts (66.7% on cardinality >= 10, and nothing
+or slightly negative on purely numeric data) — but **n = 9 and p = 0.18**. That is a hint, not
+evidence.
+
+The deeper problem is that **CC18 has no high-cardinality categorical data**. The most
+extreme column in all 62 datasets is `cylinder-bands` at 71 levels; only 9 datasets reach 10
+levels. TabPFN's claim is about hundreds to thousands of levels. **The evaluation set does not
+contain the regime the change targets**, so this run could not have detected the effect even
+if it is real.
+
+#### The screen was also mis-scoped, by my own earlier note
+
+TODO.md already said of TP-08: *"Ship with TP-01 — ordinal codes are exactly the case where
+value resolution matters, and the report is explicit that they tuned the prior toward high
+cardinality **in conjunction with** the encoding change."* I then screened TP-01 on its own.
+The prior currently generates categoricals with a mean of ~10 levels
+(`gammavariate(1, 10)`), so during training the encoder almost never saw the input
+distribution it exists to resolve. Testing the pair jointly is what the report's own account
+implies.
+
+#### Reading
+
+**Not "Fourier encoding does not work". "Not demonstrated, on a suite and a prior that both
+lack the data regime it targets."** Three things must change before a rerun is worth paying
+for: a high-cardinality evaluation slice, TP-08 in the prior, and the two screened together.
+
+Cost of learning this: $113.90 — and it is worth noting the null was cheap precisely because
+BM-06 had already established that the proxy can detect a real effect, so "no signal" here
+means something rather than nothing.
+
 ### BM-06 — RESULT: the proxy reproduces the published sign (2026-09-20)
 
 **PASS.** Control (Muon) against AdamW, 20,000 steps, 4 GPUs per arm on one 8-GPU

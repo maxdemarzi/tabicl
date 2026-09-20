@@ -165,7 +165,15 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
 
 ### Phase 2 — Cell encoding + prior (one retrain)
 
-- [~] **TP-01** Fourier value encoding. *Code done, untrained.*
+- [~] **TP-01** Fourier value encoding. **Screened 2026-09-20: null at 20K steps, but the
+      test could not see what the change is for.** Identical to control at step 20,000
+      (log-loss 0.2946 vs 0.2947 over 62 datasets); starts behind, catches up by 5K. On the
+      max-cardinality>=10 slice it is better on 66.7% of datasets — the predicted direction —
+      but n=9, p=0.18. CC18's most extreme categorical column has 71 levels where the claim
+      concerns hundreds; and the prior it trained against generates ~10 levels on average, so
+      the encoder never saw the distribution it exists to resolve. **Re-screen only after
+      TP-08 lands and a high-cardinality slice exists, and then screen the two together** —
+      as this file already said to do. See [RESULTS.md](benchmarks/RESULTS.md). *Code:*
       `FourierValueEncoder` in [`_model/layers.py`](src/tabicl/_model/layers.py), wired through
       `ColEmbedding` -> `TabICL` -> the training CLI as `--col_fourier_value` /
       `--col_fourier_freqs`, **off by default** so existing checkpoints load unchanged.
@@ -350,6 +358,13 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       **Effect on the running BM-06:** none on validity. The pod has the unfixed copy, so
       `sick` fails identically for every arm and is dropped symmetrically; comparisons run on
       61 datasets rather than 62.
+
+- [ ] **BM-10** The evaluation suite has no high-cardinality categorical data: across all 62
+      CC18 datasets the largest categorical column is 71 levels (`cylinder-bands`) and only 9
+      reach 10 levels. TP-01, TP-02 and TP-08 all target hundreds-to-thousands of levels, so
+      none of them can currently be measured. Needs a dedicated slice — OpenML has candidates
+      (`KDDCup09`, `porto-seguro`, `amazon_employee_access`, road-safety), and BeyondArena's
+      high-cardinality slice is the reference.
 
 - [ ] **BM-09** Pull ablation checkpoints, or `stop` rather than `terminate`, when the trained
       weights have onward value. BM-06's control checkpoints were destroyed with the pod, so no

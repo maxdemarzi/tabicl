@@ -52,6 +52,12 @@ def main(argv=None) -> int:
     ap.add_argument("--control", default="control")
     ap.add_argument("--treatment", default="adamw")
     ap.add_argument("--alpha", type=float, default=0.05)
+    ap.add_argument("--expect", choices=("worse", "better"), default="worse",
+                    help="Direction the published result predicts for the TREATMENT. BM-06 asked "
+                         "whether AdamW is worse; an improvement like TP-01 is expected better, and "
+                         "reporting that as an 'opposite sign' would invert the conclusion.")
+    ap.add_argument("--slice", default=None,
+                    help="Restrict to datasets whose cc18_narrow slices include this tag")
     args = ap.parse_args(argv)
 
     rows = list(Ledger(Path(args.ledger)))
@@ -65,11 +71,18 @@ def main(argv=None) -> int:
     anchor = "released-v2" if any(r.method == "released-v2" for r in ll) else None
 
     print(f"ledger: {args.ledger}")
-    print(f"question: is {args.treatment} WORSE than {args.control}? "
-          f"(published: yes, ~100 Elo / ~64% win rate at 280K steps)\n")
+    if args.slice:
+        from ._core.datasets import SUITES
+        keep = {d.name for d in SUITES["cc18_narrow"] if args.slice in d.slices}
+        ll = [r for r in ll if r.dataset in keep]
+        acc = [r for r in acc if r.dataset in keep]
+        print(f"slice: {args.slice} ({len(keep)} datasets in suite)")
+    want_worse = args.expect == "worse"
+    print(f"question: is {args.treatment} {'WORSE' if want_worse else 'BETTER'} than "
+          f"{args.control}?  (expected: yes)\n")
 
     hdr = (f"{'step':>6} {'n':>3} {'ctrl acc':>9} {'trt acc':>8} {'ctrl ll':>8} {'trt ll':>8} "
-           f"{'trt worse':>10} {'p raw':>8} {'p adj':>8}  verdict")
+           f"{'trt worse':>10} {'p raw':>8} {'p adj':>8}  verdict")  # 'trt worse' = share of datasets the control wins
     print(hdr)
     print("-" * len(hdr))
 
@@ -87,15 +100,14 @@ def main(argv=None) -> int:
             continue
 
         diff = np.array([dt[d] - dc[d] for d in common])  # >0 means treatment worse
+        hyp = "greater" if want_worse else "less"   # diff = treatment - control, on log-loss
+        opp = "less" if want_worse else "greater"
         try:
-            p_raw = stats.wilcoxon(diff, alternative="greater").pvalue
+            p_raw = stats.wilcoxon(diff, alternative=hyp).pvalue
+            p_opp = min(1.0, stats.wilcoxon(diff, alternative=opp).pvalue * n_tests)
         except ValueError:
-            p_raw = float("nan")
+            p_raw = p_opp = float("nan")
         p = min(1.0, p_raw * n_tests)  # Bonferroni across checkpoints
-        try:
-            p_opp = min(1.0, stats.wilcoxon(diff, alternative="less").pvalue * n_tests)
-        except ValueError:
-            p_opp = float("nan")
         worse = win_rate(sub, c, t, higher_is_better=False)  # share of datasets control wins
 
         ac = per_dataset([r for r in acc if r.method == c], c)
@@ -143,7 +155,8 @@ def main(argv=None) -> int:
         # A distinct and more serious outcome than "cannot see it": the proxy separates the
         # arms, confidently, in the direction the paper says is wrong.
         print(f"VERDICT: the proxy separates the arms in the OPPOSITE direction to the published "
-              f"result at step {last_step} ({args.treatment} better). It contradicts the paper -- "
+              f"result at step {last_step} ({args.treatment} "
+              f"{'better' if want_worse else 'worse'}). It contradicts the expectation -- "
               f"do not use it to screen, and check the arms were configured as intended.")
     else:
         print(f"VERDICT: no separation at corrected p < {args.alpha} by step {last_step}. "
