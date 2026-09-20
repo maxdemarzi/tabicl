@@ -15,6 +15,11 @@ Four things here are not cosmetic for this project:
 * **VRAM** decides how far up the BM-02 curve you can go before the KV cache stops fitting.
 * **CPU count** decides ``--n_jobs`` for prior generation, which is what actually feeds the
   GPU during proxy training.
+* **NCCL across every GPU** decides whether multi-GPU training can run at all. A rented pod
+  can present N healthy-looking GPUs where a subset cannot talk to each other: `nvidia-smi` is
+  clean, single-GPU work is fine, and the only symptom is that the first DDP collective hangs
+  for the full 600 s timeout and aborts with SIGABRT. That cost 25 minutes of a $12.54/hr pod
+  before it was diagnosed. Two minutes here is cheaper.
 * **which tabicl is importable** -- a PyPI wheel shadowing the checkout means the pod
   benchmarks released code while you think it is measuring your branch.
 
@@ -87,6 +92,47 @@ def _flash_attn_info(sm: int | None) -> dict:
     return out
 
 
+def _nccl_info(device_count: int) -> dict:
+    """All-reduce across every visible GPU, under a short timeout.
+
+    Run as a subprocess: a hung NCCL collective cannot be interrupted from inside the
+    process that issued it, so an in-process check would hang the doctor itself.
+    """
+
+    if device_count < 2:
+        return {"checked": False, "reason": "fewer than 2 GPUs"}
+
+    # torchrun takes a script path, not -c. Write one out rather than inlining.
+    script = (
+        "import torch, torch.distributed as dist\n"
+        "dist.init_process_group('nccl')\n"
+        "r = dist.get_rank()\n"
+        "t = torch.ones(8, device=f'cuda:{r}')\n"
+        "dist.all_reduce(t)\n"
+        "if r == 0:\n"
+        "    print('NCCL_OK', int(t[0].item()))\n"
+        "dist.destroy_process_group()\n"
+    )
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as fh:
+        fh.write(script)
+        probe = fh.name
+    cmd = ["torchrun", "--nnodes=1", f"--nproc_per_node={device_count}",
+           "--master_addr=127.0.0.1", "--master_port=29666", probe]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        return {"checked": True, "ok": False,
+                "error": f"all-reduce across {device_count} GPUs timed out -- this host cannot "
+                         f"run multi-GPU training"}
+    except Exception as exc:  # noqa: BLE001
+        return {"checked": True, "ok": False, "error": repr(exc)[:200]}
+    ok = "NCCL_OK" in out.stdout
+    return {"checked": True, "ok": ok,
+            "error": None if ok else (out.stderr[-400:] or "no NCCL_OK in output")}
+
+
 def _tabicl_info() -> dict:
     try:
         import tabicl
@@ -129,6 +175,7 @@ def main() -> int:
         "disk_free_gb": round(shutil.disk_usage("/").free / 1024**3, 1),
         "torch": torch_info,
         "flash_attn": _flash_attn_info(sm),
+        "nccl": _nccl_info(torch_info.get("device_count", 0)),
         "tabicl": _tabicl_info(),
     }
 
@@ -156,6 +203,14 @@ def main() -> int:
         print("flash-3   hardware capable, not installed "
               "(stage 2/3 will fall back; install flash-attn to match the recipe)")
 
+    nccl = report["nccl"]
+    if not nccl.get("checked"):
+        print(f"nccl      not checked ({nccl.get('reason')})")
+    elif nccl.get("ok"):
+        print(f"nccl      all-reduce OK across {torch_info.get('device_count')} GPUs")
+    else:
+        print(f"nccl      **FAILED** -- {nccl.get('error')}")
+
     tab = report["tabicl"]
     if not tab.get("importable"):
         print(f"tabicl    NOT IMPORTABLE -- {tab.get('error')}")
@@ -170,6 +225,10 @@ def main() -> int:
     # Non-zero when the pod cannot do the job it was rented for.
     if not torch_info.get("cuda_available"):
         print("\nFAIL: no CUDA device. This pod cannot run training or the BM-02 sweep.")
+        return 1
+    if nccl.get("checked") and not nccl.get("ok"):
+        print("\nFAIL: NCCL cannot all-reduce across this pod's GPUs. Multi-GPU training would "
+              "hang at the first collective. Replace the pod.")
         return 1
     return 0
 

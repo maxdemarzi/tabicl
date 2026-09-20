@@ -52,7 +52,14 @@ if ls "$CKPT_DIR"/step-*.ckpt >/dev/null 2>&1; then
     echo "resuming from existing checkpoints in $CKPT_DIR"
 fi
 
-torchrun --standalone --nproc_per_node="$NUM_GPUS" -m tabicl.train \
+# Explicit rendezvous endpoint, NOT --standalone. Two concurrent --standalone jobs can pick
+# the same rendezvous, and then ranks of one arm join the other's process group: with arms
+# whose parameter counts differ, DDP's _verify_param_shape_across_processes hangs for the full
+# 600 s NCCL timeout and aborts with SIGABRT. Observed exactly that. With arms whose shapes
+# happen to MATCH it is worse -- it would not fail, it would silently average gradients across
+# the two arms being compared.
+torchrun --nnodes=1 --nproc_per_node="$NUM_GPUS" \
+            --master_addr=127.0.0.1 --master_port="${MASTER_PORT:-29500}" -m tabicl.train \
             --wandb_log False \
             --wandb_name "proxy_${ABLATION}_seed${SEED}" \
             --device cuda \

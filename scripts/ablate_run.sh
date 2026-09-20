@@ -28,18 +28,21 @@ GPUS_B="${GPUS_B:-4,5,6,7}"
 NPER=$(echo "$GPUS_A" | tr ',' '\n' | wc -l | tr -d ' ')
 mkdir -p "$ROOT/logs"
 
-launch() {  # name gpus extra
-    setsid nohup env CUDA_VISIBLE_DEVICES="$2" STEPS="$STEPS" ABLATION="$1" SEED=42 \
+MASTER_PORT_A="${MASTER_PORT_A:-29511}"
+MASTER_PORT_B="${MASTER_PORT_B:-29521}"
+
+launch() {  # name gpus extra port
+    setsid nohup env CUDA_VISIBLE_DEVICES="$2" MASTER_PORT="$4" STEPS="$STEPS" ABLATION="$1" SEED=42 \
         NUM_GPUS="$NPER" NJOBS=16 CKPT_DIR="$ROOT/ckpt/$RUN_ID-$1" EXTRA="$3" \
         bash scripts/train_proxy.sh > "$ROOT/logs/train-$1.log" 2>&1 < /dev/null &
-    echo "launched $1 on gpus $2 ($NPER per arm)  extra='${3:-<none>}'"
+    echo "launched $1 on gpus $2 port $4 ($NPER per arm)  extra='${3:-<none>}'"
 }
 
 # CONTROL_EXTRA holds whatever BOTH arms share. Putting the prior change in both arms and
 # varying only the encoder isolates the encoder: a control on the old prior would differ from
 # the treatment in two ways at once, and neither could be attributed.
-launch control "$GPUS_A" "${CONTROL_EXTRA:-}"
-launch "$ARM"  "$GPUS_B" "$ARM_EXTRA"
+launch control "$GPUS_A" "${CONTROL_EXTRA:-}" "$MASTER_PORT_A"
+launch "$ARM"  "$GPUS_B" "$ARM_EXTRA" "$MASTER_PORT_B"
 
 setsid nohup python scripts/bm06_evaluator.py \
     --arm "control=$ROOT/ckpt/$RUN_ID-control=${GPUS_A%%,*}" \
