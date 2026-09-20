@@ -283,7 +283,7 @@ class Trainer:
                     fixed_hp[key] = value
 
             dataset = PriorDataset(
-                fixed_hp=fixed_hp,
+                scm_fixed_hp=fixed_hp,  # PriorDataset names it scm_fixed_hp; it forwards to SCMPrior
                 regression=self.regression,
                 batch_size=self.config.batch_size,
                 batch_size_per_gp=self.config.batch_size_per_gp,
