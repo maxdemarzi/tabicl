@@ -89,6 +89,7 @@ class Encoder(nn.Module):
         ssmax: Union[bool, str] = False,
         zero_init: bool = True,
         qk_norm: bool = False,
+        num_kv_heads: Optional[int] = None,
         recompute: bool = False,
     ):
         super().__init__()
@@ -108,6 +109,7 @@ class Encoder(nn.Module):
                     bias_free_ln=bias_free_ln,
                     ssmax=ssmax,
                     qk_norm=qk_norm,
+                    num_kv_heads=num_kv_heads,
                     zero_init=zero_init,
                 )
                 for _ in range(num_blocks)

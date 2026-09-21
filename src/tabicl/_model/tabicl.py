@@ -60,6 +60,15 @@ class TabICL(nn.Module):
         If True, computes embeddings as: :math:`\\text{features} \\times W + b`.
         If False, directly uses the set transformer output as embeddings.
 
+    icl_num_kv_heads : int, optional
+        TP-05: number of key/value heads in the in-context transformer. Fewer than
+        ``icl_nhead`` shrinks the KV cache by ``icl_nhead / icl_num_kv_heads`` -- the cache is
+        dominated by these blocks, measured at 24 KiB per training row per estimator in fp16,
+        which is what bounds cached inference (``benchmarks/RESULTS.md``). Keys and values are
+        expanded back to full width for the attention itself, so the computation is unchanged.
+        Uses separate q/kv projections instead of the packed one, so checkpoints are not
+        interchangeable; None keeps standard attention.
+
     qk_norm : bool, default=False
         TP-04: apply RMSNorm to queries and keys in every attention block. The TabPFN-3.5
         report adds this specifically to keep training stable at the larger model width and
@@ -174,6 +183,7 @@ class TabICL(nn.Module):
         col_nhead: int = 8,
         col_num_inds: int = 128,
         col_affine: bool = False,
+        icl_num_kv_heads: Optional[int] = None,
         qk_norm: bool = False,
         col_fourier_value: bool = False,
         col_fourier_freqs: int = 32,
@@ -310,6 +320,7 @@ class TabICL(nn.Module):
             ssmax=icl_ssmax,
             zero_init=zero_init,
             qk_norm=qk_norm,
+            num_kv_heads=icl_num_kv_heads,
             recompute=recompute,
         )
 

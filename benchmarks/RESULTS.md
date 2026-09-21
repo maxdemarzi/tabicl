@@ -183,6 +183,58 @@ worth trying:
 3. **Cut seeds from 3 to 2 for screening**, keeping 3 only for whatever survives to a
    full-scale run.
 
+### TP-05 — grouped-query attention: ~7.6x smaller cache, measured, no GPU needed (2026-09-21)
+
+**Implemented and measured for $0.** TP-05's headline benefit is memory, not accuracy, and
+memory is an architectural fact — it can be measured on an untrained model. Only the
+accuracy-neutrality needs a training run, which has not been done.
+
+Keys and values in the in-context transformer are projected to `icl_num_kv_heads` heads
+instead of `icl_nhead`. That smaller tensor is what gets **cached**; it is expanded back to
+full width immediately before the attention call, so the arithmetic is unchanged and only the
+stored tensors shrink. Off by default — separate q/kv projections replace the packed one, so
+checkpoints are not interchangeable.
+
+#### The cache has two parts, and only one of them scales with rows
+
+This corrects a sloppy reading of the earlier BM-02 result. Measured at 100 features:
+
+| Component | Size | Scales with |
+|---|---|---|
+| column cache | 40.9 MB | **features only** — it holds inducing points, so it is fixed in rows |
+| ICL cache | 49 KiB/row (fp32) | **rows** — 12 blocks x 2 x 512 dim, = 24 KiB/row/estimator in fp16 |
+
+That per-row figure is exactly the 24 KiB/row/estimator measured on the released model on a
+Blackwell, so the two measurements agree.
+
+GQA shrinks the ICL part by `nhead / num_kv_heads` and leaves the column part alone, so the
+**total** reduction depends on how the two compare — which depends on training-set size:
+
+| n_train (100 features) | cache | with `icl_num_kv_heads=1` | reduction |
+|---|---|---|---|
+| 512 | 66 MB | 44 MB | 1.50x |
+| 2,048 | 142 MB | 53 MB | 2.65x |
+| 8,192 | 444 MB | 91 MB | 4.86x |
+| 100,000 *(extrapolated)* | 4.6 GiB | 0.6 GiB | **7.56x** |
+| 500,000 *(extrapolated)* | 22.9 GiB | 2.9 GiB | **7.91x** |
+
+At small training sets the fixed column cache dominates and the reduction looks poor; at the
+sizes that actually strain memory it approaches the full 8x. Anyone benchmarking this on a
+toy dataset would conclude it barely helps.
+
+#### It also removes 20% of the parameters
+
+27,552,258 -> 22,036,482 at `icl_num_kv_heads=1`. Separate q and kv projections cost less than
+the packed qkv they replace. This only holds because the now-unused packed `in_proj_weight`
+that `nn.MultiheadAttention` allocates is explicitly deleted; left in place it was never read
+and still added 4M parameters, turning a 5.5M saving into a 4M cost.
+
+#### What remains
+
+Accuracy is untested — that needs a training run. But the practical consequence is already
+concrete: it lifts the `kv_cache="kv"` ceiling from ~400-500K training rows on a 96 GB card to
+roughly 3-4M, and it is the prerequisite for TP-06, which would otherwise double the cache.
+
 ### TP-01 + TP-08 joint screen — RESULT: still no benefit, now on the right data (2026-09-21)
 
 **Second null, and this time the objections to the first one were removed.** Control vs

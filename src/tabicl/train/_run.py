@@ -208,6 +208,7 @@ class Trainer:
             "col_num_inds": self.config.col_num_inds,
             "col_affine": self.config.col_affine,
             "qk_norm": self.config.qk_norm,
+            "icl_num_kv_heads": self.config.icl_num_kv_heads,
             "col_fourier_value": self.config.col_fourier_value,
             "col_fourier_freqs": self.config.col_fourier_freqs,
             "col_feature_group": self.config.col_feature_group,

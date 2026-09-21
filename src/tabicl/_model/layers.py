@@ -284,7 +284,8 @@ class MultiheadAttention(nn.MultiheadAttention):
     """
 
     def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.0,
-                 ssmax: Union[bool, str] = False, qk_norm: bool = False):
+                 ssmax: Union[bool, str] = False, qk_norm: bool = False,
+                 num_kv_heads: Optional[int] = None):
         super().__init__(embed_dim, num_heads, dropout, batch_first=True)
         if isinstance(ssmax, bool):
             ssmax = "qassmax-mlp-elementwise" if ssmax else "none"
@@ -292,6 +293,30 @@ class MultiheadAttention(nn.MultiheadAttention):
         # TP-04: RMSNorm on queries and keys, shared between the two so that a cached key and
         # a freshly computed one are normalized identically.
         self.qk_norm = RMSNorm(embed_dim // num_heads) if qk_norm else None
+
+        # TP-05: grouped-query attention. With num_kv_heads < num_heads the cached keys and
+        # values shrink by num_heads / num_kv_heads, which is what bounds cached inference --
+        # measured at 24 KiB per training row per estimator in fp16 (benchmarks/RESULTS.md).
+        # Separate projections replace the packed in_proj, so a checkpoint trained one way
+        # cannot load the other; off by default.
+        self.num_kv_heads = num_kv_heads
+        if num_kv_heads is not None and num_kv_heads != num_heads:
+            if num_heads % num_kv_heads != 0:
+                raise ValueError(f"num_heads ({num_heads}) must be divisible by "
+                                 f"num_kv_heads ({num_kv_heads})")
+            head_dim = embed_dim // num_heads
+            self.q_proj = nn.Linear(embed_dim, embed_dim)
+            self.kv_proj = nn.Linear(embed_dim, 2 * num_kv_heads * head_dim)
+            # nn.MultiheadAttention has already allocated the packed in_proj. Left in place it
+            # is never read and still occupies 3 * embed_dim^2 per block in every checkpoint --
+            # here that was +4M parameters where GQA should have REMOVED 5.5M. Drop it.
+            del self.in_proj_weight
+            self.register_parameter("in_proj_weight", None)
+            if self.in_proj_bias is not None:
+                del self.in_proj_bias
+                self.register_parameter("in_proj_bias", None)
+        else:
+            self.q_proj = self.kv_proj = None
 
     def forward(
         self,
@@ -389,6 +414,9 @@ class MultiheadAttention(nn.MultiheadAttention):
             rope=rope,
             ssmax_layer=self.ssmax_layer,
             qk_norm=self.qk_norm,
+            q_proj=self.q_proj,
+            kv_proj=self.kv_proj,
+            num_kv_heads=self.num_kv_heads,
             need_kv=need_kv,
         )
 
@@ -449,6 +477,7 @@ class MultiheadAttentionBlock(nn.TransformerEncoderLayer):
         ssmax: Union[bool, str] = False,
         zero_init: bool = True,
         qk_norm: bool = False,
+        num_kv_heads: Optional[int] = None,
     ):
         super().__init__(
             d_model, nhead, dim_feedforward, dropout, activation=activation, norm_first=norm_first, batch_first=True
@@ -458,7 +487,8 @@ class MultiheadAttentionBlock(nn.TransformerEncoderLayer):
             self.norm2 = nn.LayerNorm(d_model, bias=False)
 
         del self.self_attn
-        self.attn = MultiheadAttention(d_model, nhead, dropout, ssmax, qk_norm=qk_norm)
+        self.attn = MultiheadAttention(d_model, nhead, dropout, ssmax, qk_norm=qk_norm,
+                                       num_kv_heads=num_kv_heads)
         if zero_init:
             self.init_weights()
 

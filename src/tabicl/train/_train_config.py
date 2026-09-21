@@ -290,6 +290,9 @@ def build_parser():
                         help="Lower end of the high-cardinality range for --prior_high_card_prob")
     parser.add_argument("--prior_cat_prob", type=float, default=None,
                         help="Probability a dataset has any categorical columns at all (prior default 0.2)")
+    parser.add_argument("--icl_num_kv_heads", type=int, default=None,
+                        help="TP-05: key/value heads in the ICL transformer (default: same as "
+                             "--icl_nhead). Fewer shrinks the KV cache proportionally.")
     parser.add_argument("--qk_norm", default=False, type=str2bool,
                         help="TP-04: RMSNorm on queries and keys in every attention block "
                              "(stability prerequisite for wider models and joint multitask training)")

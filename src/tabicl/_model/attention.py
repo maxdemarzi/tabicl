@@ -166,6 +166,9 @@ def multi_head_attention_forward(
     rope: Optional[RotaryEmbedding] = None,
     ssmax_layer: Optional[nn.Module] = None,
     qk_norm: Optional[nn.Module] = None,
+    q_proj: Optional[nn.Module] = None,
+    kv_proj: Optional[nn.Module] = None,
+    num_kv_heads: Optional[int] = None,
     need_kv: bool = False,
 ) -> Union[Tensor, Tuple[Tensor, Tensor, Tensor]]:
     """Multi-head attention with support for rotary position embeddings.
@@ -260,10 +263,23 @@ def multi_head_attention_forward(
             raise ValueError("key and value must be provided when cached_kv is None")
         src_len = key.shape[-2]
         assert key.shape == value.shape, f"key shape {key.shape} does not match value shape {value.shape}"
-        q, k, v = F._in_projection_packed(query, key, value, in_proj_weight, in_proj_bias)
-        q = q.view(*batch_shape, tgt_len, num_heads, head_dim).transpose(-3, -2)
-        k = k.view(*batch_shape, src_len, num_heads, head_dim).transpose(-3, -2)
-        v = v.view(*batch_shape, src_len, num_heads, head_dim).transpose(-3, -2)
+        if kv_proj is not None:
+            # Grouped-query attention (TP-05). Keys and values are projected to
+            # `num_kv_heads` heads instead of `num_heads`, and THAT is what gets cached --
+            # the cache is the point. They are expanded back to `num_heads` just before the
+            # attention call, so the computation is unchanged and only the stored tensors
+            # shrink, by num_heads / num_kv_heads.
+            q = q_proj(query)
+            kv = kv_proj(key)
+            k, v = kv.chunk(2, dim=-1)
+            q = q.view(*batch_shape, tgt_len, num_heads, head_dim).transpose(-3, -2)
+            k = k.view(*batch_shape, src_len, num_kv_heads, head_dim).transpose(-3, -2)
+            v = v.view(*batch_shape, src_len, num_kv_heads, head_dim).transpose(-3, -2)
+        else:
+            q, k, v = F._in_projection_packed(query, key, value, in_proj_weight, in_proj_bias)
+            q = q.view(*batch_shape, tgt_len, num_heads, head_dim).transpose(-3, -2)
+            k = k.view(*batch_shape, src_len, num_heads, head_dim).transpose(-3, -2)
+            v = v.view(*batch_shape, src_len, num_heads, head_dim).transpose(-3, -2)
         # QK-norm (TP-04), on the per-head vectors and BEFORE RoPE. Ordering matters for the
         # cache: `k` is returned below and stored, so it is cached normed-and-roped -- exactly
         # what a freshly computed key would be. The cached branch therefore must NOT re-apply
@@ -278,9 +294,12 @@ def multi_head_attention_forward(
         # Use cached K/V, project Q only
         k, v = cached_kv.key, cached_kv.value
         src_len = k.shape[-2]
-        q_proj_weight = in_proj_weight[:embed_dim]
-        q_proj_bias = in_proj_bias[:embed_dim] if in_proj_bias is not None else None
-        q = F.linear(query, q_proj_weight, q_proj_bias)
+        if kv_proj is not None:
+            q = q_proj(query)
+        else:
+            q_proj_weight = in_proj_weight[:embed_dim]
+            q_proj_bias = in_proj_bias[:embed_dim] if in_proj_bias is not None else None
+            q = F.linear(query, q_proj_weight, q_proj_bias)
         q = q.view(*batch_shape, tgt_len, num_heads, head_dim).transpose(-3, -2)
         # `k` from the cache was already normed before it was stored -- see above.
         if qk_norm is not None:
@@ -324,8 +343,17 @@ def multi_head_attention_forward(
         else:
             attn_mask = attn_mask + key_padding_mask
 
+    # Expand grouped KV heads to full width for the attention itself. Done here, after the
+    # cache has been populated (fresh path) or read (cached path), so the saving is in the
+    # stored tensors rather than in the arithmetic.
+    k_att, v_att = k, v
+    if k_att.shape[-3] != num_heads:
+        repeat = num_heads // k_att.shape[-3]
+        k_att = k_att.repeat_interleave(repeat, dim=-3)
+        v_att = v_att.repeat_interleave(repeat, dim=-3)
+
     attn_output = sdpa_with_flattened_batch(
-        q, k, v, attn_mask, dropout_p, ssmax_layer=ssmax_layer
+        q, k_att, v_att, attn_mask, dropout_p, ssmax_layer=ssmax_layer
     )  # (..., nh, tgt_len, hs)
 
     # Reshape and project output

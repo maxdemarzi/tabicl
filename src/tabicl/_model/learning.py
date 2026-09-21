@@ -85,6 +85,7 @@ class ICLearning(nn.Module):
         ssmax: Union[bool, str] = False,
         zero_init: bool = True,
         qk_norm: bool = False,
+        num_kv_heads: Optional[int] = None,
         recompute: bool = False,
     ):
         super().__init__()
@@ -104,6 +105,7 @@ class ICLearning(nn.Module):
             ssmax=ssmax,
             zero_init=zero_init,
             qk_norm=qk_norm,
+            num_kv_heads=num_kv_heads,
             recompute=recompute,
         )
         if self.norm_first:

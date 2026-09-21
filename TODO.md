@@ -249,7 +249,17 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       [`_model/`](src/tabicl/_model/). TabPFN added RMSNorm on queries and keys in attention
       blocks, LayerNorm after the input encoding, and RMSNorm before the task head — specifically
       to stabilize the wider model *and* joint multitask training. Prerequisite for TP-06 and TP-07.
-- [ ] **TP-05** Grouped-query attention for test rows. TabPFN keeps test rows attending through a
+- [~] **TP-05** Grouped-query attention. *Implemented and measured, untrained.*
+      `icl_num_kv_heads` on `TabICL` / `--icl_num_kv_heads`, off by default. **~7.6x smaller
+      cache at 100K training rows and 7.9x at 500K**, measured on CPU for $0 — the benefit is
+      architectural, so it needs no GPU. Also **removes 20% of the parameters** (27.55M ->
+      22.04M), which required explicitly deleting the packed `in_proj_weight` that
+      `nn.MultiheadAttention` allocates; left in place it turned a 5.5M saving into a 4M cost.
+      22 tests, including cached-vs-uncached equivalence across every combination of GQA and
+      QK-norm. Corrects an earlier sloppy reading: the cache has a column part that is fixed in
+      rows (inducing points) and an ICL part that scales with rows, so the total reduction is
+      only ~1.5x at 512 rows and approaches 8x at realistic sizes. *Remaining:* accuracy, which
+      needs a training run. Original note: TabPFN keeps test rows attending through a
       *single* 64-dim KV head, so cache size and cached-predict latency stay flat as `d_model`
       doubles — their Figure 7 shows TabPFN-3.5 and TabPFN-3 single-test-row times aligning
       exactly. [`kv_cache.py`](src/tabicl/_model/kv_cache.py) caches full MHA K/V today, so
