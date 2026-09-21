@@ -31,13 +31,14 @@ echo
 echo "--- installing tabicl (editable) + pretrain/test extras ---"
 python -m pip install -q -e ".[pretrain,test]" 2>&1 | tail -5
 
-# FlashAttention-3 is Hopper+ only and is a separate, slow build. Opt in explicitly:
+# FlashAttention-3 is Hopper+ only and is a separate, slow source build. Opt in explicitly:
 #   INSTALL_FA3=1 bash runpod_bootstrap.sh
+# This used to `pip install flash-attn`, which is FA2 -- the code imports FA3 as
+# `flash_attn_interface`, so that installed the wrong library and fell back silently.
 if [[ "${INSTALL_FA3:-0}" == "1" ]]; then
     echo
-    echo "--- installing flash-attn (slow; Hopper+ only) ---"
-    python -m pip install -q flash-attn --no-build-isolation 2>&1 | tail -5 || \
-        echo "flash-attn install FAILED -- stage 2/3 will fall back to SDPA"
+    echo "--- building FlashAttention-3 from source (slow; Hopper+ only) ---"
+    bash scripts/cloud/build_fa3.sh || echo "FA3 build FAILED -- stage 2/3 will fall back to SDPA"
 fi
 
 # --- who am I ---------------------------------------------------------------
