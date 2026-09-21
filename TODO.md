@@ -295,7 +295,33 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
 
 ### Phase 4 — Training economics
 
-- [ ] **TP-07** Single multitask checkpoint. TabPFN trains classification and regression jointly
+- [~] **TP-07** Single multitask checkpoint. *Model side done, trainer not wired, untrained.*
+      `multitask=True` on `TabICL` holds both tasks' label encoders (column-embedding and ICL)
+      and both output heads around one shared trunk, plus a learned task embedding added to
+      every row at the input of the column embedder and of the ICL transformer. The task is
+      picked with `set_task()`; there is no default, so a forgotten call raises instead of
+      silently running the classification head. Off by default and single-task checkpoints
+      load unchanged: the classification parts keep their single-task names, the regression
+      ones are `reg_*`. **29.10M params vs 27.55M classifier / 28.56M regressor — +5.6% for one
+      checkpoint in place of two (56.1M).** The task embeddings are zero-initialized, so
+      `load_single_task_state_dict()` makes a joint model *exactly* reproduce either released
+      model — asserted on every path (train, inference, KV cache, repr cache) for both tasks —
+      and warm-starts a joint model from both (trunk + one head from one, other head via
+      `heads_only=True`). It refuses an architecture mismatch rather than half-loading, which
+      matters because the two v2 recipes differ in `bias_free_ln`. The care, as with TP-04/05,
+      went into the cache boundary: unlike the label embedding the task embedding is on *test*
+      rows too, so the cached passes add it themselves; tests randomize it (at zero they would
+      pass vacuously) and were mutation-checked to fail when the cached path skips it. Caches
+      record their task and are refused under the other one. sklearn wrappers select their own
+      head. 33 tests in [`tests/test_multitask.py`](tests/test_multitask.py). Tests use
+      `zero_init=False`: with the default, features never reach the CLS tokens at init and the
+      column-level task embedding provably has no effect, which first showed up as a failing
+      test. *Remaining:* (1) trainer — one prior per task, one optimizer step accumulating a
+      micro-batch of each; a relative loss weight is likely needed since pinball and CE are on
+      different scales; Muon currently orthogonalizes every 2-D param, which would include the
+      `(2, d)` task embedding, so exclude it; (2) pick one `norm_type` for the joint recipe;
+      (3) TP-04's remaining input/head norms; (4) the single-task control run. Original note:
+      TabPFN trains classification and regression jointly
       with task type as an input; only the label encoder and output head are task-specific — the
       cell encoder, column distribution embedder, feature aggregator and in-context transformer
       are all shared. We ship two checkpoints and two full 3-stage curricula

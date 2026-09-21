@@ -11,15 +11,17 @@ from .encoders import Encoder
 from .kv_cache import KVCache
 from .inference import InferenceManager
 from .inference_config import MgrConfig, InferenceConfig
+from .task import TaskConditioned
 
 
-class ICLearning(nn.Module):
+class ICLearning(TaskConditioned, nn.Module):
     """Dataset-wise in-context learning.
 
     Parameters
     ----------
     out_dim : int
-        Output dimension of the model.
+        Output dimension of the model. For a multitask model, the classification head's
+        (``max_classes``).
 
     max_classes : int
         Determines the task type and output behavior:
@@ -66,6 +68,16 @@ class ICLearning(nn.Module):
             - "qassmax-mlp": Query-aware scaling: :math:`\\text{scale} = \\text{base\\_mlp}(\\log n) \\cdot (1 + \\tanh(\\text{query\\_mlp}(q)))`
             - "qassmax-mlp-elementwise": Elementwise query-aware scaling
 
+    multitask : bool, default=False
+        TP-07: hold label encoders and output heads for both tasks plus a learned task
+        embedding, and pick the task with ``set_task``. Requires ``max_classes > 0``. The
+        classification parts keep the single-task names ``y_encoder`` and ``decoder``; the
+        regression ones are ``reg_y_encoder`` and ``reg_decoder``.
+
+    reg_out_dim : int, default=0
+        Output dimension of the regression head (``num_quantiles``). Only used when
+        ``multitask`` is True.
+
     recompute : bool, default=False
         If True, uses gradient checkpointing to save memory at the cost of additional computation.
     """
@@ -86,11 +98,17 @@ class ICLearning(nn.Module):
         zero_init: bool = True,
         qk_norm: bool = False,
         num_kv_heads: Optional[int] = None,
+        multitask: bool = False,
+        reg_out_dim: int = 0,
         recompute: bool = False,
     ):
         super().__init__()
 
         self.max_classes = max_classes
+        self._init_task(max_classes, multitask, d_model)
+        if multitask and reg_out_dim <= 0:
+            raise ValueError("A multitask model needs reg_out_dim > 0 for its regression head.")
+        self.out_dims = {"classification": out_dim, "regression": reg_out_dim} if multitask else None
         self.norm_first = norm_first
 
         self.tf_icl = Encoder(
@@ -117,7 +135,31 @@ class ICLearning(nn.Module):
             self.y_encoder = nn.Linear(1, d_model)
 
         self.decoder = nn.Sequential(nn.Linear(d_model, d_model * 2), nn.GELU(), nn.Linear(d_model * 2, out_dim))
+        if multitask:
+            self.reg_y_encoder = nn.Linear(1, d_model)
+            self.reg_decoder = nn.Sequential(
+                nn.Linear(d_model, d_model * 2), nn.GELU(), nn.Linear(d_model * 2, reg_out_dim)
+            )
         self.inference_mgr = InferenceManager(enc_name="tf_icl", out_dim=out_dim)
+
+    def set_task(self, task: str) -> None:
+        super().set_task(task)
+        if self.multitask:
+            # The manager preallocates its output buffer, so it must know the active head's width
+            self.inference_mgr.out_dim = self.out_dims[task]
+
+    def _encode_target(self, y: Tensor) -> Tensor:
+        """Embed target values with the label encoder of the active task."""
+        if self.is_classification:
+            return self.y_encoder(y.float())
+        encoder = self.reg_y_encoder if self.multitask else self.y_encoder
+        return encoder(y.unsqueeze(-1))
+
+    def _decode(self, src: Tensor) -> Tensor:
+        """Apply the output head of the active task."""
+        if self.multitask and not self.is_classification:
+            return self.reg_decoder(src)
+        return self.decoder(src)
 
     def _grouping(self, num_classes: int) -> tuple[Tensor, int]:
         """Divide classes into balanced groups for hierarchical classification.
@@ -267,16 +309,13 @@ class ICLearning(nn.Module):
         """
 
         train_size = y_train.shape[1]
-        if self.max_classes > 0:  # Classification
-            Ry_train = self.y_encoder(y_train.float())
-        else:  # Regression
-            Ry_train = self.y_encoder(y_train.unsqueeze(-1))
-        R[:, :train_size] = R[:, :train_size] + Ry_train
+        R = self.add_task_embedding(R)
+        R[:, :train_size] = R[:, :train_size] + self._encode_target(y_train)
 
         src = self.tf_icl(R, train_size=train_size)
         if self.norm_first:
             src = self.ln(src)
-        out = self.decoder(src)
+        out = self._decode(src)
 
         return out
 
@@ -327,7 +366,7 @@ class ICLearning(nn.Module):
         )
 
         train_size = y_train.shape[1]
-        if self.max_classes == 0:
+        if not self.is_classification:
             out = out[:, train_size:]
         else:
             num_classes = len(torch.unique(y_train[0]))
@@ -458,7 +497,7 @@ class ICLearning(nn.Module):
             mgr_config = InferenceConfig().ICL_CONFIG
         self.inference_mgr.configure(**mgr_config)
 
-        if self.max_classes == 0:  # Regression
+        if not self.is_classification:  # Regression
             out = self._predict_standard(R, y_train)
         else:  # Classification
             num_classes = len(torch.unique(y_train[0]))
@@ -570,11 +609,7 @@ class ICLearning(nn.Module):
         """
 
         train_size = y_train.shape[1]
-        if self.max_classes > 0:
-            Ry_train = self.y_encoder(y_train.float())
-        else:
-            Ry_train = self.y_encoder(y_train.unsqueeze(-1))
-        R[:, :train_size] = R[:, :train_size] + Ry_train
+        R[:, :train_size] = R[:, :train_size] + self._encode_target(y_train)
 
         return R
 
@@ -599,10 +634,13 @@ class ICLearning(nn.Module):
             Predictions of shape (B, T, out_dim).
         """
 
+        # The task embedding goes on every row here rather than in prepare_repr_cache, so
+        # cached train rows and fresh test rows receive it the same way
+        R = self.add_task_embedding(R)
         src = self.tf_icl(R, train_size=train_size)
         if self.norm_first:
             src = self.ln(src)
-        out = self.decoder(src)
+        out = self._decode(src)
 
         return out
 
@@ -663,7 +701,7 @@ class ICLearning(nn.Module):
         )
 
         out = out[:, train_size:]
-        if self.max_classes > 0:
+        if self.is_classification:
             assert num_classes is not None, "num_classes must be provided for classification"
             out = out[..., :num_classes]
             if not return_logits:
@@ -707,17 +745,16 @@ class ICLearning(nn.Module):
             - For regression (max_classes=0): out_dim = num_quantiles
             - For classification (max_classes>0): out_dim = max_classes
         """
+        # The task embedding is on every row, so it is applied in both passes
+        R = self.add_task_embedding(R)
+
         # When using cache, skip y_train embedding — it's already baked
         # into the cached K/V projections from the store_cache pass.
         if store_cache:
             assert y_train is not None, "y_train must be provided when store_cache=True"
             train_size = y_train.shape[1]
 
-            if self.max_classes > 0:  # Classification
-                Ry_train = self.y_encoder(y_train.float())
-            else:  # Regression
-                Ry_train = self.y_encoder(y_train.unsqueeze(-1))
-            R[:, :train_size] = R[:, :train_size] + Ry_train
+            R[:, :train_size] = R[:, :train_size] + self._encode_target(y_train)
 
         src = self.tf_icl.forward_with_cache(
             R,
@@ -728,7 +765,7 @@ class ICLearning(nn.Module):
         )
         if self.norm_first:
             src = self.ln(src)
-        out = self.decoder(src)
+        out = self._decode(src)
 
         return out
 
@@ -795,7 +832,7 @@ class ICLearning(nn.Module):
         if store_cache:
             assert y_train is not None, "y_train must be provided when store_cache=True"
             # many-class classification is not supported with caching
-            if self.max_classes > 0:
+            if self.is_classification:
                 num_classes = len(torch.unique(y_train[0]))
                 if num_classes > self.max_classes:
                     raise ValueError(
@@ -827,7 +864,7 @@ class ICLearning(nn.Module):
             train_size = y_train.shape[1]
             out = out[:, train_size:]
 
-        if self.max_classes > 0:
+        if self.is_classification:
             out = out[..., :num_classes]
             if not return_logits:
                 out = torch.softmax(out / softmax_temperature, dim=-1)

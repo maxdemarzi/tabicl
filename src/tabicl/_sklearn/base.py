@@ -52,8 +52,16 @@ class TabICLBaseEstimator(BaseEstimator):
     :class:`TabICLClassifier` or :class:`TabICLRegressor` instead.
     """
 
+    # Which head of a multitask checkpoint (TP-07) this estimator uses; set by subclasses
+    _model_task: str = None
+
     def _more_tags(self):
         return dict(non_deterministic=True)
+
+    def _select_model_task(self) -> None:
+        """Point a multitask checkpoint at this estimator's task. No-op for single-task ones."""
+        if getattr(self.model_, "multitask", False):
+            self.model_.set_task(self._model_task)
 
     def __sklearn_tags__(self):
         tags = super().__sklearn_tags__()
@@ -309,6 +317,7 @@ class TabICLBaseEstimator(BaseEstimator):
             # Model weights were saved and reconstruct without checkpoint
             self.model_ = TabICL(**self.model_config_)
             self.model_.load_state_dict(model_state_dict)
+            self._select_model_task()
             self.model_.eval()
         else:
             # Reload from checkpoint

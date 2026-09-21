@@ -222,6 +222,10 @@ class TabICLCache:
     num_classes : Optional[int]
         Number of classes in classification tasks (0 for regression).
         Stored when caching to ensure consistent output shape during cache use.
+
+    task : Optional[str]
+        Task the cache was built under. A multitask model (TP-07) checks it before use,
+        because the train rows' label encoding is baked into the cached projections.
     """
 
     col_cache: Optional[KVCache] = None
@@ -229,6 +233,7 @@ class TabICLCache:
     icl_cache: Optional[KVCache] = None
     train_shape: Tuple[int, int, int] = (0, 0, 0)
     num_classes: Optional[int] = None
+    task: Optional[str] = None
 
     def __post_init__(self):
         """Initialize sub-caches if not provided."""
@@ -302,6 +307,7 @@ class TabICLCache:
             icl_cache=self.icl_cache[indices] if self.icl_cache else KVCache(),
             train_shape=(end - start, self.train_shape[1], self.train_shape[2]),
             num_classes=self.num_classes,
+            task=self.task,
         )
 
     def to(self, device, dtype=None) -> TabICLCache:
@@ -326,6 +332,7 @@ class TabICLCache:
             icl_cache=self.icl_cache.to(device, dtype=dtype) if self.icl_cache else KVCache(),
             train_shape=self.train_shape,
             num_classes=self.num_classes,
+            task=self.task,
         )
 
     @staticmethod
@@ -359,4 +366,5 @@ class TabICLCache:
             icl_cache=KVCache.concat(icl_caches, dim=dim) if icl_caches else KVCache(),
             train_shape=(total_batch, train_size, n_features),
             num_classes=caches[0].num_classes,
+            task=caches[0].task,
         )

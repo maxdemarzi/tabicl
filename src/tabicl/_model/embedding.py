@@ -13,9 +13,10 @@ from .encoders import SetTransformer
 from .kv_cache import KVCache
 from .inference import InferenceManager
 from .inference_config import MgrConfig, InferenceConfig
+from .task import TaskConditioned
 
 
-class ColEmbedding(nn.Module):
+class ColEmbedding(TaskConditioned, nn.Module):
     """Distribution-aware column-wise embedding.
 
     This module maps each scalar cell in a column to a high-dimensional embedding while
@@ -99,6 +100,11 @@ class ColEmbedding(nn.Module):
     max_classes : int, default=10
         Number of classes for classification task. If 0, assumes regression task.
 
+    multitask : bool, default=False
+        TP-07: hold label encoders for both tasks plus a learned task embedding, and pick
+        the task with ``set_task``. Requires ``max_classes > 0``. The classification encoder
+        keeps the single-task name ``y_encoder``; the regression one is ``reg_y_encoder``.
+
     reserve_cls_tokens : int, default=4
         Number of slots to reserve for CLS tokens to avoid concatenation.
 
@@ -148,6 +154,7 @@ class ColEmbedding(nn.Module):
         feature_group_size: int = 3,
         target_aware: bool = False,
         max_classes: int = 10,
+        multitask: bool = False,
         reserve_cls_tokens: int = 4,
         ssmax: Union[bool, str] = False,
         zero_init: bool = True,
@@ -187,11 +194,14 @@ class ColEmbedding(nn.Module):
             recompute=recompute,
         )
 
+        self._init_task(max_classes, multitask, embed_dim)
         if target_aware:
             if max_classes > 0:  # Classification
                 self.y_encoder = OneHotAndLinear(max_classes, embed_dim)
             else:  # Regression
                 self.y_encoder = nn.Linear(1, embed_dim)
+            if multitask:
+                self.reg_y_encoder = nn.Linear(1, embed_dim)
 
         if affine:
             self.out_w = SkippableLinear(embed_dim, embed_dim)
@@ -224,6 +234,13 @@ class ColEmbedding(nn.Module):
         mapping = [orig_to_other[feature] for feature in reference_pattern]
 
         return mapping
+
+    def _encode_target(self, y: Tensor) -> Tensor:
+        """Embed target values with the label encoder of the active task."""
+        if self.is_classification:
+            return self.y_encoder(y.float())
+        encoder = self.reg_y_encoder if self.multitask else self.y_encoder
+        return encoder(y.unsqueeze(-1))
 
     def feature_grouping(self, X: Tensor) -> Tensor:
         """Group features into fixed-size groups.
@@ -389,7 +406,7 @@ class ColEmbedding(nn.Module):
             Embeddings of shape (..., T, E) where E is the embedding dimension.
         """
 
-        src = self.in_linear(features)  # (..., T, in_dim) -> (..., T, E)
+        src = self.add_task_embedding(self.in_linear(features))  # (..., T, in_dim) -> (..., T, E)
 
         if not self.target_aware:
             src = self.tf_col(src, train_size=None if embed_with_test else train_size)
@@ -398,14 +415,11 @@ class ColEmbedding(nn.Module):
 
             # Determine if mixed-radix ensemble is needed
             num_classes = int(y_train.max().item()) + 1
-            needs_mixed_radix = self.max_classes > 0 and num_classes > self.max_classes
+            needs_mixed_radix = self.is_classification and num_classes > self.max_classes
 
             if not needs_mixed_radix:
                 # Standard target-aware embedding
-                if self.max_classes > 0:
-                    y_emb = self.y_encoder(y_train.float())
-                else:
-                    y_emb = self.y_encoder(y_train.unsqueeze(-1))
+                y_emb = self._encode_target(y_train)
                 src[..., :train_size, :] = src[..., :train_size, :] + y_emb
                 src = self.tf_col(src, train_size=None if embed_with_test else train_size)
             else:
@@ -790,7 +804,7 @@ class ColEmbedding(nn.Module):
         Tensor
             Embeddings of shape (..., T, E).
         """
-        src = self.in_linear(features)
+        src = self.add_task_embedding(self.in_linear(features))
 
         if not self.target_aware:
             src = self.tf_col.forward_with_cache(
@@ -802,10 +816,7 @@ class ColEmbedding(nn.Module):
             if store_cache:
                 assert y_train is not None, "y_train must be provided when target_aware=True and store_cache=True."
 
-                if self.max_classes > 0:
-                    y_emb = self.y_encoder(y_train.float())
-                else:
-                    y_emb = self.y_encoder(y_train.unsqueeze(-1))
+                y_emb = self._encode_target(y_train)
                 src[..., :train_size, :] = src[..., :train_size, :] + y_emb
 
             src = self.tf_col.forward_with_cache(
@@ -866,7 +877,7 @@ class ColEmbedding(nn.Module):
         if store_cache:
             assert y_train is not None, "y_train must be provided when store_cache=True"
             # many-class classification is not supported with caching
-            if self.target_aware and self.max_classes > 0:
+            if self.target_aware and self.is_classification:
                 num_classes = int(y_train.max().item()) + 1
                 if num_classes > self.max_classes:
                     raise ValueError(

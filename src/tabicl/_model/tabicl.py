@@ -10,6 +10,7 @@ from .learning import ICLearning
 from .quantile_dist import QuantileToDistribution
 from .kv_cache import TabICLCache
 from .inference_config import InferenceConfig
+from .task import TASKS, check_task
 
 
 class TabICL(nn.Module):
@@ -40,8 +41,18 @@ class TabICL(nn.Module):
           column-wise embedding and hierarchical classification is used during in-context learning.
 
     num_quantiles : int, default=999
-        Number of quantiles to predict for regression tasks. Only used when max_classes=0.
-        The model directly predicts these quantile values.
+        Number of quantiles to predict for regression tasks. Only used when max_classes=0
+        or ``multitask`` is True. The model directly predicts these quantile values.
+
+    multitask : bool, default=False
+        TP-07: one checkpoint for both tasks. Everything between the label encoders and the
+        output heads is shared; each task has its own label encoders (column-embedding and
+        ICL) and its own output head, and a learned task embedding is added to every row at
+        the input of the column embedder and of the ICL transformer. ``max_classes`` must be
+        positive and sizes the classification head; ``num_quantiles`` sizes the regression
+        head. The task is chosen with :meth:`set_task` and there is no default: a multitask
+        model refuses to run until one is set. Off by default; existing checkpoints load
+        unchanged, and :meth:`load_single_task_state_dict` warm-starts a joint model from them.
 
     embed_dim : int, default=128
         Model dimension used in the column / row embedding transformers. For the in-context
@@ -178,6 +189,7 @@ class TabICL(nn.Module):
         self,
         max_classes: int = 10,
         num_quantiles: int = 999,
+        multitask: bool = False,
         embed_dim: int = 128,
         col_num_blocks: int = 3,
         col_nhead: int = 8,
@@ -231,7 +243,12 @@ class TabICL(nn.Module):
         icl_dim = embed_dim * row_num_cls  # CLS tokens are concatenated for ICL
 
         # Determine task type
-        if max_classes == 0:  # Regression
+        if multitask:
+            if max_classes <= 0 or num_quantiles <= 0:
+                raise ValueError("A multitask model needs both max_classes > 0 and num_quantiles > 0.")
+            out_dim = max_classes
+            self.quantile_dist = QuantileToDistribution(num_quantiles=num_quantiles)
+        elif max_classes == 0:  # Regression
             if num_quantiles <= 0:
                 raise ValueError("For regression (max_classes=0), num_quantiles must be greater than 0.")
             out_dim = num_quantiles
@@ -241,6 +258,7 @@ class TabICL(nn.Module):
 
         self.max_classes = max_classes
         self.num_quantiles = num_quantiles
+        self.multitask = multitask
         self.embed_dim = embed_dim
         self.col_num_blocks = col_num_blocks
         self.col_nhead = col_nhead
@@ -282,6 +300,7 @@ class TabICL(nn.Module):
             feature_group_size=col_feature_group_size,
             target_aware=col_target_aware,
             max_classes=max_classes,
+            multitask=multitask,
             reserve_cls_tokens=row_num_cls,
             ssmax=col_ssmax,
             zero_init=zero_init,
@@ -321,11 +340,88 @@ class TabICL(nn.Module):
             zero_init=zero_init,
             qk_norm=qk_norm,
             num_kv_heads=icl_num_kv_heads,
+            multitask=multitask,
+            reg_out_dim=num_quantiles if multitask else 0,
             recompute=recompute,
         )
 
         # KV cache for efficient inference
         self._cache: Optional[TabICLCache] = None
+
+    @property
+    def task(self) -> Optional[str]:
+        """The active task: fixed for a single-task model, None on a multitask one until set."""
+        return self.icl_predictor.task
+
+    def set_task(self, task: str) -> TabICL:
+        """Select the task the model runs: "classification" or "regression".
+
+        A multitask model must have this called before any forward pass. On a single-task
+        model it only accepts the model's own task. Switching task on a multitask model
+        clears the KV cache, which belongs to the task it was built under.
+        """
+        check_task(task)
+        if self.multitask and task != self.task:
+            self.clear_cache()
+        self.col_embedder.set_task(task)
+        self.icl_predictor.set_task(task)
+        return self
+
+    # Keys whose names differ between a single-task regression checkpoint and a multitask
+    # model. The classification parts keep the single-task names, so need no mapping.
+    _REG_KEY_MAP = {
+        "col_embedder.y_encoder.": "col_embedder.reg_y_encoder.",
+        "icl_predictor.y_encoder.": "icl_predictor.reg_y_encoder.",
+        "icl_predictor.decoder.": "icl_predictor.reg_decoder.",
+    }
+
+    def load_single_task_state_dict(self, state_dict: dict, task: str, heads_only: bool = False) -> List[str]:
+        """Load a single-task checkpoint into a multitask model.
+
+        The single-task model's label encoders and head go to this model's ``task`` parts.
+        The shared trunk is loaded too unless ``heads_only`` is True -- which is how to
+        warm-start a joint model from both released checkpoints: load one fully, then the
+        other with ``heads_only=True``. The task embeddings are never in a single-task
+        checkpoint and are left as they are.
+
+        Returns the parameter names left unloaded. Raises if the checkpoint has keys this
+        model does not, lacks a trunk key it should have, or a shape does not match: each
+        means the architectures differ (for example in ``bias_free_ln``) and the result
+        would be silently wrong.
+        """
+        if not self.multitask:
+            raise ValueError("load_single_task_state_dict is for multitask models; use load_state_dict.")
+        check_task(task)
+
+        is_head = lambda key: any(key.startswith(prefix) for prefix in self._REG_KEY_MAP)
+        mapped = {}
+        for key, value in state_dict.items():
+            if heads_only and not is_head(key):
+                continue
+            if task == "regression":
+                for old, new in self._REG_KEY_MAP.items():
+                    if key.startswith(old):
+                        key = new + key[len(old):]
+                        break
+            mapped[key] = value
+
+        result = self.load_state_dict(mapped, strict=False)
+        if result.unexpected_keys:
+            raise ValueError(f"Checkpoint keys not in this model: {result.unexpected_keys}")
+
+        # What a single-task checkpoint cannot supply: the task embeddings and the other
+        # task's label encoders and head. Anything else missing is an architecture mismatch.
+        other_task = self._REG_KEY_MAP.values() if task == "classification" else self._REG_KEY_MAP.keys()
+        unsupplied = (*other_task, "col_embedder.task_embed", "icl_predictor.task_embed")
+        if not heads_only:
+            mismatched = [k for k in result.missing_keys if not k.startswith(unsupplied)]
+            if mismatched:
+                raise ValueError(f"Checkpoint lacks keys this model needs: {mismatched}")
+        return result.missing_keys
+
+    def _check_task_selected(self) -> None:
+        if self.task is None:
+            raise RuntimeError(f"Multitask model has no task selected; call set_task() with one of {TASKS}.")
 
     @property
     def has_cache(self) -> bool:
@@ -540,6 +636,7 @@ class TabICL(nn.Module):
                     If return_logits=False: Probabilities of shape (B, test_size, num_classes)
         """
 
+        self._check_task_selected()
         if self.training:
             out = self._train_forward(X, y_train, d=d, embed_with_test=embed_with_test)
         else:
@@ -612,7 +709,7 @@ class TabICL(nn.Module):
             - "raw_quantiles": (B, test_size, num_quantiles), where `num_quantiles` denotes 
                 the number of quantile levels configured in the model architecture.
         """
-        assert self.max_classes == 0, "predict_stats is only applicable for regression tasks"
+        assert self.task == "regression", "predict_stats is only applicable for regression tasks"
 
         raw_quantiles = self._inference_forward(
             X, y_train, embed_with_test=embed_with_test, inference_config=inference_config
@@ -734,6 +831,7 @@ class TabICL(nn.Module):
             if use_cache=True but X_test is None or no cache exists.
         """
 
+        self._check_task_selected()
         if cache is not None:
             use_cache = True
             store_cache = False
@@ -757,8 +855,8 @@ class TabICL(nn.Module):
                 raise ValueError("X_train and y_train are required when store_cache=True")
 
             # Initialize cache based on training data
-            num_classes = len(torch.unique(y_train[0])) if self.max_classes > 0 else 0
-            self._cache = TabICLCache(train_shape=X_train.shape, num_classes=num_classes)
+            num_classes = len(torch.unique(y_train[0])) if self.task == "classification" else 0
+            self._cache = TabICLCache(train_shape=X_train.shape, num_classes=num_classes, task=self.task)
 
             if X_test is None:
                 X = X_train
@@ -771,6 +869,10 @@ class TabICL(nn.Module):
 
             if self._cache is None or self._cache.is_empty():
                 raise ValueError("No cache available. Call with store_cache=True first.")
+
+            # A cache built under the other task has that task's label encoding baked in
+            if self._cache.task is not None and self._cache.task != self.task:
+                raise ValueError(f"Cache was built for {self._cache.task}, but the model is set to {self.task}.")
 
             X = X_test
             y_train = None
@@ -902,7 +1004,7 @@ class TabICL(nn.Module):
             - "raw_quantiles": (B, test_size, num_quantiles), where `num_quantiles` denotes 
                 the number of quantile levels configured in the model architecture.
         """
-        assert self.max_classes == 0, "predict_stats_with_cache is only applicable for regression tasks"
+        assert self.task == "regression", "predict_stats_with_cache is only applicable for regression tasks"
 
         raw_quantiles = self.forward_with_cache(
             X_train=X_train,

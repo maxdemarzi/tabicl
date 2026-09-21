@@ -288,6 +288,8 @@ class TabICLClassifier(ClassifierMixin, TabICLBaseEstimator):
         Encoded training labels. Only set when ``n_targets_ > 1``.
     """
 
+    _model_task = "classification"
+
     def __init__(
         self,
         n_estimators: int = 8,
@@ -427,6 +429,7 @@ class TabICLClassifier(ClassifierMixin, TabICLBaseEstimator):
         self.model_ = TabICL(**checkpoint["config"])
         self.model_config_ = checkpoint["config"]
         self.model_.load_state_dict(checkpoint["state_dict"])
+        self._select_model_task()
         self.model_.eval()
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> TabICLClassifier:

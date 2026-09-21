@@ -245,6 +245,8 @@ class TabICLRegressor(RegressorMixin, TabICLBaseEstimator):
         Scaled training targets. Only set when ``n_targets_ > 1``.
     """
 
+    _model_task = "regression"
+
     def __init__(
         self,
         n_estimators: int = 8,
@@ -355,6 +357,7 @@ class TabICLRegressor(RegressorMixin, TabICLBaseEstimator):
         self.model_ = TabICL(**config)
         self.model_config_ = config
         self.model_.load_state_dict(checkpoint["state_dict"])
+        self._select_model_task()
         self.model_.eval()
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> TabICLRegressor:
