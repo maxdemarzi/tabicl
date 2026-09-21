@@ -183,6 +183,58 @@ worth trying:
 3. **Cut seeds from 3 to 2 for screening**, keeping 3 only for whatever survives to a
    full-scale run.
 
+### TP-01 + TP-08 joint screen — RESULT: still no benefit, now on the right data (2026-09-21)
+
+**Second null, and this time the objections to the first one were removed.** Control vs
+`--col_fourier_value True`, **both arms on the high-cardinality prior**
+(`--prior_cat_prob 0.5 --prior_high_card_prob 0.4`) so only the encoder differs, 10,000
+steps, one GPU per arm, seed 42. Scored on **both** suites. **$30.93**, 7 h.
+
+**High-cardinality suite (14 datasets) — the primary readout:**
+
+| Step | control ll | fourier ll | fourier worse on | p (adj) |
+|---|---|---|---|---|
+| 2,500 | 0.3838 | 0.3833 | 47.6% | 1.00 |
+| 5,000 | 0.3785 | 0.3813 | 64.3% | 1.00 |
+| 7,500 | 0.3763 | 0.3793 | 66.7% | 1.00 |
+| **10,000** | **0.3748** | **0.3786** | **71.4%** | **1.00** |
+
+**CC18 (62 datasets):** 0.3003 vs 0.2991 at step 10,000, worse on 54.8%, not separated.
+
+On the suite where the mechanism is supposed to pay off, the Fourier arm is **slightly worse**,
+and the trend grows with training rather than shrinking (47.6% -> 71.4%). Uncorrected, the
+negative direction at step 10,000 is p ~ 0.02; after correction across four checkpoints it is
+not significant, and the suite's effective n is nearer 8 than 14. So: not evidence of harm,
+but certainly no evidence of benefit.
+
+#### Why this null is worth more than the first one
+
+The first screen had two defensible objections — the prior never generated high-cardinality
+columns, and the evaluation set contained none. Both were removed here: the prior was verified
+on-pod to produce columns with >=50 levels in 43 of 86 discrete columns, and the evaluation
+includes datasets with up to 15,415 levels. The result did not change.
+
+#### What could still explain it
+
+1. **Length.** 10K steps against TabPFN's 500K-plus. CAVEAT-01 applies most strongly to a
+   representation change, and this one starts *behind* in both screens before catching up —
+   the signature of something that needs time. This remains the leading benign explanation.
+2. **A regime gap that survives.** Training uses `max_seq_len 1024`, so the prior's
+   high-cardinality columns are capped at ~256 levels, while the evaluation data reaches
+   15,415. The encoder is still not trained on the regime it is tested on.
+3. **It may simply matter less here than in TabPFN.** TabICL's `ColEmbedding` is a set
+   transformer over each column, so it already sees the column's distribution; TabPFN-3's
+   cell encoder is a plain per-cell projection. The marginal value of Fourier features should
+   be *lower* against a distribution-aware embedder. This was flagged as a risk for TP-02 at
+   the start of the backlog and applies just as well to TP-01.
+
+#### Reading
+
+Two independent screens, one with every stated objection removed, show no benefit. **Stop
+screening TP-01 at proxy scale.** It is not worth more money at this length; the open question
+is whether it pays off at full scale, and that is a several-hundred-dollar question, not a
+$30 one. The code stays, off by default, with this result recorded next to it.
+
 ### TP-01 — RESULT: no benefit at proxy scale, but the suite cannot test the claim (2026-09-20)
 
 **Null, and partly my own fault for screening it alone.** Control vs `--col_fourier_value True`,

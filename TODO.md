@@ -165,8 +165,18 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
 
 ### Phase 2 — Cell encoding + prior (one retrain)
 
-- [~] **TP-01** Fourier value encoding. **Screened 2026-09-20: null at 20K steps, but the
-      test could not see what the change is for.** Identical to control at step 20,000
+- [-] **TP-01** Fourier value encoding. **Screened twice; no benefit at proxy scale.**
+      2026-09-21, jointly with TP-08 so both arms trained on a high-cardinality prior and were
+      scored on data with up to 15,415 levels: still no separation, and on the
+      high-cardinality suite the Fourier arm is slightly *worse* (71.4% of datasets at step
+      10,000, ns after correction). Both objections to the first screen were removed and the
+      answer did not change. **Dropped from proxy screening** — the remaining question is
+      whether it pays off at full scale, which is a several-hundred-dollar experiment, not a
+      $30 one. Code stays, off by default. Leading explanations: 10K steps vs TabPFN's 500K+;
+      a training/eval regime gap that survives (`max_seq_len 1024` caps prior cardinality near
+      256); and that TabICL's distribution-aware `ColEmbedding` may already capture much of
+      what Fourier features add, which would make the effect genuinely smaller here than in
+      TabPFN. Earlier note: 2026-09-20 screen alone was null at 20K steps. Identical to control at step 20,000
       (log-loss 0.2946 vs 0.2947 over 62 datasets); starts behind, catches up by 5K. On the
       max-cardinality>=10 slice it is better on 66.7% of datasets — the predicted direction —
       but n=9, p=0.18. CC18's most extreme categorical column has 71 levels where the claim
