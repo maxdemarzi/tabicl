@@ -1,4 +1,4 @@
-"""BM-03 -- fixed real-data accuracy suite.
+"""BM-03 -- fixed real-data accuracy suite (and, since TP-07, regression suites too).
 
 The per-ablation accuracy signal. Sized so a full sweep runs in hours rather than
 days: ten frozen OpenML datasets, capped rows, a small fold count. Bigger boards
@@ -16,6 +16,10 @@ Usage
     # compare two configurations in one sweep
     PYTHONPATH=src python -m benchmarks.suites.real_small \\
         --run-id TP-11-ablation --config-id no-power --norm-methods none
+
+    # a regression suite is scored with TabICLRegressor, on CRPS / RMSE / MAE / R^2
+    PYTHONPATH=src python -m benchmarks.suites.real_small --suite ctr23 \\
+        --run-id TP-07 --config-id joint-step20000 --model-path joint.pt
 """
 
 from __future__ import annotations
@@ -32,6 +36,12 @@ from .._core.schema import Ledger
 
 SUITE = "real_small"
 METRICS = ("accuracy", "balanced_accuracy", "roc_auc", "log_loss")
+REG_METRICS = ("crps", "rmse", "mae", "r2")
+METRICS_BY_TASK = {"classification": METRICS, "regression": REG_METRICS}
+
+#: Quantile levels CRPS is integrated over. Fixed, because a coarser or narrower grid
+#: underestimates CRPS (see benchmarks/_core/scoring.py) and two arms must share one grid.
+CRPS_LEVELS = tuple(round(0.01 * k, 2) for k in range(1, 100))
 
 
 def _score(y_true, y_pred, y_proba, classes) -> Dict[str, float]:
@@ -68,6 +78,31 @@ def _score(y_true, y_pred, y_proba, classes) -> Dict[str, float]:
     return out
 
 
+def _score_regression(y_true, mean, quantiles, levels, y_train) -> Dict[str, float]:
+    """CRPS, RMSE, MAE and R^2, on targets standardized by the training fold.
+
+    Standardizing puts every dataset on one scale, so a paired test across datasets is not
+    dominated by whichever has the largest target units. R^2 is scale-free anyway. CRPS is
+    the headline: it scores the whole predictive distribution, which is what the regression
+    head is trained for (pinball loss over quantiles), where RMSE sees only the mean.
+    """
+
+    from sklearn.metrics import r2_score  # noqa: PLC0415
+
+    from .._core.scoring import crps_from_quantiles  # noqa: PLC0415
+
+    mu = float(np.mean(y_train))
+    sd = float(np.std(y_train)) or 1.0
+    z = lambda a: (np.asarray(a, dtype=np.float64) - mu) / sd  # noqa: E731
+    y, m = z(y_true), z(mean)
+    return {
+        "crps": crps_from_quantiles(y, z(quantiles), np.asarray(levels)),
+        "rmse": float(np.sqrt(np.mean((y - m) ** 2))),
+        "mae": float(np.mean(np.abs(y - m))),
+        "r2": float(r2_score(y, m)),
+    }
+
+
 def make_tasks(
     specs,
     n_folds: int,
@@ -96,7 +131,7 @@ def make_tasks(
                     dataset=spec.name,
                     fold=fold,
                     config_id=config_id,
-                    metrics=METRICS,
+                    metrics=METRICS_BY_TASK[spec.task],
                     config={"max_rows": max_rows, "n_folds": n_folds, "openml_id": spec.openml_id,
                             **clf_kwargs},
                     seed=seed,
@@ -109,7 +144,7 @@ def make_tasks(
 
 def make_executor(clf_kwargs: Dict[str, Any]):
     def execute(task: Task) -> Dict[str, float]:
-        from tabicl import TabICLClassifier  # noqa: PLC0415
+        from tabicl import TabICLClassifier, TabICLRegressor  # noqa: PLC0415
 
         spec = task.payload["spec"]
         seed = task.seed or 0
@@ -123,6 +158,13 @@ def make_executor(clf_kwargs: Dict[str, Any]):
         X_train = X.iloc[train_idx] if hasattr(X, "iloc") else X[train_idx]
         X_test = X.iloc[test_idx] if hasattr(X, "iloc") else X[test_idx]
         y_train, y_test = y[train_idx], y[test_idx]
+
+        if spec.task == "regression":
+            y_train, y_test = y_train.astype(np.float64), y_test.astype(np.float64)
+            reg = TabICLRegressor(random_state=seed, **clf_kwargs)
+            reg.fit(X_train, y_train)
+            pred = reg.predict(X_test, output_type=["mean", "quantiles"], alphas=list(CRPS_LEVELS))
+            return _score_regression(y_test, pred["mean"], pred["quantiles"], CRPS_LEVELS, y_train)
 
         clf = TabICLClassifier(random_state=seed, **clf_kwargs)
         clf.fit(X_train, y_train)

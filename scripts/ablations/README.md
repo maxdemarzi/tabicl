@@ -62,6 +62,18 @@ ABLATION=tp04 EXTRA="--qk_norm True"                             bash scripts/tr
 # holds the KV cache flat -- see benchmarks/RESULTS.md for the measured 48 KiB/row/estimator.
 ```
 
+## Phase 4 — multitask checkpoint (TP-07)
+
+Three arms rather than two — a joint checkpoint has to match a single-task control on *each*
+task — so it has its own launcher. It scores the joint arm on `cc18_narrow` and `ctr23`, each
+control on its own suite.
+
+```bash
+SEED=42 bash scripts/tp07_run.sh          # clf_control, reg_control, joint on gpus 0,1,2
+# only if joint loses on either task:
+SHARED_EXTRA="--qk_norm True --input_norm True" RUN_ID=TP-07-tp04 bash scripts/tp07_run.sh
+```
+
 Run each at `SEED=42,43,44`. The control must be re-run on the **same card** as the
 treatment — `pod_doctor.json` records which, and a treatment on an H100 against a control on
 an A100 is a hardware difference, not an ablation.

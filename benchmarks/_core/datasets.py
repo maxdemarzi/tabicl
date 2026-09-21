@@ -195,6 +195,59 @@ HIGH_CARD: Tuple[DatasetSpec, ...] = (
 SUITES["high_card"] = HIGH_CARD
 
 
+#: TP-07. OpenML-CTR23 (study 353), the curated regression counterpart of CC18: all 35
+#: datasets. The CC18_NARROW rule (<= 500 features) was fixed before any result and removes
+#: none -- the widest, geographical_origin_of_music, has 116. Slices use the CC18_NARROW
+#: conventions: ``high_dim`` above 50 features, ``categorical`` if any feature is symbolic.
+#:
+#: Exists so a regression checkpoint can be screened at all: until TP-07 every proxy arm was
+#: a classifier and every suite was classification. Scored on CRPS (from the predicted
+#: quantiles), RMSE and R^2 -- see benchmarks/suites/real_small.py.
+#:
+#: Kept as OpenML publishes it, including ``brazilian_houses``, whose target ``total`` is
+#: close to a sum of other columns: easy for every arm alike, and removing it would be a
+#: hand-picked exclusion. Do not edit. Add a new named suite instead.
+CTR23: Tuple[DatasetSpec, ...] = (
+    DatasetSpec("Moneyball", 41021, "regression", ('low_dim', 'categorical')),  # 1232 rows, 14 features, target RS
+    DatasetSpec("abalone", 44956, "regression", ('low_dim', 'categorical')),  # 4177 rows, 8 features, target rings
+    DatasetSpec("airfoil_self_noise", 44957, "regression", ('low_dim',)),  # 1503 rows, 5 features, target sound_pressure
+    DatasetSpec("auction_verification", 44958, "regression", ('low_dim', 'categorical')),  # 2043 rows, 7 features, target verification.time
+    DatasetSpec("concrete_compressive_strength", 44959, "regression", ('low_dim',)),  # 1030 rows, 8 features, target strength
+    DatasetSpec("energy_efficiency", 44960, "regression", ('low_dim',)),  # 768 rows, 8 features, target heating_load
+    DatasetSpec("forest_fires", 44962, "regression", ('low_dim',)),  # 517 rows, 12 features, target area
+    DatasetSpec("physiochemical_protein", 44963, "regression", ('low_dim',)),  # 45730 rows, 9 features, target RMSD
+    DatasetSpec("superconductivity", 44964, "regression", ('high_dim',)),  # 21263 rows, 81 features, target critical_temp
+    DatasetSpec("geographical_origin_of_music", 44965, "regression", ('high_dim',)),  # 1059 rows, 116 features, target latitude
+    DatasetSpec("solar_flare", 44966, "regression", ('low_dim', 'categorical')),  # 1066 rows, 10 features, target c_class_flares
+    DatasetSpec("student_performance_por", 44967, "regression", ('low_dim', 'categorical')),  # 649 rows, 30 features, target G3
+    DatasetSpec("naval_propulsion_plant", 44969, "regression", ('low_dim',)),  # 11934 rows, 14 features, target gt_compressor_decay_state_coefficient
+    DatasetSpec("QSAR_fish_toxicity", 44970, "regression", ('low_dim',)),  # 908 rows, 6 features, target LC50
+    DatasetSpec("white_wine", 44971, "regression", ('low_dim',)),  # 4898 rows, 11 features, target quality
+    DatasetSpec("red_wine", 44972, "regression", ('low_dim',)),  # 1599 rows, 11 features, target quality
+    DatasetSpec("grid_stability", 44973, "regression", ('low_dim',)),  # 10000 rows, 12 features, target stab
+    DatasetSpec("video_transcoding", 44974, "regression", ('low_dim', 'categorical')),  # 68784 rows, 18 features, target utime
+    DatasetSpec("wave_energy", 44975, "regression", ('low_dim',)),  # 72000 rows, 48 features, target energy_total
+    DatasetSpec("sarcos", 44976, "regression", ('low_dim',)),  # 48933 rows, 21 features, target V22
+    DatasetSpec("california_housing", 44977, "regression", ('low_dim',)),  # 20640 rows, 8 features, target medianHouseValue
+    DatasetSpec("cpu_activity", 44978, "regression", ('low_dim',)),  # 8192 rows, 21 features, target usr
+    DatasetSpec("diamonds", 44979, "regression", ('low_dim', 'categorical')),  # 53940 rows, 9 features, target price
+    DatasetSpec("kin8nm", 44980, "regression", ('low_dim',)),  # 8192 rows, 8 features, target y
+    DatasetSpec("pumadyn32nh", 44981, "regression", ('low_dim',)),  # 8192 rows, 32 features, target thetadd6
+    DatasetSpec("miami_housing", 44983, "regression", ('low_dim',)),  # 13932 rows, 15 features, target SALE_PRC
+    DatasetSpec("cps88wages", 44984, "regression", ('low_dim', 'categorical')),  # 28155 rows, 6 features, target wage
+    DatasetSpec("socmob", 44987, "regression", ('low_dim', 'categorical')),  # 1156 rows, 5 features, target counts_for_sons_current_occupation
+    DatasetSpec("kings_county", 44989, "regression", ('low_dim', 'categorical')),  # 21613 rows, 21 features, target price
+    DatasetSpec("brazilian_houses", 44990, "regression", ('low_dim', 'categorical')),  # 10692 rows, 9 features, target total
+    DatasetSpec("fps_benchmark", 44992, "regression", ('low_dim', 'categorical')),  # 24624 rows, 43 features, target FPS
+    DatasetSpec("health_insurance", 44993, "regression", ('low_dim', 'categorical')),  # 22272 rows, 11 features, target whrswk
+    DatasetSpec("cars", 44994, "regression", ('low_dim',)),  # 804 rows, 17 features, target Price
+    DatasetSpec("fifa", 45012, "regression", ('low_dim', 'categorical')),  # 19178 rows, 28 features, target wage_eur
+    DatasetSpec("space_ga", 45402, "regression", ('low_dim',)),  # 3107 rows, 6 features, target ln_votes_pop
+)
+
+SUITES["ctr23"] = CTR23
+
+
 
 
 def _cache_path(spec: DatasetSpec) -> Path:

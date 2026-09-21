@@ -183,6 +183,108 @@ worth trying:
 3. **Cut seeds from 3 to 2 for screening**, keeping 3 only for whatever survives to a
    full-scale run.
 
+### TP-07 — one checkpoint for both tasks: built, verified for $0, ready to launch (2026-09-21)
+
+**Everything short of the training run.** Model (`580f263`), trainer (`bb607a5`), and — in the
+commit that adds this entry — the regression suite, the three-arm launcher and the joint
+recipe. Nothing trained; whether joint training *helps* is the GPU question below.
+
+What is established without a GPU:
+
+| Claim | How checked |
+|---|---|
+| A joint model can be *exactly* either released-architecture single-task model | load its weights, compare every forward path (train, inference, KV cache, repr cache), both tasks |
+| The joint step's gradient is exactly CE-grad + w·pinball-grad | one step each way, compared per parameter; mutation-checked |
+| Single-task training is unchanged | new vs pre-TP-07 `_run.py` from git: **bit-identical** weights and metrics after 3 steps, both tasks, AdamW and Muon |
+| The joint recipe builds | `train_v2_joint_stage1.sh` parsed and built on CPU: 29.10M params, 32/32 split, two Muon groups |
+
+Params: **29.10M joint vs 27.55M classifier + 28.56M regressor** — +5.6% over one checkpoint,
+in place of two. The cost stake, from the per-stage measurement below: one full curriculum
+is ~$1,470–2,740, so the regressor checkpoint TP-07 removes is worth that much again.
+
+#### CTR23: a regression suite, because there was none
+
+Every suite until now was classification, so a regression checkpoint could not be screened.
+`ctr23` is OpenML-CTR23 (study 353), the regression counterpart of CC18. The `cc18_narrow`
+rule (≤ 500 features), fixed before any result, removes none of the 35 (widest: 116).
+Validated with `python -m benchmarks._core.datasets --suite ctr23 --validate`:
+
+| dataset | id | rows | cols | cat | digest |
+|---|---|---|---|---|---|
+| Moneyball | 41021 | 1,232 | 14 | 6 | f1ee9cbf08a6280c |
+| abalone | 44956 | 4,177 | 8 | 1 | 81dd4cc70daca341 |
+| airfoil_self_noise | 44957 | 1,503 | 5 | 0 | 817e15162dd5da33 |
+| auction_verification | 44958 | 2,043 | 7 | 2 | a7dd7929698dbb9b |
+| concrete_compressive_strength | 44959 | 1,030 | 8 | 0 | f114808cb45a4723 |
+| energy_efficiency | 44960 | 768 | 8 | 0 | 6223c6b6405c3139 |
+| forest_fires | 44962 | 517 | 12 | 0 | d6b434cb15d95225 |
+| physiochemical_protein | 44963 | 45,730 | 9 | 0 | ff518e68d936f275 |
+| superconductivity | 44964 | 21,263 | 81 | 0 | ca4c66d4a080f5d7 |
+| geographical_origin_of_music | 44965 | 1,059 | 116 | 0 | bb8e55b57ee78160 |
+| solar_flare | 44966 | 1,066 | 10 | 8 | 5721aadf9c2032b1 |
+| student_performance_por | 44967 | 649 | 30 | 17 | 985530c7bbe6df09 |
+| naval_propulsion_plant | 44969 | 11,934 | 14 | 0 | dd8edc80728474dc |
+| QSAR_fish_toxicity | 44970 | 908 | 6 | 0 | ef261ece782acfca |
+| white_wine | 44971 | 4,898 | 11 | 0 | 829013f733afb21a |
+| red_wine | 44972 | 1,599 | 11 | 0 | e78b9233c00d8515 |
+| grid_stability | 44973 | 10,000 | 12 | 0 | 3f2c9fba11d0520d |
+| video_transcoding | 44974 | 68,784 | 18 | 2 | 2debc92e4971ece1 |
+| wave_energy | 44975 | 72,000 | 48 | 0 | 88f125172d9088a2 |
+| sarcos | 44976 | 48,933 | 21 | 0 | 6fdc585acd43ae37 |
+| california_housing | 44977 | 20,640 | 8 | 0 | e3362fdc49f86b6a |
+| cpu_activity | 44978 | 8,192 | 21 | 0 | 4d47407cf353bf76 |
+| diamonds | 44979 | 53,940 | 9 | 3 | b3192abac78b00d5 |
+| kin8nm | 44980 | 8,192 | 8 | 0 | 3822d8bed53b34a0 |
+| pumadyn32nh | 44981 | 8,192 | 32 | 0 | efd5b03ac25b0e33 |
+| miami_housing | 44983 | 13,932 | 15 | 0 | 95573d2ac6597352 |
+| cps88wages | 44984 | 28,155 | 6 | 4 | d3d5776e48b2baf3 |
+| socmob | 44987 | 1,156 | 5 | 4 | ddc242724be0af95 |
+| kings_county | 44989 | 21,613 | 21 | 4 | 71c80ddcbaddd12d |
+| brazilian_houses | 44990 | 10,692 | 9 | 4 | da6006ca0b44eedd |
+| fps_benchmark | 44992 | 24,624 | 43 | 13 | cfa687a08b13bea7 |
+| health_insurance | 44993 | 22,272 | 11 | 7 | 72e15471cc8885fa |
+| cars | 44994 | 804 | 17 | 0 | ebe63c1cf6d2a779 |
+| fifa | 45012 | 19,178 | 28 | 1 | 79ac7ce7cd32947c |
+| space_ga | 45402 | 3,107 | 6 | 0 | e18a83b1e5546b60 |
+
+Scored on **CRPS** (from 99 predicted quantiles, on a fixed grid, since a coarser grid
+underestimates it), RMSE, MAE and R², all on targets standardized by the training fold — so a
+paired test across datasets is not dominated by whichever has the largest units.
+
+**The metrics measure what they should** (CPU, 2 folds, 2 datasets):
+
+| model | energy_efficiency CRPS / R² | QSAR_fish_toxicity CRPS / R² |
+|---|---|---|
+| untrained tiny joint model | 0.761 / −0.004 | 0.653 / −0.010 |
+| released v2 regressor | **0.021 / 0.998** | **0.303 / 0.648** |
+
+An untrained model sits at R² ≈ 0 and RMSE ≈ 1 in standardized units, as it must; a good one
+is far below on CRPS. Not a benchmark — a check that the scale is right before paying for one.
+
+#### The experiment: `scripts/tp07_run.sh`
+
+Three proxy arms, one GPU each, same host: **clf_control**, **reg_control**, **joint**. The
+evaluator scores each checkpoint on the suites its own config can do — the joint one on both
+`cc18_narrow` and `ctr23` under one config_id — and `bm06_analyze` reads each task against
+that task's own control (`--metric crps` for regression).
+
+- **Equal steps; the joint arm splits each 64-dataset step 32/32.** It sees half as many
+  datasets of each task as that task's control, and the pair of controls costs twice the
+  joint arm. That is exactly the trade TP-07 claims is free, so it is the one tested.
+- **All three arms use the classifier's LayerNorm with biases,** the regression control
+  included, although the released regressor was trained bias-free. The question is
+  joint-vs-single-task; a control with a different norm would differ in two ways at once.
+- **Pass:** joint not worse than either control (no OPPOSITE SIGN at the final checkpoints).
+  Parity at half the compute is the claim, so "not separated" passes.
+- **Cost:** stage 1 runs 2.65 s/step on one RTX PRO 6000, so 20,000 steps ≈ 15 h per arm,
+  **≈ 44 GPU-hours per seed** plus evaluation — ≈ $90 at the measured $2.09/GPU-hour, ≈ $280
+  for the three seeds the gate asks for.
+- **If it fails:** re-run with `SHARED_EXTRA="--qk_norm True --input_norm True"` in all three
+  arms — TP-04, the report's stated fix for joint-training stability — before tuning the loss
+  weight. `--input_norm` (the report's LayerNorm after the input encoding) is new in this
+  commit; the other norm the report adds, before the task head, already exists here as the
+  LayerNorm that `norm_first` puts before the decoder.
+
 ### TP-05 — grouped-query attention: ~7.6x smaller cache, measured, no GPU needed (2026-09-21)
 
 **Implemented and measured for $0.** TP-05's headline benefit is memory, not accuracy, and
@@ -708,6 +810,10 @@ against the published claim.
 |---|---|---|---|---|---|---|---|
 | | | single-task control | | | | n/a | |
 | | | joint (TP-07) | | | | | |
+
+Not yet run. Launch with `scripts/tp07_run.sh` (three arms, one GPU each); design, pass rule
+and cost are in the TP-07 entry above. Each task has its own control — `clf_control` on
+`cc18_narrow`, `reg_control` on `ctr23` — so fill one row per task, per seed.
 
 ---
 

@@ -92,3 +92,56 @@ def test_a_single_checkpoint_is_only_provisional(tmp_path):
 
     v = _verdict(_ledger(tmp_path, {2500: 0.04}, seed=5))
     assert "PROVISIONAL" in v and "onward" not in v
+
+
+# --------------------------------------------------------------------------- #
+# --metric (TP-07): the direction of "worse" must follow the metric
+# --------------------------------------------------------------------------- #
+
+
+def _reg_ledger(tmp_path, crps_gap, seed=0, n_datasets=35, steps=(2500, 5000, 7500)):
+    """A regression-suite ledger: crps (a loss) and r2 (a score), joint vs reg_control.
+
+    crps_gap > 0 makes the joint arm WORSE; its r2 moves the opposite way, as it would.
+    """
+
+    rng = np.random.default_rng(seed)
+    path = tmp_path / f"reg{seed}.jsonl"
+    with path.open("w") as f:
+        for step in steps:
+            for d in range(n_datasets):
+                base = 0.3 + rng.normal(0, 0.05)
+                for fold in range(3):
+                    for arm, extra in (("reg_control", 0.0), ("joint", crps_gap)):
+                        crps = base + extra + rng.normal(0, 0.005)
+                        for metric, val in (("crps", crps), ("r2", 1 - 2 * crps)):
+                            f.write(json.dumps({
+                                "run_id": "t", "suite": "ctr23", "dataset": f"d{d}", "fold": fold,
+                                "config_id": f"{arm}-step{step}", "metric": metric,
+                                "value": val, "error": None}) + "\n")
+    return path
+
+
+def _reg_verdict(path, metric, expect):
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        main([str(path), "--eval-suite", "ctr23", "--metric", metric, "--secondary", "r2",
+              "--control", "reg_control", "--treatment", "joint", "--expect", expect])
+    return next(l for l in buf.getvalue().splitlines() if l.startswith("VERDICT"))
+
+
+@pytest.mark.parametrize("metric", ["crps", "r2"])
+def test_a_better_treatment_reads_better_whichever_way_the_metric_points(tmp_path, metric):
+    """crps falls and r2 rises for the same improvement; both must say 'better'."""
+
+    path = _reg_ledger(tmp_path, crps_gap=-0.02)
+    assert "onward" in _reg_verdict(path, metric, expect="better")
+    assert "OPPOSITE" in _reg_verdict(path, metric, expect="worse")
+
+
+@pytest.mark.parametrize("metric", ["crps", "r2"])
+def test_a_worse_treatment_is_flagged_as_contradicting_better(tmp_path, metric):
+    """TP-07's failure mode: the joint arm is worse. It must not read as 'no separation'."""
+
+    path = _reg_ledger(tmp_path, crps_gap=0.02, seed=1)
+    assert "OPPOSITE" in _reg_verdict(path, metric, expect="better")

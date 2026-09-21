@@ -319,6 +319,10 @@ def build_parser():
     parser.add_argument("--qk_norm", default=False, type=str2bool,
                         help="TP-04: RMSNorm on queries and keys in every attention block "
                              "(stability prerequisite for wider models and joint multitask training)")
+    parser.add_argument("--input_norm", default=False, type=str2bool,
+                        help="TP-04: LayerNorm on the cell encoding, before the column set "
+                             "transformer (the report's 'LayerNorm after the input encoding'; its "
+                             "norm before the task head already exists under --norm_first)")
     parser.add_argument("--col_fourier_value", default=False, type=str2bool,
                         help="TP-01: encode cell values with learned Fourier features instead of a "
                              "single linear projection (helps ordinal-encoded high-cardinality columns)")

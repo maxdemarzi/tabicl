@@ -62,3 +62,54 @@ def test_cc18_ids_are_unique():
 def test_both_suites_are_registered():
     assert SUITES["real_small"] is REAL_SMALL
     assert SUITES["cc18_narrow"] is CC18_NARROW
+
+
+# --------------------------------------------------------------------------- #
+# TP-07: the regression suite, and routing checkpoints to the suites they can do
+# --------------------------------------------------------------------------- #
+
+
+def _evaluator():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "scripts" / "bm06_evaluator.py"
+    spec = importlib.util.spec_from_file_location("bm06_evaluator", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_ctr23_is_all_35_of_openml_ctr23_and_all_regression():
+    from benchmarks._core.datasets import CTR23
+
+    assert SUITES["ctr23"] is CTR23
+    assert len(CTR23) == 35
+    assert len({s.openml_id for s in CTR23}) == 35
+    assert {s.task for s in CTR23} == {"regression"}
+
+
+def test_regression_tasks_carry_regression_metrics():
+    from benchmarks._core.datasets import CTR23
+    from benchmarks.suites.real_small import METRICS, REG_METRICS
+
+    task = make_tasks(CTR23[:1], 1, 100, "cfg", 0, {}, None, suite="ctr23")[0]
+    assert tuple(task.metrics) == REG_METRICS
+    assert not set(REG_METRICS) & set(METRICS)
+
+
+def test_every_suite_is_single_task():
+    ev = _evaluator()
+    assert ev.suite_task("cc18_narrow") == "classification"
+    assert ev.suite_task("ctr23") == "regression"
+    for name in SUITES:
+        ev.suite_task(name)  # raises if a suite mixes tasks
+
+
+def test_checkpoints_route_to_the_suites_they_can_do():
+    """A regressor handed to TabICLClassifier would fail every row, or worse, not fail."""
+
+    ev = _evaluator()
+    assert ev.checkpoint_tasks({"max_classes": 10}) == {"classification"}
+    assert ev.checkpoint_tasks({"max_classes": 0}) == {"regression"}
+    assert ev.checkpoint_tasks({"max_classes": 10, "multitask": True}) == {"classification", "regression"}

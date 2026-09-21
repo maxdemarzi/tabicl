@@ -19,6 +19,11 @@ effect at the first step. The published effect is large enough (~100 Elo, 60+ da
 that correction costs little power where it matters.
 
     python -m benchmarks.bm06_analyze benchmarks/_results/bm06/bm06.jsonl
+
+The same test reads any paired comparison. For a regression suite (TP-07), test on CRPS:
+
+    python -m benchmarks.bm06_analyze LEDGER --eval-suite ctr23 --metric crps --secondary r2 \\
+        --control reg_control --treatment joint --expect better
 """
 
 from __future__ import annotations
@@ -36,6 +41,9 @@ from ._core.aggregate import Record, drop_uninformative, records_from_ledger, wi
 from ._core.schema import Ledger
 
 STEP_RE = re.compile(r"^(?P<arm>.+)-step(?P<step>\d+)$")
+
+#: Metrics where larger is better. Everything else (log_loss, crps, rmse, mae) is a loss.
+HIGHER_IS_BETTER = {"accuracy", "balanced_accuracy", "roc_auc", "r2"}
 
 
 def per_dataset(records, method):
@@ -59,14 +67,21 @@ def main(argv=None) -> int:
     ap.add_argument("--eval-suite", default=None,
                     help="Restrict to rows scored on this dataset suite")
     ap.add_argument("--slice", default=None,
-                    help="Restrict to datasets whose cc18_narrow slices include this tag")
+                    help="Restrict to datasets whose slices (in --eval-suite, default cc18_narrow) "
+                         "include this tag")
+    ap.add_argument("--metric", default="log_loss",
+                    help="Metric the paired test runs on. log_loss for classification suites; crps "
+                         "for regression suites (TP-07).")
+    ap.add_argument("--secondary", default="accuracy",
+                    help="Metric shown alongside, not tested (accuracy; r2 for regression)")
     args = ap.parse_args(argv)
+    sign = -1.0 if args.metric in HIGHER_IS_BETTER else 1.0  # so diff > 0 always means worse
 
     rows = list(Ledger(Path(args.ledger)))
-    ll = records_from_ledger(rows, metric="log_loss", suite=args.eval_suite)
-    acc = records_from_ledger(rows, metric="accuracy", suite=args.eval_suite)
+    ll = records_from_ledger(rows, metric=args.metric, suite=args.eval_suite)
+    acc = records_from_ledger(rows, metric=args.secondary, suite=args.eval_suite)
     if not ll:
-        print("no log_loss rows yet")
+        print(f"no {args.metric} rows yet")
         return 1
 
     steps = sorted({int(m["step"]) for r in ll if (m := STEP_RE.match(r.method))})
@@ -75,7 +90,7 @@ def main(argv=None) -> int:
     print(f"ledger: {args.ledger}")
     if args.slice:
         from ._core.datasets import SUITES
-        keep = {d.name for d in SUITES["cc18_narrow"] if args.slice in d.slices}
+        keep = {d.name for d in SUITES[args.eval_suite or "cc18_narrow"] if args.slice in d.slices}
         ll = [r for r in ll if r.dataset in keep]
         acc = [r for r in acc if r.dataset in keep]
         print(f"slice: {args.slice} ({len(keep)} datasets in suite)")
@@ -83,7 +98,8 @@ def main(argv=None) -> int:
     print(f"question: is {args.treatment} {'WORSE' if want_worse else 'BETTER'} than "
           f"{args.control}?  (expected: yes)\n")
 
-    hdr = (f"{'step':>6} {'n':>3} {'ctrl acc':>9} {'trt acc':>8} {'ctrl ll':>8} {'trt ll':>8} "
+    m1, m2 = args.metric[:7], args.secondary[:7]
+    hdr = (f"{'step':>6} {'n':>3} {'ctrl ' + m2:>13} {'trt ' + m2:>12} {'ctrl ' + m1:>13} {'trt ' + m1:>12} "
            f"{'trt worse':>10} {'p raw':>8} {'p adj':>8}  verdict")  # 'trt worse' = share of datasets the control wins
     print(hdr)
     print("-" * len(hdr))
@@ -101,8 +117,8 @@ def main(argv=None) -> int:
             print(f"{step:>6} {len(common):>3}  (too few datasets scored by both arms yet)")
             continue
 
-        diff = np.array([dt[d] - dc[d] for d in common])  # >0 means treatment worse
-        hyp = "greater" if want_worse else "less"   # diff = treatment - control, on log-loss
+        diff = sign * np.array([dt[d] - dc[d] for d in common])  # >0 means treatment worse
+        hyp = "greater" if want_worse else "less"   # diff = treatment - control, as a loss
         opp = "less" if want_worse else "greater"
         try:
             p_raw = stats.wilcoxon(diff, alternative=hyp).pvalue
@@ -110,7 +126,7 @@ def main(argv=None) -> int:
         except ValueError:
             p_raw = p_opp = float("nan")
         p = min(1.0, p_raw * n_tests)  # Bonferroni across checkpoints
-        worse = win_rate(sub, c, t, higher_is_better=False)  # share of datasets control wins
+        worse = win_rate(sub, c, t, higher_is_better=args.metric in HIGHER_IS_BETTER)  # share control wins
 
         ac = per_dataset([r for r in acc if r.method == c], c)
         at = per_dataset([r for r in acc if r.method == t], t)
@@ -120,9 +136,9 @@ def main(argv=None) -> int:
         verdicts.append((step, agree, opposite))
         if agree and first_agree is None:
             first_agree = step
-        print(f"{step:>6} {len(common):>3} {np.mean([ac[d] for d in common if d in ac]):>9.4f} "
-              f"{np.mean([at[d] for d in common if d in at]):>8.4f} "
-              f"{np.mean([dc[d] for d in common]):>8.4f} {np.mean([dt[d] for d in common]):>8.4f} "
+        print(f"{step:>6} {len(common):>3} {np.mean([ac[d] for d in common if d in ac]):>13.4f} "
+              f"{np.mean([at[d] for d in common if d in at]):>12.4f} "
+              f"{np.mean([dc[d] for d in common]):>13.4f} {np.mean([dt[d] for d in common]):>12.4f} "
               f"{worse:>9.1%} {p_raw:>8.4f} {p:>8.4f}  {verdict}")
 
     if anchor:
@@ -133,7 +149,7 @@ def main(argv=None) -> int:
                              f"{args.control}-step{last}")
             common = sorted(set(da) & set(dc))
             if common:
-                print(f"\nreference: released v2 log-loss {np.mean([da[d] for d in common]):.4f} vs "
+                print(f"\nreference: released v2 {args.metric} {np.mean([da[d] for d in common]):.4f} vs "
                       f"proxy control at step {last} {np.mean([dc[d] for d in common]):.4f} "
                       f"on {len(common)} datasets -- how far the proxy is from a real model")
 

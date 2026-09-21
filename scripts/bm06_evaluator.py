@@ -14,6 +14,12 @@ Two details that each would have silently invalidated the experiment:
 * **--model-path.** Without it the suite loads the *released* checkpoint and every row
   measures the wrong model while looking perfectly normal.
 
+Each checkpoint is scored only on the suites of the tasks it can do, read from its own
+config (TP-07): a classifier on the classification suites, a regressor on the regression
+ones, and a multitask checkpoint on both, under one config_id. So one evaluator can follow
+a classification control, a regression control and a joint arm at once, and a regressor is
+never handed to TabICLClassifier.
+
 Idempotent: the ledger's resume keys skip anything already scored, so re-running after a
 crash picks up where it stopped.
 """
@@ -29,10 +35,30 @@ from pathlib import Path
 
 import torch
 
+# Run as a script from anywhere; the suite registry lives in the repo's benchmarks package
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 
 def slim(src: Path, dst: Path) -> None:
     ckpt = torch.load(src, map_location="cpu", weights_only=False)  # our own file
     torch.save({"config": ckpt["config"], "state_dict": ckpt["state_dict"]}, dst)
+
+
+def suite_task(suite: str) -> str:
+    from benchmarks._core.datasets import SUITES  # noqa: PLC0415
+
+    tasks = {spec.task for spec in SUITES[suite]}
+    if len(tasks) != 1:
+        raise ValueError(f"suite {suite!r} mixes tasks {sorted(tasks)}")
+    return tasks.pop()
+
+
+def checkpoint_tasks(config: dict) -> set[str]:
+    """Which tasks a checkpoint's config says it can do."""
+
+    if config.get("multitask"):
+        return {"classification", "regression"}
+    return {"regression"} if config.get("max_classes", 10) == 0 else {"classification"}
 
 
 def permanent_steps(ckpt_dir: Path, every: int) -> list[int]:
@@ -49,8 +75,17 @@ def permanent_steps(ckpt_dir: Path, every: int) -> list[int]:
 
 def evaluate(arm: str, step: int, model_path: Path | None, args, gpu: str) -> int:
     config_id = f"{arm}-step{step}" if model_path else arm
+    if model_path:
+        config = torch.load(model_path, map_location="cpu", weights_only=True)["config"]
+        tasks = checkpoint_tasks(config)
+    else:
+        tasks = {"classification", "regression"}  # the released anchor exists for both
+    suites = [suite for suite in args.suite if suite_task(suite) in tasks]
+    if not suites:
+        print(f"[eval] WARNING: {config_id} does {sorted(tasks)} but no --suite given is for that; "
+              f"nothing scored. Pass e.g. --suite ctr23 for regression.", flush=True)
     rc = 0
-    for suite in args.suite:
+    for suite in suites:
         rc |= _evaluate_one(suite, config_id, model_path, args, gpu)
     return rc
 

@@ -87,6 +87,12 @@ class TabICL(nn.Module):
         and TP-07 rather than a standalone win. Off by default; existing checkpoints load
         unchanged.
 
+    input_norm : bool, default=False
+        TP-04: LayerNorm on the cell encoding, the report's "LayerNorm after the input
+        encoding". Its other addition, a norm before the task head, is already here: with
+        ``norm_first`` (the v2 recipe) the ICL output passes through a LayerNorm before the
+        decoder. Off by default; existing checkpoints load unchanged.
+
     col_fourier_value : bool, default=False
         Encode cell values with learned Fourier features rather than a single linear
         projection. See :class:`~tabicl._model.layers.FourierValueEncoder`. Off by default so
@@ -197,6 +203,7 @@ class TabICL(nn.Module):
         col_affine: bool = False,
         icl_num_kv_heads: Optional[int] = None,
         qk_norm: bool = False,
+        input_norm: bool = False,
         col_fourier_value: bool = False,
         col_fourier_freqs: int = 32,
         col_feature_group: Union[bool, Literal["same", "valid"]] = "same",
@@ -300,6 +307,7 @@ class TabICL(nn.Module):
             feature_group_size=col_feature_group_size,
             target_aware=col_target_aware,
             max_classes=max_classes,
+            input_norm=input_norm,
             multitask=multitask,
             reserve_cls_tokens=row_num_cls,
             ssmax=col_ssmax,

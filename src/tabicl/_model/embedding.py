@@ -100,6 +100,12 @@ class ColEmbedding(TaskConditioned, nn.Module):
     max_classes : int, default=10
         Number of classes for classification task. If 0, assumes regression task.
 
+    input_norm : bool, default=False
+        TP-04: LayerNorm on the cell encoding, before the set transformer. Pre-norm blocks
+        normalize only the input of each branch, never the residual stream itself, so the
+        stream starts at whatever scale the cell encoder emits; this pins it. Off by
+        default; with it off no module is added, so checkpoints are unchanged.
+
     multitask : bool, default=False
         TP-07: hold label encoders for both tasks plus a learned task embedding, and pick
         the task with ``set_task``. Requires ``max_classes > 0``. The classification encoder
@@ -154,6 +160,7 @@ class ColEmbedding(TaskConditioned, nn.Module):
         feature_group_size: int = 3,
         target_aware: bool = False,
         max_classes: int = 10,
+        input_norm: bool = False,
         multitask: bool = False,
         reserve_cls_tokens: int = 4,
         ssmax: Union[bool, str] = False,
@@ -177,6 +184,8 @@ class ColEmbedding(TaskConditioned, nn.Module):
             self.in_linear = FourierValueEncoder(in_dim, embed_dim, n_freqs=fourier_freqs)
         else:
             self.in_linear = SkippableLinear(in_dim, embed_dim)
+        if input_norm:
+            self.in_norm = nn.LayerNorm(embed_dim, bias=not bias_free_ln)
 
         self.tf_col = SetTransformer(
             num_blocks=num_blocks,
@@ -234,6 +243,17 @@ class ColEmbedding(TaskConditioned, nn.Module):
         mapping = [orig_to_other[feature] for feature in reference_pattern]
 
         return mapping
+
+    def _encode_cells(self, features: Tensor) -> Tensor:
+        """Cell encoding, then the optional input norm, then the task embedding.
+
+        The task embedding goes after the norm so that, zero-initialized, it leaves a joint
+        model exactly equal to a single-task one (TP-07).
+        """
+        src = self.in_linear(features)
+        if hasattr(self, "in_norm"):
+            src = self.in_norm(src)
+        return self.add_task_embedding(src)
 
     def _encode_target(self, y: Tensor) -> Tensor:
         """Embed target values with the label encoder of the active task."""
@@ -406,7 +426,7 @@ class ColEmbedding(TaskConditioned, nn.Module):
             Embeddings of shape (..., T, E) where E is the embedding dimension.
         """
 
-        src = self.add_task_embedding(self.in_linear(features))  # (..., T, in_dim) -> (..., T, E)
+        src = self._encode_cells(features)  # (..., T, in_dim) -> (..., T, E)
 
         if not self.target_aware:
             src = self.tf_col(src, train_size=None if embed_with_test else train_size)
@@ -804,7 +824,7 @@ class ColEmbedding(TaskConditioned, nn.Module):
         Tensor
             Embeddings of shape (..., T, E).
         """
-        src = self.add_task_embedding(self.in_linear(features))
+        src = self._encode_cells(features)
 
         if not self.target_aware:
             src = self.tf_col.forward_with_cache(

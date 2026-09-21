@@ -164,3 +164,64 @@ def test_composes_with_fourier_value_encoding():
     with torch.no_grad():
         out = model(torch.randn(1, 40, 6), torch.randint(0, 3, (1, 30)).float(), d=torch.tensor([6]))
     assert torch.isfinite(out).all()
+
+
+# --------------------------------------------------------------------------- #
+# input_norm: the report's "LayerNorm after the input encoding"
+# --------------------------------------------------------------------------- #
+
+
+def test_input_norm_off_adds_nothing():
+    """Off must leave the state dict exactly as it was, or released checkpoints stop loading."""
+
+    assert TabICL(max_classes=10).state_dict().keys() == TabICL(max_classes=10, input_norm=False).state_dict().keys()
+    assert not any("in_norm" in k for k in TabICL(max_classes=10).state_dict())
+
+
+def test_input_norm_normalizes_the_cell_encoding():
+    torch.manual_seed(0)
+    emb = TabICL(max_classes=10, input_norm=True).col_embedder
+    assert isinstance(emb.in_norm, torch.nn.LayerNorm)
+    with torch.no_grad():
+        out = emb._encode_cells(torch.randn(3, 20, emb.feature_group_size) * 50.0)  # grouped cells
+    torch.testing.assert_close(out.mean(-1), torch.zeros(3, 20), atol=1e-4, rtol=0)
+    torch.testing.assert_close(out.std(-1, unbiased=False), torch.ones(3, 20), atol=1e-3, rtol=0)
+
+
+def test_input_norm_follows_bias_free_ln():
+    """The regression recipe's bias-free LayerNorm must reach the new norm too."""
+
+    emb = TabICL(max_classes=10, input_norm=True, bias_free_ln=True).col_embedder
+    assert emb.in_norm.bias is None
+
+
+@pytest.mark.parametrize("mode", ["kv", "repr"])
+def test_input_norm_cached_and_uncached_agree(mode):
+    """Per-token, so it cannot straddle the cache boundary -- asserted, not assumed."""
+
+    torch.manual_seed(0)
+    model = TabICL(max_classes=10, input_norm=True, zero_init=False).eval()
+    with torch.no_grad():
+        model.col_embedder.in_norm.weight.copy_(torch.linspace(0.5, 2.0, model.embed_dim))
+    X = torch.randn(1, 40, 6)
+    y = torch.arange(32).remainder(3).float().unsqueeze(0)
+    with torch.no_grad():
+        plain = model(X, y)
+        stored = model.forward_with_cache(X_train=X[:, :32], y_train=y, X_test=X[:, 32:],
+                                          store_cache=True, cache_mode=mode)
+        reused = model.forward_with_cache(X_test=X[:, 32:], use_cache=True, store_cache=False)
+    torch.testing.assert_close(stored, plain, rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(reused, plain, rtol=1e-5, atol=1e-5)
+
+
+def test_input_norm_composes_with_multitask_equivalence():
+    """A joint model loaded from a single-task one stays identical with the norm on."""
+
+    torch.manual_seed(0)
+    single = TabICL(max_classes=0, input_norm=True, zero_init=False).eval()
+    joint = TabICL(max_classes=10, multitask=True, input_norm=True, zero_init=False)
+    joint.load_single_task_state_dict(single.state_dict(), "regression")
+    joint.set_task("regression").eval()
+    X, y = torch.randn(1, 40, 6), torch.randn(1, 32)
+    with torch.no_grad():
+        torch.testing.assert_close(joint(X, y), single(X, y), rtol=1e-5, atol=1e-5)

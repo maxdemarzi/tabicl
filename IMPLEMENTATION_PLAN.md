@@ -310,6 +310,13 @@ Risk to watch: task interference. The report claims a joint improvement, but the
 normalization layers specifically to make it stable, and their prior differs from ours. Hold a
 single-task control run at proxy scale to compare against, not just the published claim.
 
+**As built** (2026-09-21): three arms, one GPU each — `clf_control`, `reg_control`, `joint` —
+via [`scripts/tp07_run.sh`](scripts/tp07_run.sh). Each task is judged against its own control on
+its own suite: `cc18_narrow` on log-loss, the new regression suite `ctr23` on CRPS. Equal steps,
+so the joint arm sees half as many datasets of each task — the trade being claimed. TP-04 is
+*not* in the arms by default: it is the fallback if joint training proves unstable, applied to
+all three arms so the comparison stays one-variable.
+
 ---
 
 ## Phase 5 — Research

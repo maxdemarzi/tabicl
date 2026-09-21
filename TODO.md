@@ -26,7 +26,8 @@ green for the first time on this branch.
 | ✅ | BM-08 | Eval suite 10 → 62 datasets (OpenML-CC18, mechanical rule) |
 | 🔧 | TP-01, TP-04 | Code + tests done, **off by default, untrained** |
 | 🔧 | TP-14 | Scoring rules done; needs the benchmark's dataset list |
-| ⛔ | TP-02, 03, 05, 06, 07, 08, 09, 10, 11 | Not started |
+| 🔧 | TP-07 | Built and verified for $0 (model, trainer, regression suite, 3-arm launcher); **ready to launch**, `scripts/tp07_run.sh` |
+| ⛔ | TP-02, 03, 05, 06, 08, 09, 10, 11 | Not started |
 | ⛔ | TP-15, TP-16 | Blocked on measurement |
 
 **Everything that can be decided on a laptop has been.** Every remaining question is a
@@ -243,8 +244,11 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       cached path normalizes `q` only. Tests assert cached/uncached equivalence with a
       non-unit learned weight, which is what would expose a double application — that failure
       would stay finite and plausible while being wrong, on a feature the README advertises.
-      *Remaining:* the report also adds a LayerNorm after the input encoding and an RMSNorm
-      before the task head; neither is implemented yet. And the ablation, which needs a GPU.
+      *Added with TP-07:* the report's LayerNorm after the input encoding, as `--input_norm`
+      (LayerNorm on the cell encoding, off by default, 5 tests incl. cached/uncached). Its
+      RMSNorm before the task head was *not* added: with `norm_first` (the v2 recipe) the ICL
+      output already passes through a LayerNorm right before the decoder. *Remaining:* the
+      ablation, which needs a GPU.
       Original note: `grep` found no QK-norm anywhere in
       [`_model/`](src/tabicl/_model/). TabPFN added RMSNorm on queries and keys in attention
       blocks, LayerNorm after the input encoding, and RMSNorm before the task head — specifically
@@ -295,7 +299,8 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
 
 ### Phase 4 — Training economics
 
-- [~] **TP-07** Single multitask checkpoint. *Model and trainer done, untrained.*
+- [~] **TP-07** Single multitask checkpoint. *Everything short of the GPU run is done; launch with
+      [`scripts/tp07_run.sh`](scripts/tp07_run.sh) (~44 GPU-h / ~$90 per seed, 3 seeds to gate).*
       `multitask=True` on `TabICL` holds both tasks' label encoders (column-embedding and ICL)
       and both output heads around one shared trunk, plus a learned task embedding added to
       every row at the input of the column embedder and of the ICL transformer. The task is
@@ -332,12 +337,23 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       [`tests/test_multitask_training.py`](tests/test_multitask_training.py), including that
       the joint gradient is exactly the weighted sum of the per-task gradients;
       mutation-checked. *Not verified:* multi-GPU DDP (no GPUs here), though the zero-term
-      design avoids the known failure. *Remaining:* (1) pick one `norm_type` for the joint
-      recipe; (2) TP-04's remaining input/head norms; (3) the experiment: three proxy arms
-      (classification control, regression control, joint) — `scripts/ablate_run.sh` runs two
-      arms, and its evaluator scores a checkpoint only as a classifier on a classification
-      suite, so it needs a third arm, a regression suite, and the joint checkpoint scored
-      both ways; (4) tune `--multitask_reg_weight` if the control comparison asks for it. Original note:
+      design avoids the known failure. **Finishing:** `norm_type` decided — the classifier's
+      LayerNorm with biases, a superset of bias-free that allows a full warm start from the
+      released classifier; the joint recipe is
+      [`scripts/train_v2_joint_stage{1,2,3}.sh`](scripts/train_v2_joint_stage1.sh), the
+      classifier's plus two flags, parsed and built on CPU. TP-04's missing norm is now
+      `--input_norm` (LayerNorm on the cell encoding); its other norm, before the task head,
+      already existed as the `norm_first` LayerNorm before the decoder, so it was not
+      duplicated. A regression suite existed nowhere, so `ctr23` (OpenML-CTR23, all 35,
+      validated) was added, scored on CRPS/RMSE/MAE/R² on standardized targets, sanity-checked
+      against the released regressor (R² 0.998 vs ≈0 untrained). The evaluator now reads each
+      checkpoint's config and scores it on the suites it can do — the joint one on both —
+      and `bm06_analyze --metric crps` reads regression (direction handled per metric,
+      tested both ways). Design, pass rule and cost:
+      [RESULTS.md](benchmarks/RESULTS.md) "TP-07". *Remaining:* the run itself (3 seeds);
+      only if it fails, re-run with TP-04 in all arms, then tune `--multitask_reg_weight`;
+      the full curriculum only after it passes. Multi-GPU DDP still unverified — the
+      launcher uses one GPU per arm. Original note:
       TabPFN trains classification and regression jointly
       with task type as an input; only the label encoder and output head are task-specific — the
       cell encoder, column distribution embedder, feature aggregator and in-context transformer
