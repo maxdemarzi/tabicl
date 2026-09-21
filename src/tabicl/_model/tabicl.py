@@ -367,6 +367,16 @@ class TabICL(nn.Module):
         self.icl_predictor.set_task(task)
         return self
 
+    def task_parameters(self, task: str) -> List[nn.Parameter]:
+        """The parameters only ``task`` uses: its label encoders and output head.
+
+        Excludes the task embeddings, which are one tensor shared by both tasks.
+        """
+        if not self.multitask:
+            raise ValueError("task_parameters is for multitask models.")
+        prefixes = self._REG_KEY_MAP.values() if check_task(task) == "regression" else self._REG_KEY_MAP.keys()
+        return [p for name, p in self.named_parameters() if name.startswith(tuple(prefixes))]
+
     # Keys whose names differ between a single-task regression checkpoint and a multitask
     # model. The classification parts keep the single-task names, so need no mapping.
     _REG_KEY_MAP = {

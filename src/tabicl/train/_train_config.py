@@ -217,6 +217,29 @@ def build_parser():
         default=999,
         help="Number of quantiles predicted for regression. Only used when regression_method is set.",
     )
+    parser.add_argument(
+        "--multitask",
+        default=False,
+        type=str2bool,
+        help="TP-07: train one checkpoint on classification and quantile regression jointly. Each "
+        "step draws ceil(batch_size/2) classification and floor(batch_size/2) regression datasets "
+        "from two priors and takes one optimizer step over both. --regression_method must be unset "
+        "or 'quantile'; --num_quantiles sizes the regression head, --max_classes the classification one.",
+    )
+    parser.add_argument(
+        "--multitask_reg_weight",
+        type=float,
+        default=1.0,
+        help="Weight of the pinball loss relative to cross-entropy under --multitask. The two are on "
+        "different scales, so 1.0 is a starting point to tune against the single-task control.",
+    )
+    parser.add_argument(
+        "--reg_prior_dir",
+        type=str,
+        default=None,
+        help="Pre-generated regression prior for --multitask. Required with --prior_dir, which then "
+        "holds the classification prior.",
+    )
 
     ###########################################################################
     ##### Model Architecture Config ###########################################

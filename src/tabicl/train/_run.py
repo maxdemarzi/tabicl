@@ -176,14 +176,22 @@ class Trainer:
 
         # Determine the task type. regression_method=None trains for classification;
         # "quantile" trains for quantile regression (max_classes=0) with a pinball loss.
-        self.regression = self.config.regression_method is not None
-        if self.regression and self.config.regression_method != "quantile":
+        # --multitask (TP-07) trains both into one checkpoint.
+        self.multitask = self.config.multitask
+        if self.config.regression_method not in (None, "quantile"):
             raise NotImplementedError(
                 f"regression_method='{self.config.regression_method}' is not supported. "
                 "Only None (classification) and 'quantile' (pinball regression) are available."
             )
-        if self.regression and self.config.num_quantiles <= 0:
+        self.regression = self.config.regression_method is not None and not self.multitask
+        if self.multitask:
+            self.tasks = ("classification", "regression")
+        else:
+            self.tasks = ("regression",) if self.regression else ("classification",)
+        if "regression" in self.tasks and self.config.num_quantiles <= 0:
             raise ValueError("For quantile regression, num_quantiles must be greater than 0.")
+        if self.multitask and self.config.max_classes <= 0:
+            raise ValueError("--multitask needs max_classes > 0 for its classification head.")
 
         # Map the private-style --norm_type to the public model's bias_free_ln flag.
         if self.config.norm_type == "default":
@@ -231,6 +239,9 @@ class Trainer:
             "zero_init": self.config.zero_init,
             "recompute": self.config.recompute,
         }
+        # Only written when set, so single-task checkpoint configs stay loadable by older code
+        if self.multitask:
+            self.model_config["multitask"] = True
 
         model = TabICL(**self.model_config)
         model.to(device=self.config.device)
@@ -270,9 +281,46 @@ class Trainer:
             self.raw_model = model
 
     def configure_prior(self):
-        """Set up a tabular dataset generator for synthetic data during training."""
+        """Set up a tabular dataset generator for synthetic data during training.
 
-        if self.config.prior_dir is None:
+        One dataloader per task. Under --multitask each step's batch is split between the
+        classification and regression priors, so a step sees as many datasets as a
+        single-task step and one run covers both tasks.
+        """
+
+        if self.multitask:
+            self.task_batch_sizes = {
+                "classification": math.ceil(self.config.batch_size / 2),
+                "regression": self.config.batch_size // 2,
+            }
+            if self.task_batch_sizes["regression"] < 1:
+                raise ValueError("--multitask needs a per-GPU batch_size of at least 2, one dataset per task.")
+            if self.config.prior_dir is not None and self.config.reg_prior_dir is None:
+                raise ValueError("--multitask with --prior_dir also needs --reg_prior_dir for the regression prior.")
+        else:
+            self.task_batch_sizes = {self.tasks[0]: self.config.batch_size}
+
+        # Split the prior workers between the loaders rather than doubling the CPU load
+        num_workers = self.config.n_jobs
+        if num_workers <= 0:
+            # psutil.cpu_count(logical=False) can return None on some platforms; fall back safely.
+            num_workers = psutil.cpu_count(logical=False) or os.cpu_count() or 1
+        num_workers = max(1, num_workers // len(self.tasks))
+
+        self.dataloaders = {
+            task: self._build_dataloader(
+                regression=task == "regression",
+                batch_size=self.task_batch_sizes[task],
+                prior_dir=self.config.reg_prior_dir if (self.multitask and task == "regression") else self.config.prior_dir,
+                num_workers=num_workers,
+            )
+            for task in self.tasks
+        }
+
+    def _build_dataloader(self, regression, batch_size, prior_dir, num_workers):
+        """Build the dataloader for one task's prior."""
+
+        if prior_dir is None:
             # Generate prior data on the fly
             # Only override what was asked for, so an unset flag leaves the prior exactly as
             # it was -- the control arm of a prior ablation must be bit-identical.
@@ -285,8 +333,8 @@ class Trainer:
 
             dataset = PriorDataset(
                 scm_fixed_hp=fixed_hp,  # PriorDataset names it scm_fixed_hp; it forwards to SCMPrior
-                regression=self.regression,
-                batch_size=self.config.batch_size,
+                regression=regression,
+                batch_size=batch_size,
                 batch_size_per_gp=self.config.batch_size_per_gp,
                 min_features=self.config.min_features,
                 max_features=self.config.max_features,
@@ -307,8 +355,8 @@ class Trainer:
         else:
             # Load pre-generated prior data from disk
             dataset = LoadPriorDataset(
-                data_dir=self.config.prior_dir,
-                batch_size=self.config.batch_size,
+                data_dir=prior_dir,
+                batch_size=batch_size,
                 ddp_world_size=self.ddp_world_size,
                 ddp_rank=self.ddp_rank,
                 start_from=self.config.load_prior_start,
@@ -321,18 +369,14 @@ class Trainer:
 
         # For on-the-fly generation, parallelize dataset creation across dataloader workers.
         # For pre-generated data loaded from disk, a single worker is enough.
-        if self.config.prior_dir is None:
-            # psutil.cpu_count(logical=False) can return None on some platforms; fall back safely.
-            num_workers = self.config.n_jobs
-            if num_workers <= 0:
-                num_workers = psutil.cpu_count(logical=False) or os.cpu_count() or 1
+        if prior_dir is None:
             prefetch_factor = 2
         else:
             num_workers = 1
             prefetch_factor = 4
 
         # Create dataloader for efficient loading and prefetching
-        self.dataloader = DataLoader(
+        return DataLoader(
             dataset,
             batch_size=None,  # No additional batching since PriorDataset handles batching internally
             shuffle=False,
@@ -350,8 +394,16 @@ class Trainer:
         if self.config.muon:
             if self.master_process:
                 print("Using Muon optimizer.")
+            # Muon orthogonalizes each 2-D update. The (2, d) task embedding is two independent
+            # vectors, not a linear map, so under --multitask it goes to Muon's internal AdamW.
+            # Single-task runs keep one group, exactly as before.
+            task_embeds = [p for n, p in self.raw_model.named_parameters() if n.endswith("task_embed")]
+            ids = {id(p) for p in task_embeds}
+            param_groups = [dict(params=[p for p in self.raw_model.parameters() if id(p) not in ids], use_muon=True)]
+            if task_embeds:
+                param_groups.append(dict(params=task_embeds, use_muon=False))
             self.optimizer = Muon(
-                param_groups=[dict(params=list(self.raw_model.parameters()), use_muon=True)],
+                param_groups=param_groups,
                 lr=self.config.lr,
                 weight_decay=self.config.weight_decay,
                 matched_adamw_rms=0.2,
@@ -518,16 +570,16 @@ class Trainer:
         else:
             step_progress = range(self.curr_step, self.config.max_steps)
 
-        dataloader = iter(self.dataloader)
+        dataloaders = {task: iter(loader) for task, loader in self.dataloaders.items()}
         for step in step_progress:
-            # Get the next batch
+            # Get the next batch of each task
             with Timer() as prior_timer:
-                batch = next(dataloader)
+                batches = {task: next(loader) for task, loader in dataloaders.items()}
             prior_time = prior_timer.elapsed
 
             # Train the model on the batch
             with Timer() as train_timer:
-                results = self.run_batch(batch)
+                results = self.run_batch(batches)
             train_time = train_timer.elapsed
 
             # Clear CUDA cache to free memory
@@ -642,7 +694,7 @@ class Trainer:
 
         return micro_X, micro_y
 
-    def run_micro_batch(self, micro_batch, micro_batch_idx, num_micro_batches):
+    def run_micro_batch(self, micro_batch, task, sync_grads):
         """Process a micro batch for gradient accumulation.
 
         Parameters
@@ -651,16 +703,17 @@ class Trainer:
             (micro_X, micro_y, micro_d, micro_seq_len, micro_train_size) tensors
             for the micro batch.
 
-        micro_batch_idx : int
-            Index of the current micro batch.
+        task : str
+            "classification" or "regression".
 
-        num_micro_batches : int
-            Total number of micro batches.
+        sync_grads : bool
+            Whether DDP should all-reduce gradients on this backward (the step's last micro batch).
 
         Returns
         -------
         dict
-            Result dictionary with 'ce' and 'accuracy' keys.
+            Result dictionary with 'ce' and 'accuracy' keys for classification, 'pinball' for
+            regression. Values are unweighted, so they read the same as a single-task run.
         """
         micro_X, micro_y, micro_d, micro_seq_len, micro_train_size = micro_batch
         seq_len, train_size = self.validate_micro_batch(micro_seq_len, micro_train_size)
@@ -676,7 +729,10 @@ class Trainer:
 
         # Set DDP gradient sync for last micro batch only
         if self.ddp:
-            self.model.require_backward_grad_sync = micro_batch_idx == num_micro_batches - 1
+            self.model.require_backward_grad_sync = sync_grads
+
+        if self.multitask:
+            self.raw_model.set_task(task)
 
         # By default (v2), ignore the per-dataset feature count so the model treats all (padded)
         # columns uniformly. This is required for the model's feature grouping and supports
@@ -684,7 +740,7 @@ class Trainer:
         model_d = None if self.config.ignore_d else micro_d
 
         with self.amp_ctx:
-            if self.regression:
+            if task == "regression":
                 # (B, test_size, num_quantiles) predicted quantiles at levels
                 # linspace(0, 1, num_quantiles + 2)[1:-1] (matches inference / QuantileDistribution)
                 pred = self.model(micro_X, y_train, model_d)
@@ -699,39 +755,51 @@ class Trainer:
                 true = y_test.long().flatten()
                 loss = F.cross_entropy(pred, true)
 
+        # Divided exactly as before TP-07, so a single-task run is bit-identical
+        backward_loss = loss / self.num_micro_batches[task]
+        if self.multitask and task == "regression":
+            backward_loss = backward_loss * self.config.multitask_reg_weight
+        if self.multitask:
+            # DDP expects every parameter in every backward; the other task's head is not in
+            # this graph. A zero-weighted term adds it with an exactly-zero gradient, which
+            # avoids find_unused_parameters and leaves the accumulated gradient unchanged.
+            other = "regression" if task == "classification" else "classification"
+            backward_loss = backward_loss + 0.0 * sum(p.sum() for p in self.raw_model.task_parameters(other))
+
         # Scale loss for gradient accumulation and backpropagate
-        scaled_loss = loss / num_micro_batches
-        self.scaler.scale(scaled_loss).backward()
+        self.scaler.scale(backward_loss).backward()
 
         with torch.no_grad():
             micro_results = {}
-            if self.regression:
-                micro_results["pinball"] = scaled_loss.item()
+            num_micro_batches = self.num_micro_batches[task]
+            if task == "regression":
+                micro_results["pinball"] = loss.item() / num_micro_batches
             else:
-                micro_results["ce"] = scaled_loss.item()
+                micro_results["ce"] = loss.item() / num_micro_batches
                 accuracy = (pred.argmax(dim=1) == true).sum() / len(true)
                 micro_results["accuracy"] = accuracy.item() / num_micro_batches
 
         return micro_results
 
-    def run_batch(self, batch):
-        """Train the model on a batch of datasets.
+    def run_batch(self, batches):
+        """Train the model on one batch of datasets per task.
 
-        Handles gradient accumulation by splitting the batch into micro-batches.
+        Handles gradient accumulation by splitting each batch into micro-batches.
         Supports variable-sized datasets by padding. Skips micro-batches on CUDA
-        OOM errors. Updates model parameters and returns loss and accuracy metrics.
+        OOM errors. Updates model parameters once, over all tasks, and returns loss
+        and accuracy metrics.
 
         Parameters
         ----------
-        batch : tuple
-            Contains tensors (X, y, d, seq_len, train_size) for the batch.
-            X and y can be Tensors or NestedTensors (for variable sequence
-            lengths).
+        batches : dict
+            Maps each task to a tuple of tensors (X, y, d, seq_len, train_size).
+            X and y can be Tensors or NestedTensors (for variable sequence lengths).
 
         Returns
         -------
         dict
-            Dictionary containing 'ce' (cross-entropy loss) and 'accuracy'.
+            'ce' (cross-entropy loss) and 'accuracy' for classification, 'pinball' for
+            regression; under --multitask, all three.
 
         Raises
         ------
@@ -741,31 +809,37 @@ class Trainer:
         self.model.train()
         self.optimizer.zero_grad(set_to_none=True)
 
-        # Pad nested tensors to the same size
-        batch = [t.to_padded_tensor(padding=0.0) if t.is_nested else t for t in batch]
+        # Split each task's batch into micro-batches along the first dimension
+        self.num_micro_batches = {}
+        work = []
+        for task, batch in batches.items():
+            # Pad nested tensors to the same size
+            batch = [t.to_padded_tensor(padding=0.0) if t.is_nested else t for t in batch]
+            micro_batches = list(zip(*[torch.split(t, self.config.micro_batch_size, dim=0) for t in batch]))
+            self.num_micro_batches[task] = math.ceil(self.task_batch_sizes[task] / self.config.micro_batch_size)
+            work.extend((task, micro_batch) for micro_batch in micro_batches)
 
-        # Split the batch into micro-batches along the first dimension
-        num_micro_batches = math.ceil(self.config.batch_size / self.config.micro_batch_size)
-        micro_batches = [torch.split(t, self.config.micro_batch_size, dim=0) for t in batch]
-        micro_batches = list(zip(*micro_batches))
-
-        results = {"pinball": 0.0} if self.regression else {"ce": 0.0, "accuracy": 0.0}
+        results = {}
+        if "classification" in batches:
+            results.update(ce=0.0, accuracy=0.0)
+        if "regression" in batches:
+            results["pinball"] = 0.0
         failed_batches = 0
 
-        for idx, micro_batch in enumerate(micro_batches):
+        for idx, (task, micro_batch) in enumerate(work):
             try:
-                micro_results = self.run_micro_batch(micro_batch, idx, num_micro_batches)
+                micro_results = self.run_micro_batch(micro_batch, task, sync_grads=idx == len(work) - 1)
                 for k, v in micro_results.items():
                     results[k] += v
             except torch.cuda.OutOfMemoryError:
                 print(
-                    f"Warning: OOM error in micro-batch {idx+1}/{num_micro_batches} at step {self.curr_step}. Skipping."
+                    f"Warning: OOM error in {task} micro-batch {idx+1}/{len(work)} at step {self.curr_step}. Skipping."
                 )
                 torch.cuda.empty_cache()
                 failed_batches += 1
                 continue
 
-        failure_ratio = failed_batches / num_micro_batches
+        failure_ratio = failed_batches / len(work)
         if failure_ratio > 0.1:
             raise RuntimeError(
                 f"({failure_ratio:.1%}) of micro-batches failed due to OOM at step {self.curr_step}. "

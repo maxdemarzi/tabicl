@@ -295,7 +295,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
 
 ### Phase 4 — Training economics
 
-- [~] **TP-07** Single multitask checkpoint. *Model side done, trainer not wired, untrained.*
+- [~] **TP-07** Single multitask checkpoint. *Model and trainer done, untrained.*
       `multitask=True` on `TabICL` holds both tasks' label encoders (column-embedding and ICL)
       and both output heads around one shared trunk, plus a learned task embedding added to
       every row at the input of the column embedder and of the ICL transformer. The task is
@@ -316,11 +316,28 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       head. 33 tests in [`tests/test_multitask.py`](tests/test_multitask.py). Tests use
       `zero_init=False`: with the default, features never reach the CLS tokens at init and the
       column-level task embedding provably has no effect, which first showed up as a failing
-      test. *Remaining:* (1) trainer — one prior per task, one optimizer step accumulating a
-      micro-batch of each; a relative loss weight is likely needed since pinball and CE are on
-      different scales; Muon currently orthogonalizes every 2-D param, which would include the
-      `(2, d)` task embedding, so exclude it; (2) pick one `norm_type` for the joint recipe;
-      (3) TP-04's remaining input/head norms; (4) the single-task control run. Original note:
+      test. **Trainer:** `--multitask True` builds the joint model and one prior per task; each step
+      takes ceil(B/2) classification and floor(B/2) regression datasets, so a step sees as many
+      datasets as a single-task step, and one optimizer step covers both.
+      `--multitask_reg_weight` (default 1.0) weights pinball against CE; logged losses stay
+      unweighted so curves compare directly with the controls. `--reg_prior_dir` supplies the
+      regression prior when training from disk. Prior workers are split between the two
+      loaders, not doubled. Under Muon the `(2, d)` task embeddings go to its internal AdamW
+      (they are two vectors, not a linear map); single-task runs keep one group. For DDP, each
+      micro-batch adds the other head's parameters with weight 0.0, so every parameter is in
+      every backward with an exactly-zero gradient — no `find_unused_parameters`. **Single-task
+      runs are bit-identical to the pre-TP-07 trainer** (weights and metrics after 3 steps,
+      both tasks, AdamW and Muon, checked against the old `_run.py` from git). A 3-step joint
+      run on the real `mlp_scm` priors trains end to end on CPU. 15 tests in
+      [`tests/test_multitask_training.py`](tests/test_multitask_training.py), including that
+      the joint gradient is exactly the weighted sum of the per-task gradients;
+      mutation-checked. *Not verified:* multi-GPU DDP (no GPUs here), though the zero-term
+      design avoids the known failure. *Remaining:* (1) pick one `norm_type` for the joint
+      recipe; (2) TP-04's remaining input/head norms; (3) the experiment: three proxy arms
+      (classification control, regression control, joint) — `scripts/ablate_run.sh` runs two
+      arms, and its evaluator scores a checkpoint only as a classifier on a classification
+      suite, so it needs a third arm, a regression suite, and the joint checkpoint scored
+      both ways; (4) tune `--multitask_reg_weight` if the control comparison asks for it. Original note:
       TabPFN trains classification and regression jointly
       with task type as an input; only the label encoder and output head are task-specific — the
       cell encoder, column distribution embedder, feature aggregator and in-context transformer

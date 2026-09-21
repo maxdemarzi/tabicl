@@ -235,6 +235,51 @@ Accuracy is untested — that needs a training run. But the practical consequenc
 concrete: it lifts the `kv_cache="kv"` ceiling from ~400-500K training rows on a 96 GB card to
 roughly 3-4M, and it is the prerequisite for TP-06, which would otherwise double the cache.
 
+### Full-curriculum cost, measured per stage (2026-09-21)
+
+**$1.77.** One RTX PRO 6000 Blackwell, each stage's exact config from
+`scripts/train_v2_clf_stage{1,2,3}.sh`, run on the same pod so the ratios compare like with
+like. Steady state excludes the first step, which carries prior warm-up.
+
+| Stage | Steps | Rows | s/step | vs stage 1 | my estimate | 
+|---|---|---|---|---|---|
+| 1 | 500,000 | 1,024 | **2.65** | 1x | — |
+| 2 | 40,000 | 400–10,240 | **11.8** | **4.5x** | 2.5x |
+| 3 | 10,000 | 400–60,000 | **74** | **28x** | 12x |
+
+**Both estimates were low**, and stage 3's was outside the ±2x band I put on it. No OOM at
+60,000 rows on 96 GB, so `--recompute` is not needed on this card.
+
+#### What a full classifier checkpoint costs
+
+| | Stage 1 | Stage 2 | Stage 3 | **Total** | **Cost** |
+|---|---|---|---|---|---|
+| **1 GPU** | 368 h | 131 h | 206 h | **705 h, 29 days** | **$1,473** |
+| **4 GPUs** | 171 h | 61 h* | 96 h* | **328 h, 14 days** | **$2,742** |
+
+\* Stages 2–3 on 4 GPUs assume the same 2.15x DDP speedup measured for stage 1. That is
+probably conservative — longer sequences do more work per synchronisation — but it is not
+measured.
+
+The pair (classifier + regressor) is double, unless TP-07's multitask checkpoint lands.
+
+#### Three corrections to what I said before measuring
+
+1. **Total is ~$1,470–2,740, not ~$1,250–2,100.**
+2. **Stages 2 and 3 are half the run, not a small tail.** At one GPU they are 337 of 705
+   hours. Stage 3's 10,000 steps alone take 56% as long as stage 1's 500,000.
+3. **Shortening stage 1 to 280K saves ~23%, not ~45%.** The paper's ablation length gives
+   543 h / $1,135 at one GPU — the saving was overstated because the tail was underestimated.
+
+#### The one thing that could move it most: FlashAttention-3
+
+These numbers are **without FA3**. The reference recipe enables it for stages 2 and 3 — exactly
+where 10K–60K-row sequences make attention dominate — and it is not installed here, while
+Blackwell's (sm_120) support for it is partial. On an H100 (sm_90), where FA3 is fully
+supported, stages 2–3 could be substantially cheaper even at a similar hourly rate. **Before
+paying for a full run, measure stage 3 on an H100 with FA3** — another few dollars, and it
+bears on half the bill.
+
 ### TP-06 — width scaling: the report's central trade, reproduced for $0 (2026-09-21)
 
 TabPFN-3.5's headline architectural claim is that they **doubled the model width while the
