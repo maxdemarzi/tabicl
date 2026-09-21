@@ -135,3 +135,57 @@ def test_composes_with_qk_norm_and_fourier():
     with torch.no_grad():
         out = model(torch.randn(1, 40, 6), torch.randint(0, 3, (1, 30)).float(), d=torch.tensor([6]))
     assert torch.isfinite(out).all()
+
+
+# --------------------------------------------------------------------------- #
+# TP-06 interaction: why GQA is the prerequisite for widening
+# --------------------------------------------------------------------------- #
+
+
+def _icl_cache_bytes(model, n_train=256, n_feat=8):
+    X_train = torch.randn(1, n_train, n_feat)
+    y_train = torch.randint(0, 3, (1, n_train)).float()
+    X_test = torch.randn(1, 4, n_feat)
+    with torch.no_grad():
+        model.forward_with_cache(X_train=X_train, y_train=y_train, X_test=X_test,
+                                 store_cache=True, use_cache=False)
+    sub = model._cache.icl_cache
+    return sum(t.numel() * t.element_size()
+               for e in sub.kv.values() for t in (e.key, e.value) if t is not None)
+
+
+def test_without_gqa_doubling_width_doubles_the_cache():
+    """The problem TP-06 creates on its own."""
+
+    narrow = _icl_cache_bytes(TabICL(max_classes=10, row_num_cls=4, icl_nhead=8).eval())
+    wide = _icl_cache_bytes(TabICL(max_classes=10, row_num_cls=8, icl_nhead=16).eval())
+    assert wide == pytest.approx(2 * narrow, rel=0.01)
+
+
+def test_with_gqa_the_cache_stops_depending_on_width():
+    """The reason TP-05 gates TP-06.
+
+    With one KV head the cache is blocks x 2 x head_dim, and head_dim is held at 64 as width
+    grows, so widening becomes free for the cache instead of doubling it.
+    """
+
+    narrow = _icl_cache_bytes(
+        TabICL(max_classes=10, row_num_cls=4, icl_nhead=8, icl_num_kv_heads=1).eval())
+    wide = _icl_cache_bytes(
+        TabICL(max_classes=10, row_num_cls=8, icl_nhead=16, icl_num_kv_heads=1).eval())
+    assert wide == pytest.approx(narrow, rel=0.01)
+
+
+def test_the_widened_model_actually_trains():
+    """Constructible is not the same as trainable."""
+
+    torch.manual_seed(0)
+    model = TabICL(max_classes=10, row_num_cls=8, icl_nhead=16, icl_num_kv_heads=1)
+    model.train()
+    X = torch.randn(1, 96, 8)
+    y_train = torch.randint(0, 3, (1, 64)).float()
+    out = model(X, y_train, d=torch.tensor([8]))
+    out.float().square().mean().backward()
+    grads = [p.grad for p in model.parameters() if p.grad is not None]
+    assert grads
+    assert all(torch.isfinite(g).all() for g in grads)

@@ -235,6 +235,44 @@ Accuracy is untested — that needs a training run. But the practical consequenc
 concrete: it lifts the `kv_cache="kv"` ceiling from ~400-500K training rows on a 96 GB card to
 roughly 3-4M, and it is the prerequisite for TP-06, which would otherwise double the cache.
 
+### TP-06 — width scaling: the report's central trade, reproduced for $0 (2026-09-21)
+
+TabPFN-3.5's headline architectural claim is that they **doubled the model width while the
+cache size stayed largely unchanged**. That is an architectural fact, so it can be checked
+without training anything. It reproduces here — and slightly better than their framing,
+because with a single KV head the cache does not merely stay flat, it falls.
+
+Measured at 2,048 training rows and 100 features:
+
+| Config | params | ICL cache | total cache |
+|---|---|---|---|
+| baseline (512 dim, 8 heads) | 27.6M | 48 KiB/row | 142 MB |
+| **TP-06 alone** (1024 dim, 16 heads) | **105.1M** (3.8x) | **96 KiB/row** (2x) | 244 MB |
+| **TP-06 + TP-05** (1 KV head) | **81.5M** (3.0x) | **6 KiB/row** (0.125x) | 55 MB |
+| baseline + TP-05 | 22.0M | 6 KiB/row | 54 MB |
+
+The 3.8x parameter growth from widening alone matches the report's "roughly quadrupled".
+
+**Why widening becomes free.** With one KV head the cached tensor is
+`blocks x 2 x head_dim`, and head_dim is held at 64 as width grows — so the cache stops
+depending on width at all. That is the whole trick, and it is why TP-05 gates TP-06 rather
+than being an optional extra. Two tests pin it: without GQA, doubling width doubles the cache;
+with GQA, doubling width leaves it unchanged.
+
+**Cost of the width.** Forward pass 1.53x baseline on CPU for width alone, 1.37x with GQA —
+consistent with the report's point that inference time is linear in width rather than in
+parameter count, so 3x the parameters does not cost 3x the time. All three configs were
+confirmed to train: real forward, backward and optimizer step, finite gradients.
+
+**Net:** 3x the parameters, 1.37x the forward time, and **8x less cache per row** than today.
+
+#### What is still unknown
+
+Whether the wider model is actually *better*. That needs a full training run, and
+**CAVEAT-01 applies with full force** — the TabICLv2 authors' own depth ablation showed no
+gain at 280K steps *because the larger model had not converged*. A proxy-scale screen of
+TP-06 would be biased against it and should not be run as a go/no-go.
+
 ### TP-01 + TP-08 joint screen — RESULT: still no benefit, now on the right data (2026-09-21)
 
 **Second null, and this time the objections to the first one were removed.** Control vs

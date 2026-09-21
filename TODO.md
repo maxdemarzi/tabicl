@@ -269,7 +269,16 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
       `12 blocks x 2 x 512 dim x 4 B`, independent of column count — ~37 GiB at 100K rows and
       8 estimators in fp32, doubling to ~73 GiB after TP-06. A single 64-dim KV head cuts it ~8x
       at current width and ~16x after TP-06. See [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
-- [ ] **TP-06** Width scaling — **this is literally the same knob we already have**.
+- [~] **TP-06** Width scaling. *Architecture verified, accuracy untrained.* `--row_num_cls 8
+      --icl_nhead 16` gives 1024 dim at head_dim 64: **105.1M params (3.8x, matching the
+      report's "roughly quadrupled") and 2x the cache alone; with TP-05 it is 81.5M params and
+      6 KiB/row — 8x LESS cache than today**, because with one KV head the cached tensor is
+      `blocks x 2 x head_dim` and stops depending on width entirely. Forward pass 1.37x
+      baseline with GQA. All configs confirmed to train (real backward, finite gradients).
+      Measured for $0. *Remaining:* whether it is better, which needs full-scale training —
+      and **CAVEAT-01 applies hardest here**, so a proxy screen would be biased against it and
+      must not be used as go/no-go. Original note: **this is literally the same knob we already
+      have**.
       [`tabicl.py:203`](src/tabicl/_model/tabicl.py#L203) computes
       `icl_dim = embed_dim * row_num_cls` = 128 × 4 = 512 with `icl_nhead 8` (head dim 64) —
       the identical starting point to TabPFN-3. Their change is 4 → 8 CLS tokens, giving
