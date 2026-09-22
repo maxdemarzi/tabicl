@@ -373,6 +373,28 @@ The pair (classifier + regressor) is double, unless TP-07's multitask checkpoint
 3. **Shortening stage 1 to 280K saves ~23%, not ~45%.** The paper's ablation length gives
    543 h / $1,135 at one GPU — the saving was overstated because the tail was underestimated.
 
+#### FA3 measurement attempt — FAILED, $9.10, no result (2026-09-21)
+
+Goal: stage 3 on one H100 SXM (sm_90, where FA3 is fully supported), FA3 off vs on, same card.
+**The FA3 source build never finished.** 224 cores, 1.9 TB RAM, `MAX_JOBS=112`, and it was
+still compiling when the pod's 2.5 h hard deadline terminated it. No timing was taken.
+
+Cause: FA3 instantiates a kernel for every combination of head dim, dtype and feature, and
+the build compiled out only FP8 and the SM80 path. `scripts/cloud/build_fa3.sh` now compiles
+**only what tabicl calls** — backward, varlen, fp16, head dim 64 — switches off split, paged-KV,
+append-KV, local, softcap, pack-GQA, cluster and head dims 96–256, reports any flag the
+checkout does not recognise instead of ignoring it, and builds a **wheel** that can be pulled
+back and reinstalled via `FA3_WHEEL`, so the compile is paid for once.
+
+Two bugs were fixed on the way, both of which would have made a successful measurement lie:
+`INSTALL_FA3` installed FA2 (`flash-attn`) when the code imports FA3 (`flash_attn_interface`);
+and `flash-attn-3` on PyPI is a 0.0.0 pure-Python wheel, not FA3. The runpod image also keeps
+`nvcc` at `/usr/local/cuda/bin` off the PATH.
+
+What I got wrong: I called this "another few dollars" and sized the deadline for the
+measurement, not for an uncharted multi-hour compile. The deadline did its job — it bounded
+the loss — but the estimate was wrong.
+
 #### The one thing that could move it most: FlashAttention-3
 
 These numbers are **without FA3**. The reference recipe enables it for stages 2 and 3 — exactly
