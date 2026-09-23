@@ -414,7 +414,15 @@ like. Steady state excludes the first step, which carries prior warm-up.
 probably conservative — longer sequences do more work per synchronisation — but it is not
 measured.
 
-The pair (classifier + regressor) is double, unless TP-07's multitask checkpoint lands.
+The pair (classifier + regressor) is double — **and TP-07 does not change that.** This line
+previously read "unless TP-07's multitask checkpoint lands", which implied the joint model
+halves the bill. It does not. TP-07's own result (d62bc16) finds no task interference, but a
+joint run matched to the pair *on data per task* is also matched on total compute, so it costs
+what the pair costs. What TP-07 saves is **one checkpoint instead of two** — 29.10M parameters
+rather than 56.1M, and one run to babysit rather than two — not half the money.
+
+So a full classifier+regressor capability is **~$2,950 on one GPU or ~$5,480 on four**,
+whichever way it is trained.
 
 #### Three corrections to what I said before measuring
 
