@@ -26,7 +26,7 @@ green for the first time on this branch.
 | ✅ | BM-08 | Eval suite 10 → 62 datasets (OpenML-CC18, mechanical rule) |
 | 🔧 | TP-01, TP-04 | Code + tests done, **off by default, untrained** |
 | 🔧 | TP-14 | Scoring rules done; needs the benchmark's dataset list |
-| 🔧 | TP-07 | Built and verified for $0 (model, trainer, regression suite, 3-arm launcher); **ready to launch**, `scripts/tp07_run.sh` |
+| 🔧 | TP-07 | Built; first proxy run done ($22.22): **no task interference**, but the saving is one checkpoint, not half the compute. 1 seed, provisional |
 | ⛔ | TP-02, 03, 05, 06, 08, 09, 10, 11 | Not started |
 | ⛔ | TP-15, TP-16 | Blocked on measurement |
 
@@ -299,8 +299,14 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` dro
 
 ### Phase 4 — Training economics
 
-- [~] **TP-07** Single multitask checkpoint. *Everything short of the GPU run is done; launch with
-      [`scripts/tp07_run.sh`](scripts/tp07_run.sh) (~44 GPU-h / ~$90 per seed, 3 seeds to gate).*
+- [~] **TP-07** Single multitask checkpoint. *Built, trained once at proxy scale: **no task
+      interference, but no free halving either**. One seed, 5,000 steps, $22.22 — see
+      [RESULTS.md](benchmarks/RESULTS.md) "TP-07 — RESULT". At equal steps the joint arm is
+      worse on both tasks (it sees half the data per task); at equal data per task — which is
+      equal total compute — classification is **better** (p 0.0016) and regression is a wash.
+      So the defensible claim is one checkpoint instead of two (29.10M vs 56.1M, six curriculum
+      runs → three), not half the compute. Provisional: 1 seed at a quarter of the screen
+      length. Next: 3 seeds at 20,000 steps, reading the equal-data comparison.*
       `multitask=True` on `TabICL` holds both tasks' label encoders (column-embedding and ICL)
       and both output heads around one shared trunk, plus a learned task embedding added to
       every row at the input of the column embedder and of the ICL transformer. The task is

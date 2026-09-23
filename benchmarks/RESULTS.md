@@ -183,6 +183,57 @@ worth trying:
 3. **Cut seeds from 3 to 2 for screening**, keeping 3 only for whatever survives to a
    full-scale run.
 
+### TP-07 — RESULT: no task interference, but no free halving either (2026-09-23)
+
+**$22.22.** Pod `v9uxq8avcu4ch4`, one RTX PRO 6000 Blackwell (95 GB, sm_120), torch
+2.8.0+cu128, container capped at 13.6 vCPU, commit `61c9d39` (plus the `NJOBS_PER_ARM` knob
+added to launch it), seed 42, 5,000 steps, 10.4 h wall clock. Three arms — `clf_control`,
+`reg_control`, `joint` — trained **concurrently on the one GPU** because no host had three
+free: 7.35 s/step each, ≈2.45 s of GPU time per arm-step, against 2.65 s/step measured for a
+single arm alone. Per-step times from this run are therefore not comparable with single-arm
+measurements; divide by three. Prior generation kept up (`prior_time` 0) on 4 workers per arm.
+5,820 ledger rows, **zero errors**.
+
+#### At equal steps, the joint arm loses on both tasks
+
+| task | metric | control | joint | joint worse on | p (Bonferroni) |
+|---|---|---|---|---|---|
+| classification | log-loss, `cc18_narrow` (62) | **0.3108** | 0.3156 | 71.5% | 4.1e-05 |
+| regression | CRPS, `ctr23` (35) | **0.2039** | 0.2141 | 89.5% | 1.9e-07 |
+
+Both directions hold at step 2,500 as well. **The gate as written fails**: joint is not ≥ each
+single-task control at the same step count.
+
+#### At equal data per task — which is equal total compute — it does not
+
+A step costs the same in every arm, and the joint arm splits its 64 datasets 32/32. So a joint
+run at 2N steps costs exactly what the *pair* of single-task runs at N steps costs, and gives
+each task the same number of datasets. This run contains that comparison: joint@5000 against
+each control@2500.
+
+| task | metric | control @2500 | joint @5000 | joint worse on | p |
+|---|---|---|---|---|---|
+| classification | log-loss | 0.3213 | **0.3156** | 35.5% | **better, p = 0.0016** |
+| regression | CRPS | 0.2149 | 0.2141 | 51.4% | no difference, 0.41 / 0.59 |
+
+Median per-dataset change at equal data: **−1.2%** log-loss, **+0.1%** CRPS.
+
+**Reading: sharing the trunk costs nothing; the deficit at equal steps is a data-rate effect,
+not task interference.** That is the risk the plan flagged, and it did not materialise — at
+proxy scale, for one seed, without TP-04's stability norms, which were not needed to make
+joint training train stably here. What is *not* supported is the report's headline framing as
+it applies to us: the saving is **one checkpoint instead of two, not half the compute**. A
+joint run matched to the pair on data costs what the pair costs. It still halves the number of
+curriculum runs (six → three), removes a whole pipeline, and ships 29.10M parameters instead
+of 56.1M.
+
+Anchor, for scale: released v2 scores 0.2759 log-loss and 0.1718 CRPS against the proxy
+control's 0.3108 / 0.2039. These arms ran 5,000 steps — 1% of stage 1.
+
+**Provisional.** One seed, 5,000 steps (a quarter of the 20,000-step screen, which BM-06
+validated only for *sign* agreement), proxy scale, and CAVEAT-01 applies. Three seeds at
+20,000 steps are what the gate asks for; the equal-data comparison is the one to repeat.
+
 ### TP-07 — one checkpoint for both tasks: built, verified for $0, ready to launch (2026-09-21)
 
 **Everything short of the training run.** Model (`580f263`), trainer (`bb607a5`), and — in the
@@ -832,6 +883,9 @@ against the published claim.
 |---|---|---|---|---|---|---|---|
 | | | single-task control | | | | n/a | |
 | | | joint (TP-07) | | | | | |
+| TP-07 seed42, 5K steps, equal steps | `61c9d39` | clf_control / reg_control | log-loss 0.3108 | CRPS 0.2039 | $22.22, 10.4 h, 3 arms on one RTX PRO 6000 | n/a | control |
+| TP-07 seed42, 5K steps, equal steps | `61c9d39` | joint (TP-07) | log-loss 0.3156 | CRPS 0.2141 | shared with the row above | **worse on both** (p 4.1e-05 / 1.9e-07) | at equal steps the joint arm sees half the data per task |
+| TP-07 seed42, equal data per task = equal total compute | `61c9d39` | joint @5000 vs control @2500 | 0.3156 vs 0.3213 | 0.2141 vs 0.2149 | same total compute as the pair | **clf better** (p 0.0016), reg a wash (p 0.41) | no task interference; the saving is one checkpoint, not half the compute |
 
 Not yet run. Launch with `scripts/tp07_run.sh` (three arms, one GPU each); design, pass rule
 and cost are in the TP-07 entry above. Each task has its own control — `clf_control` on

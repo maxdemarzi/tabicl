@@ -37,11 +37,14 @@ GPU_REG="${GPU_REG:-1}"
 GPU_JOINT="${GPU_JOINT:-2}"
 REG_WEIGHT="${REG_WEIGHT:-1.0}"     # --multitask_reg_weight; tune only if 1.0 fails the gate
 SHARED_EXTRA="${SHARED_EXTRA:-}"    # flags for ALL arms, e.g. "--qk_norm True --input_norm True"
+# Prior workers per arm. 16 suits one GPU per arm on a big host. With all three arms on ONE
+# GPU (GPU_CLF=GPU_REG=GPU_JOINT=0) the pod usually has fewer cores: keep 3 x this <= vCPUs.
+NJOBS_PER_ARM="${NJOBS_PER_ARM:-16}"
 mkdir -p "$ROOT/logs"
 
 launch() {  # name gpu extra
     setsid nohup env CUDA_VISIBLE_DEVICES="$2" STEPS="$STEPS" ABLATION="$1" SEED="$SEED" \
-        NUM_GPUS=1 NJOBS=16 CKPT_DIR="$ROOT/ckpt/$RUN_ID-$1-seed$SEED" EXTRA="$3" \
+        NUM_GPUS=1 NJOBS="$NJOBS_PER_ARM" CKPT_DIR="$ROOT/ckpt/$RUN_ID-$1-seed$SEED" EXTRA="$3" \
         bash scripts/train_proxy.sh > "$ROOT/logs/train-$1-seed$SEED.log" 2>&1 < /dev/null &
     echo "launched $1 on gpu $2  extra='${3:-<none>}'"
 }
